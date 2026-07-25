@@ -274,8 +274,6 @@ const HEADER_SNAPSHOT_MAX_HEIGHT: u32 = 1_000_000;
 const MAINNET_GENESIS_TIME: u64 = 1_580_745_078;
 const MAINNET_TARGET_SPACING_SECONDS: u64 = 10 * 60;
 const LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG: u32 = RESOURCE_PROOF_CACHE_CANONICAL_WINDOW;
-const HNS_DOH_HOST: &str = "zorro.hnsdoh.com";
-const HNS_DOH_PATH: &str = "/dns-query";
 const ICANN_DOH_HOST: &str = "cloudflare-dns.com";
 const ICANN_DOH_PATH: &str = "/dns-query";
 // Cloudflare's documented 1.1.1.1 resolver endpoints. Connecting to these
@@ -407,10 +405,12 @@ impl Default for SyncOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimePolicy {
     pub resolution_mode: ResolutionMode,
+    /// Retained only for one-way migration of historical settings. Runtime
+    /// normalization always clears this prohibited public-recursive endpoint.
     pub hns_doh_resolver: Option<String>,
     /// Enables the private, proof-backed HNS peer DNS-relay transport.
     pub experimental_p2p_dns_relay: bool,
-    /// Keeps the existing third-party HNS recursive DoH compatibility paths available.
+    /// Retained only for one-way migration. It is always normalized to false.
     pub legacy_hns_doh_compatibility: bool,
     pub stateless_dane_certificates: bool,
 }
@@ -427,10 +427,15 @@ impl RuntimePolicy {
             resolution_mode: ResolutionMode::Compatibility,
             hns_doh_resolver: None,
             experimental_p2p_dns_relay: false,
-            legacy_hns_doh_compatibility: true,
+            legacy_hns_doh_compatibility: false,
             stateless_dane_certificates: false,
         }
     }
+}
+
+fn prohibit_public_hns_recursive_resolution(policy: &mut RuntimePolicy) {
+    policy.hns_doh_resolver = None;
+    policy.legacy_hns_doh_compatibility = false;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1150,13 +1155,7 @@ impl BrowserRuntime {
             .to_owned();
         configuration.data_dir = canonical_data_dir;
         let mut policy = configuration.initial_policy.clone();
-        if let Some(endpoint) = policy.hns_doh_resolver.as_deref() {
-            policy.hns_doh_resolver = Some(
-                HnsDohEndpoint::parse(endpoint)
-                    .map_err(|error| RuntimeError::InvalidConfiguration(error.to_owned()))?
-                    .display(),
-            );
-        }
+        prohibit_public_hns_recursive_resolution(&mut policy);
         let base = network_base_path(&data_dir, configuration.network);
         fs::create_dir_all(&base).map_err(|error| {
             RuntimeError::Operation(format!("create runtime directory: {error}"))
@@ -1214,13 +1213,7 @@ impl BrowserRuntime {
     }
 
     fn set_policy_locked(&self, mut policy: RuntimePolicy) -> Result<u64, RuntimeError> {
-        if let Some(endpoint) = policy.hns_doh_resolver.as_deref() {
-            policy.hns_doh_resolver = Some(
-                HnsDohEndpoint::parse(endpoint)
-                    .map_err(|error| RuntimeError::InvalidConfiguration(error.to_owned()))?
-                    .display(),
-            );
-        }
+        prohibit_public_hns_recursive_resolution(&mut policy);
         let mut current = self
             .inner
             .policy
@@ -1733,21 +1726,9 @@ impl BrowserRuntime {
         } else {
             ": 0\r\n"
         });
-        header_text.push_str(HNS_GATEWAY_LEGACY_DOH_HEADER);
-        header_text.push_str(if policy.legacy_hns_doh_compatibility {
-            ": 1\r\n"
-        } else {
-            ": 0\r\n"
-        });
         if policy.resolution_mode == ResolutionMode::Strict {
             header_text.push_str(HNS_GATEWAY_STRICT_MODE_HEADER);
             header_text.push_str(": 1\r\n");
-        }
-        if let Some(endpoint) = policy.hns_doh_resolver.as_deref() {
-            header_text.push_str(HNS_GATEWAY_DOH_RESOLVER_HEADER);
-            header_text.push_str(": ");
-            header_text.push_str(endpoint);
-            header_text.push_str("\r\n");
         }
         if policy.stateless_dane_certificates {
             header_text.push_str(HNS_GATEWAY_STATELESS_DANE_HEADER);
@@ -1906,9 +1887,7 @@ impl BrowserRuntime {
             GatewayResolverContext {
                 network,
                 mode,
-                doh_endpoint: parsed_headers.doh_endpoint,
                 experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
-                legacy_hns_doh_compatibility: parsed_headers.legacy_hns_doh_compatibility,
                 peer_state: Some(Arc::clone(&self.inner.coordination.peer_state)),
                 relay: Some(self.inner.coordination.relay.clone()),
                 http: self.inner.transport.clone(),
@@ -1920,7 +1899,7 @@ impl BrowserRuntime {
             stateless_dane_config(&base, parsed_headers.stateless_dane_certificates);
         let gateway = Gateway::new(
             GatewayConfig {
-                hns_https_mode: HnsHttpsMode::Compatibility,
+                hns_https_mode: HnsHttpsMode::Strict,
                 stateless_dane,
                 allow_non_public_origin_addresses: network == NetworkKind::Regtest || cfg!(test),
                 allow_unsafe_origin_ports: network == NetworkKind::Regtest,
@@ -2403,9 +2382,7 @@ fn is_valid_gateway_header_value(value: &str) -> bool {
 struct ParsedGatewayHeaders {
     headers: Vec<(String, String)>,
     strict_hns_mode: bool,
-    doh_endpoint: HnsDohEndpoint,
     experimental_p2p_dns_relay: bool,
-    legacy_hns_doh_compatibility: bool,
     stateless_dane_certificates: bool,
     network: NetworkKind,
 }
@@ -2585,67 +2562,7 @@ struct HnsDohEndpoint {
     path_and_query: String,
 }
 
-impl Default for HnsDohEndpoint {
-    fn default() -> Self {
-        Self {
-            host: HNS_DOH_HOST.to_owned(),
-            port: 443,
-            path_and_query: HNS_DOH_PATH.to_owned(),
-        }
-    }
-}
-
 impl HnsDohEndpoint {
-    fn parse(input: &str) -> Result<Self, &'static str> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            return Ok(Self::default());
-        }
-        let rest = trimmed
-            .get(..8)
-            .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
-            .and_then(|_| trimmed.get(8..))
-            .ok_or("DoH resolver must be an HTTPS URL")?;
-        let (authority, path) = rest
-            .split_once('/')
-            .unwrap_or((rest, HNS_DOH_PATH.trim_start_matches('/')));
-        if authority.is_empty()
-            || authority.contains('@')
-            || authority.bytes().any(|byte| byte.is_ascii_control())
-        {
-            return Err("DoH resolver authority is invalid");
-        }
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((host, port)) if !host.contains(':') => {
-                let port = port
-                    .parse::<u16>()
-                    .map_err(|_| "DoH resolver port is invalid")?;
-                (host, port)
-            }
-            Some(_) if authority.contains(':') => {
-                return Err("DoH resolver IPv6 literals are not supported");
-            }
-            _ => (authority, 443),
-        };
-        if !valid_doh_host(host) {
-            return Err("DoH resolver host is invalid");
-        }
-        let host = host.trim_end_matches('.').to_ascii_lowercase();
-        let path_and_query = format!("/{path}");
-        if path_and_query.contains('#')
-            || path_and_query
-                .bytes()
-                .any(|byte| byte.is_ascii_control() || byte == b' ')
-        {
-            return Err("DoH resolver path is invalid");
-        }
-        Ok(Self {
-            host,
-            port,
-            path_and_query,
-        })
-    }
-
     fn display(&self) -> String {
         if self.port == 443 {
             format!("https://{}{}", self.host, self.path_and_query)
@@ -2653,21 +2570,6 @@ impl HnsDohEndpoint {
             format!("https://{}:{}{}", self.host, self.port, self.path_and_query)
         }
     }
-}
-
-fn valid_doh_host(host: &str) -> bool {
-    let trimmed = host.trim_end_matches('.');
-    !trimmed.is_empty()
-        && trimmed.len() <= 253
-        && trimmed.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
 }
 
 struct GatewayProofProvider {
@@ -3771,6 +3673,7 @@ struct FallbackMarker {
 }
 
 impl FallbackMarker {
+    #[cfg(test)]
     fn mark(&self, reason: &'static str) {
         self.used.store(true, Ordering::Relaxed);
         if let Ok(mut fallback_reason) = self.reason.lock()
@@ -3789,6 +3692,7 @@ impl FallbackMarker {
     }
 }
 
+#[cfg(test)]
 struct FallbackResolver<P, F> {
     primary: P,
     fallback: F,
@@ -3796,6 +3700,7 @@ struct FallbackResolver<P, F> {
     fallback_roots: Arc<Mutex<HashMap<String, &'static str>>>,
 }
 
+#[cfg(test)]
 impl<P, F> FallbackResolver<P, F> {
     fn with_marker(primary: P, fallback: F, fallback_marker: FallbackMarker) -> Self {
         Self {
@@ -3822,6 +3727,7 @@ impl<P, F> FallbackResolver<P, F> {
     }
 }
 
+#[cfg(test)]
 impl<P, F> Resolver for FallbackResolver<P, F>
 where
     P: Resolver,
@@ -3852,6 +3758,7 @@ fn fallback_cache_root(request: &ResolutionRequest) -> String {
 }
 
 #[derive(Clone, Debug)]
+#[cfg(test)]
 struct FallbackDelegatedResolver<P, F> {
     primary: P,
     fallback: F,
@@ -3859,6 +3766,7 @@ struct FallbackDelegatedResolver<P, F> {
     fallback_roots: Arc<Mutex<HashMap<String, &'static str>>>,
 }
 
+#[cfg(test)]
 impl<P, F> FallbackDelegatedResolver<P, F> {
     fn new(primary: P, fallback: F, fallback_marker: FallbackMarker) -> Self {
         Self {
@@ -3885,6 +3793,7 @@ impl<P, F> FallbackDelegatedResolver<P, F> {
     }
 }
 
+#[cfg(test)]
 impl<P, F> DelegatedResolver for FallbackDelegatedResolver<P, F>
 where
     P: DelegatedResolver,
@@ -4086,130 +3995,6 @@ fn relay_dnssec_result(
 }
 
 #[derive(Clone, Debug)]
-struct HnsDohDnsTransport {
-    endpoint: HnsDohEndpoint,
-    trace: DnsTraceRecorder,
-    endpoint_policy: DnsEndpointPolicy,
-    http: TcpHttpTransport,
-}
-
-impl HnsDohDnsTransport {
-    fn new(
-        endpoint: HnsDohEndpoint,
-        trace: DnsTraceRecorder,
-        endpoint_policy: DnsEndpointPolicy,
-        http: TcpHttpTransport,
-    ) -> Self {
-        Self {
-            endpoint,
-            trace,
-            endpoint_policy,
-            http,
-        }
-    }
-
-    fn exchange_doh(&self, _server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
-        let (query, original_id) = recursive_doh_query(query)?;
-        let started = Instant::now();
-        let response = fetch_doh_message(&self.http, &self.endpoint, query.clone());
-        self.trace.push(doh_trace_event(
-            "hns_doh",
-            self.endpoint.display(),
-            &query,
-            elapsed_millis(started),
-            &response,
-        ));
-        let response = response.map_err(|error| {
-            ResolverError::DnsTransport(format!("HNS DoH DNS transport failed: {error}"))
-        })?;
-        if !doh_http_status_success(response.status) {
-            return Err(ResolverError::DnsTransport(format!(
-                "HNS DoH DNS transport returned HTTP {}",
-                response.status
-            )));
-        }
-        if !doh_response_has_dns_message_content_type(&response) {
-            return Err(ResolverError::InvalidDnsResponse);
-        }
-        restore_doh_response_id(&response.body, original_id)
-    }
-}
-
-impl DnsTransport for HnsDohDnsTransport {
-    fn endpoint_policy(&self) -> DnsEndpointPolicy {
-        self.endpoint_policy
-    }
-
-    fn exchange_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
-        self.exchange_doh(server, query)
-    }
-
-    fn exchange_tcp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
-        self.exchange_doh(server, query)
-    }
-}
-
-#[derive(Clone, Debug)]
-struct HnsDohResolver {
-    endpoint: HnsDohEndpoint,
-    trace: DnsTraceRecorder,
-    http: TcpHttpTransport,
-}
-
-impl Default for HnsDohResolver {
-    fn default() -> Self {
-        Self::new(
-            HnsDohEndpoint::default(),
-            DnsTraceRecorder::default(),
-            shared_http_transport(),
-        )
-    }
-}
-
-impl HnsDohResolver {
-    fn new(endpoint: HnsDohEndpoint, trace: DnsTraceRecorder, http: TcpHttpTransport) -> Self {
-        Self {
-            endpoint,
-            trace,
-            http,
-        }
-    }
-}
-
-impl Resolver for HnsDohResolver {
-    fn resolve(&self, request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
-        let qname =
-            DnsName::from_ascii(&request.qname).map_err(|_| ResolverError::UnsupportedBackend)?;
-        let qtype = RecordType::from_code(request.qtype);
-        let id = DOH_DNS_ID;
-        let query = build_doh_query(id, &qname, qtype)?;
-        let started = Instant::now();
-        let response = fetch_doh_message(&self.http, &self.endpoint, query.clone());
-        self.trace.push(doh_trace_event(
-            "hns_doh",
-            self.endpoint.display(),
-            &query,
-            elapsed_millis(started),
-            &response,
-        ));
-        let response = response.map_err(|error| {
-            ResolverError::DnsTransport(format!("HNS DoH compatibility resolver failed: {error}"))
-        })?;
-        if !doh_http_status_success(response.status) {
-            return Err(ResolverError::DnsTransport(format!(
-                "HNS DoH compatibility resolver returned HTTP {}",
-                response.status
-            )));
-        }
-        if !doh_response_has_dns_message_content_type(&response) {
-            return Err(ResolverError::InvalidDnsResponse);
-        }
-
-        doh_answer_from_body(id, &qname, qtype, &response.body)
-    }
-}
-
-#[derive(Clone, Debug)]
 struct IcannDohResolver {
     endpoint: HnsDohEndpoint,
     trace: DnsTraceRecorder,
@@ -4267,6 +4052,7 @@ fn default_icann_doh_endpoint() -> HnsDohEndpoint {
     }
 }
 
+#[cfg(test)]
 fn doh_fallback_reason(error: &ResolverError) -> Option<&'static str> {
     match error {
         ResolverError::ProofUnavailable => Some("local_hns_proof_unavailable"),
@@ -4276,6 +4062,7 @@ fn doh_fallback_reason(error: &ResolverError) -> Option<&'static str> {
     }
 }
 
+#[cfg(test)]
 fn delegated_doh_transport_fallback_reason(error: &ResolverError) -> Option<&'static str> {
     match error {
         ResolverError::DnsTransport(_) => Some("authoritative_nameserver_transport_failed"),
@@ -4421,6 +4208,7 @@ fn doh_response_has_dns_message_content_type(response: &OriginResponse) -> bool 
         })
 }
 
+#[cfg(test)]
 fn recursive_doh_query(query: &[u8]) -> Result<(Vec<u8>, u16), ResolverError> {
     if query.len() < 4 {
         return Err(ResolverError::InvalidDnsResponse);
@@ -4433,6 +4221,7 @@ fn recursive_doh_query(query: &[u8]) -> Result<(Vec<u8>, u16), ResolverError> {
     Ok((query, original_id))
 }
 
+#[cfg(test)]
 fn restore_doh_response_id(body: &[u8], original_id: u16) -> Result<Vec<u8>, ResolverError> {
     if body.len() < 2 || body[0] != 0 || body[1] != 0 {
         return Err(ResolverError::InvalidDnsResponse);
@@ -4636,9 +4425,7 @@ fn gateway_http_response_with_transport(
         GatewayResolverContext {
             network,
             mode,
-            doh_endpoint: parsed_headers.doh_endpoint,
             experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
-            legacy_hns_doh_compatibility: parsed_headers.legacy_hns_doh_compatibility,
             peer_state,
             relay: None,
             http: transport.clone(),
@@ -4649,7 +4436,7 @@ fn gateway_http_response_with_transport(
     let stateless_dane = stateless_dane_config(&base, parsed_headers.stateless_dane_certificates);
     let gateway = match Gateway::new(
         GatewayConfig {
-            hns_https_mode: HnsHttpsMode::Compatibility,
+            hns_https_mode: HnsHttpsMode::Strict,
             stateless_dane,
             allow_non_public_origin_addresses: network == NetworkKind::Regtest || cfg!(test),
             allow_unsafe_origin_ports: network == NetworkKind::Regtest,
@@ -4781,9 +4568,7 @@ fn gateway_http_response_body_to_file_with_transport(
         GatewayResolverContext {
             network,
             mode,
-            doh_endpoint: parsed_headers.doh_endpoint,
             experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
-            legacy_hns_doh_compatibility: parsed_headers.legacy_hns_doh_compatibility,
             peer_state,
             relay: None,
             http: transport.clone(),
@@ -4794,7 +4579,7 @@ fn gateway_http_response_body_to_file_with_transport(
     let stateless_dane = stateless_dane_config(&base, parsed_headers.stateless_dane_certificates);
     let gateway = match Gateway::new(
         GatewayConfig {
-            hns_https_mode: HnsHttpsMode::Compatibility,
+            hns_https_mode: HnsHttpsMode::Strict,
             stateless_dane,
             allow_non_public_origin_addresses: network == NetworkKind::Regtest || cfg!(test),
             allow_unsafe_origin_ports: network == NetworkKind::Regtest,
@@ -4939,9 +4724,7 @@ fn gateway_http_upgrade_tunnel_with_transport(
         GatewayResolverContext {
             network,
             mode,
-            doh_endpoint: parsed_headers.doh_endpoint,
             experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
-            legacy_hns_doh_compatibility: parsed_headers.legacy_hns_doh_compatibility,
             peer_state,
             relay: None,
             http: transport.clone(),
@@ -4952,7 +4735,7 @@ fn gateway_http_upgrade_tunnel_with_transport(
     let stateless_dane = stateless_dane_config(&base, parsed_headers.stateless_dane_certificates);
     let gateway = match Gateway::new(
         GatewayConfig {
-            hns_https_mode: HnsHttpsMode::Compatibility,
+            hns_https_mode: HnsHttpsMode::Strict,
             stateless_dane,
             allow_non_public_origin_addresses: network == NetworkKind::Regtest || cfg!(test),
             allow_unsafe_origin_ports: network == NetworkKind::Regtest,
@@ -5174,9 +4957,7 @@ fn android_gateway_resolver(
     let GatewayResolverContext {
         network,
         mode,
-        doh_endpoint,
         experimental_p2p_dns_relay,
-        legacy_hns_doh_compatibility,
         peer_state,
         relay,
         http,
@@ -5210,49 +4991,20 @@ fn android_gateway_resolver(
             BoxedDelegatedResolver::new(P2pFallbackDelegatedResolver::new(delegated, relay));
     }
 
-    let use_legacy_doh =
-        mode == GatewayResolutionMode::Compatibility && legacy_hns_doh_compatibility;
-    if use_legacy_doh {
-        let doh = AuthoritativeDnssecResolver::new(
-            HnsDohDnsTransport::new(
-                doh_endpoint.clone(),
-                dns_trace.clone(),
-                endpoint_policy,
-                http.clone(),
-            ),
-            SystemDnssecVerifier,
-        );
-        delegated = BoxedDelegatedResolver::new(FallbackDelegatedResolver::new(
-            delegated,
-            doh,
-            fallback_marker.clone(),
-        ));
-    }
-
     let proof_provider = GatewayProofProvider::new(base, values, network)
         .with_peer_state(peer_state)
         .with_proof_peer(proof_peer);
     let primary = DelegatingResolver::new(proof_provider, delegated);
     let icann = IcannDohResolver::new(dns_trace.clone(), http.clone());
 
-    if use_legacy_doh {
-        let hns = FallbackResolver::with_marker(
-            primary,
-            HnsDohResolver::new(doh_endpoint, dns_trace, http),
-            fallback_marker,
-        );
-        AndroidGatewayResolver::new(CompositeResolver::new(hns, icann))
-    } else {
-        AndroidGatewayResolver::new(CompositeResolver::new(primary, icann))
-    }
+    let _ = fallback_marker;
+    AndroidGatewayResolver::new(CompositeResolver::new(primary, icann))
 }
 
 struct GatewayResolverContext {
     network: NetworkKind,
     mode: GatewayResolutionMode,
-    doh_endpoint: HnsDohEndpoint,
     experimental_p2p_dns_relay: bool,
-    legacy_hns_doh_compatibility: bool,
     peer_state: Option<Arc<Mutex<()>>>,
     relay: Option<SharedDnsRelayState>,
     http: TcpHttpTransport,
@@ -5281,9 +5033,7 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
 
     let mut headers = Vec::new();
     let mut strict_hns_mode = false;
-    let mut doh_endpoint = HnsDohEndpoint::default();
     let mut experimental_p2p_dns_relay = false;
-    let mut legacy_hns_doh_compatibility = true;
     let mut stateless_dane_certificates = false;
     let mut network = NetworkKind::Mainnet;
     for line in header_text.split("\r\n").filter(|line| !line.is_empty()) {
@@ -5302,15 +5052,16 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
             continue;
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_DOH_RESOLVER_HEADER) {
-            doh_endpoint = HnsDohEndpoint::parse(value)?;
-            continue;
+            return Err("third-party HNS recursive DoH is prohibited");
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_P2P_DNS_RELAY_HEADER) {
             experimental_p2p_dns_relay = value == "1" || value.eq_ignore_ascii_case("true");
             continue;
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_LEGACY_DOH_HEADER) {
-            legacy_hns_doh_compatibility = value == "1" || value.eq_ignore_ascii_case("true");
+            if value == "1" || value.eq_ignore_ascii_case("true") {
+                return Err("third-party HNS recursive DoH is prohibited");
+            }
             continue;
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_STATELESS_DANE_HEADER) {
@@ -5332,9 +5083,7 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
     Ok(ParsedGatewayHeaders {
         headers,
         strict_hns_mode,
-        doh_endpoint,
         experimental_p2p_dns_relay,
-        legacy_hns_doh_compatibility,
         stateless_dane_certificates,
         network,
     })
@@ -8683,13 +8432,11 @@ mod tests {
         );
         assert!(parsed.strict_hns_mode);
         assert!(parsed.experimental_p2p_dns_relay);
-        assert!(!parsed.legacy_hns_doh_compatibility);
         assert!(parsed.stateless_dane_certificates);
         assert_eq!(parsed.network, NetworkKind::Testnet);
-        assert_eq!(
-            parsed.doh_endpoint.display(),
-            "https://resolver.example/dns-query"
-        );
+        let normalized = runtime.policy().unwrap();
+        assert!(normalized.hns_doh_resolver.is_none());
+        assert!(!normalized.legacy_hns_doh_compatibility);
         cleanup_dir(&data_dir);
     }
 
@@ -8735,10 +8482,7 @@ mod tests {
         assert_eq!(policy.resolution_mode, ResolutionMode::Strict);
         assert!(policy.experimental_p2p_dns_relay);
         assert!(!policy.legacy_hns_doh_compatibility);
-        assert_eq!(
-            policy.hns_doh_resolver.as_deref(),
-            Some("https://resolver.example/dns-query")
-        );
+        assert!(policy.hns_doh_resolver.is_none());
         assert!(policy.stateless_dane_certificates);
         cleanup_dir(&data_dir);
     }
@@ -8816,7 +8560,11 @@ mod tests {
                 },
             )
             .into_bytes();
-        assert!(invalid_policy.starts_with(b"HTTP/1.1 400 Bad Request\r\n"));
+        assert!(
+            !invalid_policy
+                .windows(b"not-a-doh-url".len())
+                .any(|window| { window == b"not-a-doh-url" })
+        );
         assert_eq!(
             parse_untrusted_gateway_headers(
                 "Accept: text/html\r\nX-HNS-Browser-Network: mainnet\r\nx-hns-spoofed: yes\r\n",
@@ -9995,11 +9743,17 @@ mod tests {
     }
 
     #[test]
-    fn gateway_headers_strip_internal_control_headers() {
+    fn gateway_headers_reject_prohibited_public_hns_resolver() {
+        assert!(matches!(
+            parse_gateway_headers(
+                "X-HNS-Browser-DoH-Resolver: https://resolver.example/dns-query\r\n"
+            ),
+            Err("third-party HNS recursive DoH is prohibited")
+        ));
+
         let parsed = parse_gateway_headers(
             "Accept: text/html\r\n\
              X-HNS-Browser-Strict-Mode: 1\r\n\
-             X-HNS-Browser-DoH-Resolver: https://resolver.example/dns-query\r\n\
              X-HNS-Browser-Stateless-DANE: 1\r\n\
              X-HNS-Security-Path: dane-authoritative-doh\r\n",
         )
@@ -10008,14 +9762,6 @@ mod tests {
         assert!(parsed.strict_hns_mode);
         assert!(parsed.stateless_dane_certificates);
         assert_eq!(parsed.network, NetworkKind::Mainnet);
-        assert_eq!(
-            parsed.doh_endpoint,
-            HnsDohEndpoint {
-                host: "resolver.example".to_owned(),
-                port: 443,
-                path_and_query: "/dns-query".to_owned(),
-            },
-        );
         assert_eq!(
             parsed.headers,
             vec![("Accept".to_owned(), "text/html".to_owned())]
@@ -10038,15 +9784,6 @@ mod tests {
         assert!(recent.contains(&roots[1].into_bytes()));
         assert!(recent.contains(&roots[40].into_bytes()));
         cleanup_dir(&base);
-    }
-
-    #[test]
-    fn default_hns_doh_endpoint_uses_working_zorro_node() {
-        let endpoint = HnsDohEndpoint::default();
-
-        assert_eq!(endpoint.host, "zorro.hnsdoh.com");
-        assert_eq!(endpoint.port, 443);
-        assert_eq!(endpoint.path_and_query, "/dns-query");
     }
 
     #[test]
@@ -10099,12 +9836,12 @@ mod tests {
     }
 
     #[test]
-    fn gateway_headers_reject_invalid_doh_endpoint() {
+    fn gateway_headers_reject_every_public_hns_doh_endpoint() {
         assert!(matches!(
             parse_gateway_headers(
                 "X-HNS-Browser-DoH-Resolver: http://resolver.example/dns-query\r\n"
             ),
-            Err("DoH resolver must be an HTTPS URL")
+            Err("third-party HNS recursive DoH is prohibited")
         ));
     }
 
@@ -10125,12 +9862,12 @@ mod tests {
     }
 
     #[test]
-    fn gateway_headers_default_doh_path_when_url_has_no_path() {
-        let parsed =
-            parse_gateway_headers("X-HNS-Browser-DoH-Resolver: https://resolver.example\r\n")
-                .unwrap();
-
-        assert_eq!(parsed.doh_endpoint.path_and_query, "/dns-query");
+    fn gateway_headers_reject_legacy_hns_doh_enablement() {
+        assert!(matches!(
+            parse_gateway_headers("X-HNS-Browser-Legacy-HNS-DoH: 1\r\n"),
+            Err("third-party HNS recursive DoH is prohibited")
+        ));
+        assert!(parse_gateway_headers("X-HNS-Browser-Legacy-HNS-DoH: 0\r\n").is_ok());
     }
 
     #[test]
