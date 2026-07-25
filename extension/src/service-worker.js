@@ -5,6 +5,7 @@ import {
   migrateStoredSettings,
   normalizePolicy
 } from "./policy.js";
+import { currentSecurityResult } from "./security-result.js";
 
 const NATIVE_HOST = "com.denuoweb.hns_dane_browser";
 const HEALTH_ALARM = "hns-runtime-health";
@@ -20,12 +21,17 @@ let publicStatus = {
   runtimeSession: null,
   runtimeGeneration: null,
   policyGeneration: 0,
-  caReady: false
+  caReady: false,
+  latestMainFrameSecurity: null
 };
 
 client.onDisconnect(() => {
   credentials = null;
-  setStatus({ state: "degraded", reason: "nativeHostDisconnected" });
+  setStatus({
+    state: "degraded",
+    reason: "nativeHostDisconnected",
+    latestMainFrameSecurity: null
+  });
   void clearProxy();
   chrome.alarms.create(RECONNECT_ALARM, { delayInMinutes: 1 });
 });
@@ -49,7 +55,9 @@ chrome.runtime.onSuspendCanceled.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === HEALTH_ALARM || alarm.name === RECONNECT_ALARM) {
+  if (alarm.name === HEALTH_ALARM) {
+    void refreshNativeStatus();
+  } else if (alarm.name === RECONNECT_ALARM) {
     void recover();
   }
 });
@@ -112,7 +120,8 @@ function recover() {
     .catch((error) => {
       setStatus({
         state: publicStatus.state === "blocked" ? "blocked" : "degraded",
-        reason: error instanceof Error ? error.message : String(error)
+        reason: error instanceof Error ? error.message : String(error),
+        latestMainFrameSecurity: null
       });
       return publicStatus;
     })
@@ -123,7 +132,7 @@ function recover() {
 }
 
 async function startRuntime(policyOverride) {
-  setStatus({ state: "starting", reason: null });
+  setStatus({ state: "starting", reason: null, latestMainFrameSecurity: null });
   const stored = await storageGet(["policy"]);
   const policy = normalizePolicy(policyOverride ?? stored.policy ?? DEFAULT_POLICY);
   try {
@@ -149,7 +158,8 @@ async function startRuntime(policyOverride) {
       runtimeSession: result.runtimeSession,
       runtimeGeneration: result.runtimeGeneration,
       policyGeneration: result.policyGeneration,
-      caReady: true
+      caReady: true,
+      latestMainFrameSecurity: null
     });
     return publicStatus;
   } catch (error) {
@@ -176,7 +186,7 @@ async function startRuntime(policyOverride) {
 async function handleUiMessage(message) {
   switch (message.type) {
     case "getStatus":
-      return publicStatus;
+      return refreshNativeStatus();
     case "restart":
       return recover();
     case "setPolicy": {
@@ -191,6 +201,36 @@ async function handleUiMessage(message) {
   }
 }
 
+async function refreshNativeStatus() {
+  if (publicStatus.state !== "active") return publicStatus;
+  try {
+    const result = await client.request("status");
+    validateStatusResult(result);
+    const latestMainFrameSecurity = currentSecurityResult(
+      result.latestMainFrameSecurity,
+      result
+    );
+    setStatus({
+      state: "active",
+      reason: null,
+      runtimeSession: result.runtimeSession,
+      runtimeGeneration: result.runtimeGeneration,
+      policyGeneration: result.policyGeneration,
+      caReady: result.caReady === true,
+      latestMainFrameSecurity
+    });
+  } catch (error) {
+    await clearProxy();
+    client.disconnect();
+    setStatus({
+      state: "degraded",
+      reason: error instanceof Error ? error.message : String(error),
+      latestMainFrameSecurity: null
+    });
+  }
+  return publicStatus;
+}
+
 function validateStartResult(result) {
   if (
     !result ||
@@ -203,9 +243,30 @@ function validateStartResult(result) {
     result.proxy.port < 1 ||
     typeof result.proxy.username !== "string" ||
     typeof result.proxy.password !== "string" ||
+    typeof result.runtimeSession !== "string" ||
+    !Number.isSafeInteger(result.runtimeGeneration) ||
+    result.runtimeGeneration < 1 ||
+    !Number.isSafeInteger(result.policyGeneration) ||
+    result.policyGeneration < 1 ||
     !result.ca
   ) {
     throw new Error("native host returned an invalid proxy generation");
+  }
+}
+
+function validateStatusResult(result) {
+  if (
+    !result ||
+    result.state !== "active" ||
+    typeof result.runtimeSession !== "string" ||
+    result.runtimeSession !== publicStatus.runtimeSession ||
+    !Number.isSafeInteger(result.runtimeGeneration) ||
+    result.runtimeGeneration !== publicStatus.runtimeGeneration ||
+    !Number.isSafeInteger(result.policyGeneration) ||
+    result.policyGeneration !== publicStatus.policyGeneration ||
+    result.caReady !== true
+  ) {
+    throw new Error("native host returned a stale or invalid runtime status");
   }
 }
 

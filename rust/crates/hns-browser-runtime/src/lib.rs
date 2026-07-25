@@ -1387,6 +1387,17 @@ impl BrowserRuntime {
         )
     }
 
+    /// Starts an HNS-only Chromium generation with a persistent local CA and
+    /// delivers trusted, typed response status before proxy-only metadata is
+    /// removed from the browser-visible response.
+    pub fn start_hns_only_proxy_with_certificate_authority_and_observer(
+        &self,
+        certificate_authority: LocalCertificateAuthority,
+        observer: Arc<dyn BrowserProxyStatusObserver>,
+    ) -> Result<BrowserProxy, BrowserProxyError> {
+        self.start_hns_only_proxy_with_options(Some(certificate_authority), observer)
+    }
+
     pub fn start_hns_only_proxy_with_observer(
         &self,
         observer: Arc<dyn BrowserProxyStatusObserver>,
@@ -8870,8 +8881,12 @@ mod tests {
         let observer = move |status: &BrowserProxyStatus| {
             let _result = status_tx.send(status.clone());
         };
+        let generated_ca = LocalCertificateAuthority::generate().unwrap();
         let proxy = runtime
-            .start_proxy_with_observer("welcome", Arc::new(observer))
+            .start_hns_only_proxy_with_certificate_authority_and_observer(
+                generated_ca.authority().clone(),
+                Arc::new(observer),
+            )
             .unwrap();
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port())).unwrap();
         client

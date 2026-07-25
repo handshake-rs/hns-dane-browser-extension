@@ -26,6 +26,7 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     assert.equal(responses[0].schemaVersion, 1);
     assert.equal(responses[0].requestId, "hello-1");
     assert.equal(responses[0].eventSequence, 1);
+    assert.equal(responses[0].result.capabilities.chromiumSecurityResults, true);
     assert.equal(responses[1].requestId, "shutdown-1");
     assert.equal(responses[1].eventSequence, 2);
     assert.equal(responses[0].runtimeSession, responses[1].runtimeSession);

@@ -4,9 +4,10 @@ Cross-platform Handshake-first browser core with local HNS proofs, authoritative
 
 This worktree contains the Chromium-extension extraction: a Manifest V3
 package, versioned Rust native-messaging host, HNS-only PAC/proxy boundary,
-per-install local CA lifecycle, and user-level installers for six Chromium
-browsers on Linux, macOS, and Windows. Mobile-only packaging remains present
-until the source-history split is complete.
+per-install local CA lifecycle, generation-bound Rust security results, and
+user-level installers for six Chromium browsers on Linux, macOS, and Windows.
+Mobile-only packaging remains present until the source-history split is
+complete.
 
 ## Layout
 
@@ -45,6 +46,7 @@ until the source-history split is complete.
 - Adds an Android WebView shell with HNS-aware omnibox classification that defaults bare HNS names to HTTPS, keeps dotted hosts under the vendored current IANA TLD set and reserved special-use suffixes on the normal path, reports main-frame HNS gateway failures plus DANE/WebPKI and resolver compatibility policy in the left-side toolbar security state, and uses a shared reserved-name host policy and sync-aware security-label policy. An application-foreground scheduler owns repeated native sync while an app screen is open, including automatic first-run catch-up, live block-height progress, explicit peer-failure outcomes, diagnostics, cache controls, and actionable HNS proof, name, nameserver, DNSSEC, DANE, transport, and origin-address error pages.
 - Gates every HNS main-frame navigation through `BrowserProxyCoordinator`. The latest load waits until the process-global AndroidX proxy override is owned and an immutable exact root/subdomain-scoped endpoint is started and applied; scope transitions, suspension, or ownership loss immediately withdraw routing, authentication, certificate trust, and typed status publication. Active in-scope WebView and Service Worker requests use the same proxy/compatibility/block routing snapshot; because Android WebView does not expose a Service Worker TLS challenge to the page client, admitted worker requests execute through the shared Rust runtime gateway instead of the local CONNECT certificate path.
 - Selects the platform-neutral Rust proxy exclusively. It exposes a fresh authenticated loopback HTTP/CONNECT endpoint, routes HNS requests through the shared persistent runtime, terminates CONNECT with Rust-owned per-host local TLS identities, forwards validated native WebSocket/HTTP Upgrade streams, and supplies bounded typed main-frame security status. Android proceeds past the expected local TLS error only when the full certificate DER matches the exact host and live proxy generation.
+- Feeds the Chromium native host from that trusted proxy-status boundary before internal response metadata is stripped. Rust emits a sanitized, versioned main-frame result containing the live runtime/policy generation, chain anchor, actual DNS transport, HNS proof, DNSSEC, TLSA, DANE, and intermediary identities. The extension rejects stale results and only renders fixed labels; it does not parse DNS, certificates, proofs, or P2P state.
 - Falls back only to the exact-scope compatibility interceptor if the Rust proxy cannot start. A document-start policy leaves allowed WebSockets on Chromium's native implementation while rejecting cross-scope HNS targets; all HTTP parsing, CONNECT termination, certificate generation, and Upgrade tunneling remain in Rust.
 - Provides a second, fail-closed whole-browser proxy mode for WebKit data stores that cannot express Android's reverse-bypass scope. The Rust proxy routes the admitted HNS root through the shared HNS/DNSSEC/DANE backend, forwards ICANN HTTP and opaque CONNECT only to explicit public addresses obtained through bounded WebPKI-authenticated DoH, blocks reserved/private destinations and unsafe ports before dialing, and never uses the system resolver for a browser target.
 - Exposes the shared runtime through a versioned `ios-ffi` C ABI with opaque monotonic handles, Rust-owned result buffers, bounded status mailboxes, one active proxy per runtime, immediate lifecycle revocation, and live generation/host/certificate matching. Apple device and simulator slices are packaged as `HnsBrowserRuntime.xcframework`.

@@ -121,3 +121,9 @@ dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
 }
+
+.popup dd {
+  max-width: 190px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}

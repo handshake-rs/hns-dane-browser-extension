@@ -9,22 +9,26 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use getrandom::fill as fill_random;
 use hns_browser_runtime::{
-    BrowserHostClass, BrowserProxy, BrowserRuntime, NetworkKind, ResolutionMode,
-    RuntimeConfiguration, RuntimePolicy, chromium_hns_only_pac_script, classify_browser_host,
-    diagnostics_json,
+    BrowserHostClass, BrowserProxy, BrowserProxySecurityPath, BrowserProxyStatus,
+    BrowserProxyStatusObserver, BrowserRuntime, NetworkKind, ResolutionMode, RuntimeConfiguration,
+    RuntimePolicy, chromium_hns_only_pac_script, classify_browser_host, diagnostics_json,
 };
 use hns_loopback_proxy::LocalCertificateAuthority;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 pub const NATIVE_MESSAGING_SCHEMA_VERSION: u32 = 1;
+pub const CHROMIUM_SECURITY_RESULT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_NATIVE_MESSAGE_BYTES: usize = 256 * 1024;
 pub const NATIVE_MESSAGING_HOST_NAME: &str = "com.denuoweb.hns_dane_browser";
 const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -36,6 +40,8 @@ const MAX_LOCAL_CA_MARKER_BYTES: u64 = 4 * 1024;
 const LOCAL_CA_LOCK_ATTEMPTS: usize = 40;
 const LOCAL_CA_LOCK_INTERVAL: Duration = Duration::from_millis(25);
 const STALE_LOCAL_CA_LOCK_AGE: Duration = Duration::from_secs(60);
+const MAX_RECENT_SECURITY_RESULTS: usize = 32;
+const MAX_SECURITY_ERROR_BYTES: usize = 512;
 
 #[derive(Debug, Error)]
 pub enum NativeHostError {
@@ -124,6 +130,371 @@ pub enum ExperimentalWireProfile {
     Stable,
     HipDrafts,
     DenuoExtension,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum ChromiumDnsTransport {
+    DirectAuthoritativeUdp,
+    DirectAuthoritativeTcp,
+    AuthenticatedAuthoritativeDoh,
+    HandshakeP2pOdoh,
+    HandshakeP2pDnsRelay,
+    Unavailable,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SecurityChainAnchor {
+    local_best_height: Option<u64>,
+    target_height: Option<u64>,
+    estimated_target_height: Option<u64>,
+    stale: Option<bool>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SecurityTransportPolicy {
+    direct_authoritative_first: bool,
+    p2p_odoh: P2pOdohMode,
+    p2p_dns_relay: bool,
+    privacy_downgrade: PrivacyDowngradePolicy,
+}
+
+/// Sanitized, Rust-derived browser security result. The original resolution
+/// trace can contain a complete URL and certificate material, so it never
+/// crosses the native-messaging boundary.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChromiumSecurityResult {
+    schema_version: u32,
+    event_sequence: u64,
+    runtime_session: String,
+    runtime_generation: u64,
+    policy_generation: u64,
+    network: String,
+    host: String,
+    status_code: u16,
+    main_frame: bool,
+    chain_anchor: SecurityChainAnchor,
+    transport_policy: SecurityTransportPolicy,
+    actual_selected_transport: ChromiumDnsTransport,
+    nameserver_authority: &'static str,
+    local_hns_proof_state: String,
+    local_dnssec_state: String,
+    local_tlsa_state: String,
+    local_dane_state: String,
+    peer_identity: Option<String>,
+    proxy_identity: Option<String>,
+    target_identity: Option<String>,
+    proxy_target_separation: &'static str,
+    direct_relay_fallback: bool,
+    authoritative_fallback_occurred: bool,
+    registry_profile: ExperimentalWireProfile,
+    final_error: Option<String>,
+}
+
+#[derive(Clone)]
+struct ActiveSecurityContext {
+    runtime_session: String,
+    runtime_generation: u64,
+    policy_generation: u64,
+    network: String,
+    policy: ExtensionPolicy,
+}
+
+#[derive(Default)]
+struct SecurityObservationState {
+    active: Option<ActiveSecurityContext>,
+    latest_main_frame: Option<ChromiumSecurityResult>,
+    recent: VecDeque<ChromiumSecurityResult>,
+}
+
+#[derive(Clone, Default)]
+struct SecurityObservations {
+    state: Arc<Mutex<SecurityObservationState>>,
+}
+
+impl SecurityObservations {
+    fn activate(&self, context: ActiveSecurityContext) {
+        if let Ok(mut state) = self.state.lock() {
+            state.active = Some(context);
+            state.latest_main_frame = None;
+            state.recent.clear();
+        }
+    }
+
+    fn deactivate(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.active = None;
+            state.latest_main_frame = None;
+            state.recent.clear();
+        }
+    }
+
+    fn observe(&self, status: &BrowserProxyStatus, event_sequence: u64) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let Some(context) = state.active.as_ref() else {
+            return;
+        };
+        if status.generation() != context.runtime_generation {
+            return;
+        }
+        let result = chromium_security_result(context, status, event_sequence);
+        if result.main_frame {
+            state.latest_main_frame = Some(result.clone());
+        }
+        if state.recent.len() == MAX_RECENT_SECURITY_RESULTS {
+            state.recent.pop_front();
+        }
+        state.recent.push_back(result);
+    }
+
+    fn latest_main_frame(&self) -> Option<ChromiumSecurityResult> {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|state| state.latest_main_frame.clone())
+    }
+
+    fn recent(&self) -> Vec<ChromiumSecurityResult> {
+        self.state
+            .lock()
+            .map(|state| state.recent.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
+struct NativeSecurityObserver {
+    observations: SecurityObservations,
+    event_sequence: Arc<AtomicU64>,
+}
+
+impl BrowserProxyStatusObserver for NativeSecurityObserver {
+    fn observe_status(&self, status: &BrowserProxyStatus) {
+        let event_sequence = next_event_sequence(&self.event_sequence);
+        self.observations.observe(status, event_sequence);
+    }
+}
+
+fn chromium_security_result(
+    context: &ActiveSecurityContext,
+    status: &BrowserProxyStatus,
+    event_sequence: u64,
+) -> ChromiumSecurityResult {
+    let trace = status
+        .resolution_trace_json()
+        .and_then(|trace| serde_json::from_str::<Value>(trace).ok())
+        .unwrap_or(Value::Null);
+    chromium_security_result_from_trace(
+        context,
+        status.generation(),
+        status.host(),
+        status.status_code(),
+        status.is_likely_main_frame(),
+        status.security_path(),
+        &trace,
+        event_sequence,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn chromium_security_result_from_trace(
+    context: &ActiveSecurityContext,
+    runtime_generation: u64,
+    host: &str,
+    status_code: u16,
+    main_frame: bool,
+    security_path: Option<BrowserProxySecurityPath>,
+    trace: &Value,
+    event_sequence: u64,
+) -> ChromiumSecurityResult {
+    let actual_selected_transport = selected_dns_transport(security_path, trace);
+    let selected_attempt = selected_dns_attempt(actual_selected_transport, trace);
+    let peer_identity = if actual_selected_transport == ChromiumDnsTransport::HandshakeP2pDnsRelay {
+        bounded_trace_string(trace.pointer("/p2pDnsRelay/peer"), 320)
+    } else {
+        selected_attempt.and_then(|attempt| bounded_trace_string(attempt.get("server"), 320))
+    };
+    let direct_relay_fallback = trace
+        .pointer("/odoh/directRelayFallback")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let authoritative_fallback_occurred = actual_selected_transport
+        == ChromiumDnsTransport::HandshakeP2pDnsRelay
+        && trace
+            .get("dnsAttempts")
+            .and_then(Value::as_array)
+            .is_some_and(|attempts| {
+                attempts.iter().any(|attempt| {
+                    matches!(
+                        attempt.get("protocol").and_then(Value::as_str),
+                        Some("udp53" | "tcp53" | "authoritative_doh")
+                    ) && attempt.get("status").and_then(Value::as_str) != Some("ok")
+                })
+            });
+    let nameserver_authority = if actual_selected_transport == ChromiumDnsTransport::Unavailable {
+        "unavailable"
+    } else {
+        "delegatedAuthoritativeNameserver"
+    };
+
+    ChromiumSecurityResult {
+        schema_version: CHROMIUM_SECURITY_RESULT_SCHEMA_VERSION,
+        event_sequence,
+        runtime_session: context.runtime_session.clone(),
+        runtime_generation,
+        policy_generation: context.policy_generation,
+        network: context.network.clone(),
+        host: host.to_owned(),
+        status_code,
+        main_frame,
+        chain_anchor: SecurityChainAnchor {
+            local_best_height: trace.get("localBestHeight").and_then(Value::as_u64),
+            target_height: trace.get("targetHeight").and_then(Value::as_u64),
+            estimated_target_height: trace.get("estimatedTargetHeight").and_then(Value::as_u64),
+            stale: trace.get("localChainStale").and_then(Value::as_bool),
+        },
+        transport_policy: SecurityTransportPolicy {
+            direct_authoritative_first: true,
+            p2p_odoh: context.policy.p2p_odoh,
+            p2p_dns_relay: context.policy.p2p_dns_relay,
+            privacy_downgrade: context.policy.privacy_downgrade,
+        },
+        actual_selected_transport,
+        nameserver_authority,
+        local_hns_proof_state: trace_state(trace.get("hnsProof"), "unknown"),
+        local_dnssec_state: trace_state(trace.get("dnssec"), "notEvaluated"),
+        local_tlsa_state: trace_state(trace.pointer("/tls/tlsaStatus"), "notEvaluated"),
+        local_dane_state: trace_state(trace.pointer("/tls/dane/decision"), "notEvaluated"),
+        peer_identity,
+        proxy_identity: bounded_trace_string(trace.pointer("/odoh/proxyPeer"), 320),
+        target_identity: bounded_trace_string(trace.pointer("/odoh/targetPeer"), 320),
+        proxy_target_separation: trace_state_static(
+            trace.pointer("/odoh/proxyTargetSeparation"),
+            "notApplicable",
+        ),
+        direct_relay_fallback,
+        authoritative_fallback_occurred,
+        registry_profile: context.policy.experimental_wire_profile,
+        final_error: bounded_trace_string(trace.get("finalError"), MAX_SECURITY_ERROR_BYTES),
+    }
+}
+
+fn selected_dns_transport(
+    security_path: Option<BrowserProxySecurityPath>,
+    trace: &Value,
+) -> ChromiumDnsTransport {
+    match security_path {
+        Some(
+            BrowserProxySecurityPath::DaneAuthoritativeDoh
+            | BrowserProxySecurityPath::HnsAuthoritativeDoh,
+        ) => ChromiumDnsTransport::AuthenticatedAuthoritativeDoh,
+        Some(
+            BrowserProxySecurityPath::DaneAuthoritativeDns53
+            | BrowserProxySecurityPath::HnsAuthoritativeDns53,
+        ) => selected_direct_dns_transport(trace),
+        Some(
+            BrowserProxySecurityPath::DaneP2pDnsRelay | BrowserProxySecurityPath::HnsP2pDnsRelay,
+        ) => ChromiumDnsTransport::HandshakeP2pDnsRelay,
+        Some(
+            BrowserProxySecurityPath::DaneThirdPartyDoh
+            | BrowserProxySecurityPath::HnsThirdPartyDoh
+            | BrowserProxySecurityPath::StatelessDane
+            | BrowserProxySecurityPath::DaneIcannDoh,
+        )
+        | None => selected_dns_transport_from_trace(trace),
+        Some(_) => ChromiumDnsTransport::Unavailable,
+    }
+}
+
+fn selected_dns_transport_from_trace(trace: &Value) -> ChromiumDnsTransport {
+    let candidate = match trace.get("resolutionSource").and_then(Value::as_str) {
+        Some("authoritative_doh") => ChromiumDnsTransport::AuthenticatedAuthoritativeDoh,
+        Some("authoritative_dns") => return selected_direct_dns_transport(trace),
+        Some("p2p_odoh") => ChromiumDnsTransport::HandshakeP2pOdoh,
+        Some("p2p_dns_relay") => ChromiumDnsTransport::HandshakeP2pDnsRelay,
+        _ => return ChromiumDnsTransport::Unavailable,
+    };
+    if selected_dns_attempt(candidate, trace).is_some() {
+        candidate
+    } else {
+        ChromiumDnsTransport::Unavailable
+    }
+}
+
+fn selected_direct_dns_transport(trace: &Value) -> ChromiumDnsTransport {
+    let Some(attempts) = trace.get("dnsAttempts").and_then(Value::as_array) else {
+        return ChromiumDnsTransport::Unavailable;
+    };
+    attempts
+        .iter()
+        .rev()
+        .find_map(|attempt| {
+            match (
+                attempt.get("protocol").and_then(Value::as_str),
+                attempt.get("status").and_then(Value::as_str),
+            ) {
+                (Some("tcp53"), Some("ok")) => Some(ChromiumDnsTransport::DirectAuthoritativeTcp),
+                (Some("udp53"), Some("ok")) => Some(ChromiumDnsTransport::DirectAuthoritativeUdp),
+                _ => None,
+            }
+        })
+        .unwrap_or(ChromiumDnsTransport::Unavailable)
+}
+
+fn selected_dns_attempt(transport: ChromiumDnsTransport, trace: &Value) -> Option<&Value> {
+    let protocol = match transport {
+        ChromiumDnsTransport::DirectAuthoritativeUdp => "udp53",
+        ChromiumDnsTransport::DirectAuthoritativeTcp => "tcp53",
+        ChromiumDnsTransport::AuthenticatedAuthoritativeDoh => "authoritative_doh",
+        ChromiumDnsTransport::HandshakeP2pOdoh => "p2p_odoh",
+        ChromiumDnsTransport::HandshakeP2pDnsRelay => "p2p_dns_relay",
+        ChromiumDnsTransport::Unavailable => return None,
+    };
+    trace
+        .get("dnsAttempts")
+        .and_then(Value::as_array)?
+        .iter()
+        .rev()
+        .find(|attempt| {
+            attempt.get("protocol").and_then(Value::as_str) == Some(protocol)
+                && attempt.get("status").and_then(Value::as_str) == Some("ok")
+        })
+}
+
+fn trace_state(value: Option<&Value>, default: &str) -> String {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
+        .unwrap_or(default)
+        .to_owned()
+}
+
+fn trace_state_static(value: Option<&Value>, default: &'static str) -> &'static str {
+    match value.and_then(Value::as_str) {
+        Some("verified") => "verified",
+        Some("failed") => "failed",
+        Some("notApplicable") => "notApplicable",
+        _ => default,
+    }
+}
+
+fn bounded_trace_string(value: Option<&Value>, maximum: usize) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty() && value.len() <= maximum && !value.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
 }
 
 #[derive(Debug, Deserialize)]
@@ -576,7 +947,8 @@ pub struct NativeHostController {
     proxy: Option<BrowserProxy>,
     local_ca: LocalCaStore,
     host_session: String,
-    event_sequence: u64,
+    event_sequence: Arc<AtomicU64>,
+    security_observations: SecurityObservations,
     policy: ExtensionPolicy,
 }
 
@@ -590,7 +962,8 @@ impl NativeHostController {
             proxy: None,
             local_ca,
             host_session: generate_host_session()?,
-            event_sequence: 0,
+            event_sequence: Arc::new(AtomicU64::new(0)),
+            security_observations: SecurityObservations::default(),
             policy: ExtensionPolicy::default(),
         })
     }
@@ -649,6 +1022,7 @@ impl NativeHostController {
                             "hnsOnlyPac": true,
                             "proxyAuthentication": true,
                             "perInstallLocalCa": true,
+                            "chromiumSecurityResults": true,
                             "p2pDnsRelay": true,
                             "p2pOdoh": false,
                             "hnsr": false
@@ -688,8 +1062,13 @@ impl NativeHostController {
             ),
             NativeRequest::Diagnostics { .. } => {
                 let diagnostics = diagnostics_json();
-                let value = serde_json::from_str(&diagnostics)
+                let core = serde_json::from_str(&diagnostics)
                     .unwrap_or_else(|_| Value::String(diagnostics.to_owned()));
+                let value = json!({
+                    "core": core,
+                    "runtime": self.status_result(),
+                    "recentSecurityResults": self.security_observations.recent()
+                });
                 (self.success_response(request_id, value), false)
             }
             NativeRequest::Stop { .. } => {
@@ -716,10 +1095,26 @@ impl NativeHostController {
             .runtime
             .set_policy(runtime_policy)
             .map_err(|error| ("runtimeError", error.to_string()))?;
+        let observer = Arc::new(NativeSecurityObserver {
+            observations: self.security_observations.clone(),
+            event_sequence: Arc::clone(&self.event_sequence),
+        });
         let proxy = self
             .runtime
-            .start_hns_only_proxy_with_certificate_authority(self.local_ca.authority().clone())
+            .start_hns_only_proxy_with_certificate_authority_and_observer(
+                self.local_ca.authority().clone(),
+                observer,
+            )
             .map_err(|error| ("proxyStartFailed", error.to_string()))?;
+        let runtime_session = proxy.session_id().to_owned();
+        let runtime_generation = proxy.generation();
+        self.security_observations.activate(ActiveSecurityContext {
+            runtime_session: runtime_session.clone(),
+            runtime_generation,
+            policy_generation,
+            network: self.runtime.network().as_str().to_owned(),
+            policy: policy.clone(),
+        });
         let pac_script = chromium_hns_only_pac_script(proxy.port())
             .map_err(|error| ("pacGenerationFailed", error.to_string()))?;
         let result = json!({
@@ -733,10 +1128,11 @@ impl NativeHostController {
             },
             "pacScript": pac_script,
             "ca": self.local_ca.status_json(),
-            "runtimeSession": proxy.session_id(),
-            "runtimeGeneration": proxy.generation(),
+            "runtimeSession": runtime_session,
+            "runtimeGeneration": runtime_generation,
             "policyGeneration": policy_generation,
-            "policy": policy
+            "policy": policy,
+            "latestMainFrameSecurity": Value::Null
         });
         self.policy = policy;
         self.proxy = Some(proxy);
@@ -756,11 +1152,13 @@ impl NativeHostController {
             "policyGeneration": self.runtime.policy_revision(),
             "policy": self.policy,
             "caReady": self.local_ca.is_marked_installed(),
-            "ca": self.local_ca.status_json()
+            "ca": self.local_ca.status_json(),
+            "latestMainFrameSecurity": self.security_observations.latest_main_frame()
         })
     }
 
     fn stop_proxy(&mut self) {
+        self.security_observations.deactivate();
         if let Some(proxy) = self.proxy.take() {
             proxy.stop();
         }
@@ -778,7 +1176,6 @@ impl NativeHostController {
     }
 
     fn success_response(&mut self, request_id: String, result: Value) -> NativeResponse {
-        self.event_sequence = self.event_sequence.saturating_add(1);
         NativeResponse {
             schema_version: NATIVE_MESSAGING_SCHEMA_VERSION,
             request_id,
@@ -786,7 +1183,7 @@ impl NativeHostController {
             runtime_session: self.current_runtime_session(),
             runtime_generation: self.proxy.as_ref().map(BrowserProxy::generation),
             policy_generation: self.runtime.policy_revision(),
-            event_sequence: self.event_sequence,
+            event_sequence: next_event_sequence(&self.event_sequence),
             result: Some(result),
             error: None,
         }
@@ -798,7 +1195,6 @@ impl NativeHostController {
         code: &'static str,
         message: String,
     ) -> NativeResponse {
-        self.event_sequence = self.event_sequence.saturating_add(1);
         NativeResponse {
             schema_version: NATIVE_MESSAGING_SCHEMA_VERSION,
             request_id,
@@ -806,7 +1202,7 @@ impl NativeHostController {
             runtime_session: self.current_runtime_session(),
             runtime_generation: self.proxy.as_ref().map(BrowserProxy::generation),
             policy_generation: self.runtime.policy_revision(),
-            event_sequence: self.event_sequence,
+            event_sequence: next_event_sequence(&self.event_sequence),
             result: None,
             error: Some(NativeProtocolError { code, message }),
         }
@@ -883,6 +1279,15 @@ fn generate_host_session() -> Result<String, NativeHostError> {
     let mut bytes = [0_u8; HOST_SESSION_RANDOM_BYTES];
     fill_random(&mut bytes).map_err(|_| NativeHostError::SessionGeneration)?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn next_event_sequence(sequence: &AtomicU64) -> u64 {
+    match sequence.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        current.checked_add(1)
+    }) {
+        Ok(previous) => previous + 1,
+        Err(_) => u64::MAX,
+    }
 }
 
 pub fn read_native_message(reader: &mut impl Read) -> Result<Option<Vec<u8>>, NativeHostError> {
@@ -1020,6 +1425,163 @@ mod tests {
     }
 
     #[test]
+    fn security_result_reports_actual_transport_and_local_validation_without_raw_trace() {
+        let context = ActiveSecurityContext {
+            runtime_session: "runtime-session".to_owned(),
+            runtime_generation: 7,
+            policy_generation: 3,
+            network: "regtest".to_owned(),
+            policy: ExtensionPolicy::default(),
+        };
+        let trace = json!({
+            "url": "https://welcome/private?token=secret",
+            "hnsProof": "verified",
+            "localBestHeight": 42,
+            "targetHeight": 42,
+            "estimatedTargetHeight": 42,
+            "localChainStale": false,
+            "dnssec": "secure",
+            "tls": {
+                "tlsaStatus": "present",
+                "certificate": { "spkiDerHex": "secret-certificate-material" },
+                "dane": { "decision": "verified" }
+            },
+            "dnsAttempts": [
+                {
+                    "protocol": "udp53",
+                    "server": "192.0.2.53:53",
+                    "status": "truncated"
+                },
+                {
+                    "protocol": "tcp53",
+                    "server": "192.0.2.53:53",
+                    "status": "ok"
+                }
+            ],
+            "finalError": null
+        });
+        let result = chromium_security_result_from_trace(
+            &context,
+            7,
+            "welcome",
+            200,
+            true,
+            Some(BrowserProxySecurityPath::DaneAuthoritativeDns53),
+            &trace,
+            9,
+        );
+        let encoded = serde_json::to_value(result).unwrap();
+
+        assert_eq!(encoded["schemaVersion"], 1);
+        assert_eq!(encoded["eventSequence"], 9);
+        assert_eq!(encoded["runtimeSession"], "runtime-session");
+        assert_eq!(encoded["runtimeGeneration"], 7);
+        assert_eq!(encoded["policyGeneration"], 3);
+        assert_eq!(encoded["actualSelectedTransport"], "directAuthoritativeTcp");
+        assert_eq!(encoded["localHnsProofState"], "verified");
+        assert_eq!(encoded["localDnssecState"], "secure");
+        assert_eq!(encoded["localTlsaState"], "present");
+        assert_eq!(encoded["localDaneState"], "verified");
+        assert_eq!(encoded["peerIdentity"], "192.0.2.53:53");
+        assert_eq!(encoded["chainAnchor"]["localBestHeight"], 42);
+        let encoded_text = encoded.to_string();
+        assert!(!encoded_text.contains("private?token"));
+        assert!(!encoded_text.contains("certificate-material"));
+    }
+
+    #[test]
+    fn relay_security_result_keeps_intermediary_distinct_from_nameserver_authority() {
+        let context = ActiveSecurityContext {
+            runtime_session: "runtime-session".to_owned(),
+            runtime_generation: 11,
+            policy_generation: 4,
+            network: "regtest".to_owned(),
+            policy: ExtensionPolicy {
+                p2p_dns_relay: true,
+                ..ExtensionPolicy::default()
+            },
+        };
+        let trace = json!({
+            "resolutionSource": "p2p_dns_relay",
+            "hnsProof": "verified",
+            "dnssec": "secure",
+            "p2pDnsRelay": {
+                "attempted": true,
+                "peer": "198.51.100.7:12038",
+                "serviceAdvertised": true
+            },
+            "dnsAttempts": [
+                {
+                    "protocol": "udp53",
+                    "server": "192.0.2.53:53",
+                    "status": "timeout"
+                },
+                {
+                    "protocol": "p2p_dns_relay",
+                    "server": "198.51.100.7:12038",
+                    "status": "ok"
+                }
+            ],
+            "tls": {
+                "tlsaStatus": "present",
+                "dane": { "decision": "verified" }
+            }
+        });
+        let result = chromium_security_result_from_trace(
+            &context,
+            11,
+            "welcome",
+            200,
+            true,
+            Some(BrowserProxySecurityPath::DaneP2pDnsRelay),
+            &trace,
+            12,
+        );
+        let encoded = serde_json::to_value(result).unwrap();
+
+        assert_eq!(encoded["actualSelectedTransport"], "handshakeP2pDnsRelay");
+        assert_eq!(
+            encoded["nameserverAuthority"],
+            "delegatedAuthoritativeNameserver"
+        );
+        assert_eq!(encoded["peerIdentity"], "198.51.100.7:12038");
+        assert_eq!(encoded["proxyIdentity"], Value::Null);
+        assert_eq!(encoded["targetIdentity"], Value::Null);
+        assert_eq!(encoded["proxyTargetSeparation"], "notApplicable");
+        assert_eq!(encoded["directRelayFallback"], false);
+        assert_eq!(encoded["authoritativeFallbackOccurred"], true);
+    }
+
+    #[test]
+    fn failed_transport_attempt_is_reported_as_unavailable() {
+        let context = ActiveSecurityContext {
+            runtime_session: "runtime-session".to_owned(),
+            runtime_generation: 5,
+            policy_generation: 2,
+            network: "regtest".to_owned(),
+            policy: ExtensionPolicy {
+                p2p_dns_relay: true,
+                ..ExtensionPolicy::default()
+            },
+        };
+        let trace = json!({
+            "resolutionSource": "p2p_dns_relay",
+            "dnsAttempts": [{
+                "protocol": "p2p_dns_relay",
+                "server": "198.51.100.7:12038",
+                "status": "timeout"
+            }]
+        });
+        let result =
+            chromium_security_result_from_trace(&context, 5, "welcome", 502, true, None, &trace, 6);
+
+        assert_eq!(
+            serde_json::to_value(result).unwrap()["actualSelectedTransport"],
+            "unavailable"
+        );
+    }
+
+    #[test]
     fn request_ids_are_bounded_and_log_safe() {
         assert!(valid_request_id("request-1:retry_2"));
         assert!(!valid_request_id(""));
@@ -1113,6 +1675,7 @@ mod tests {
         let result = response.result.unwrap();
         assert_eq!(result["state"], "active");
         assert_eq!(result["ca"]["state"], "needsInstallation");
+        assert_eq!(result["latestMainFrameSecurity"], Value::Null);
         assert!(
             result["pacScript"]
                 .as_str()

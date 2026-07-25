@@ -28,3 +28,14 @@ test("service worker installs only Rust-generated mandatory PAC and fails closed
   assert.doesNotMatch(worker, /sha(?:1|256|512)/i);
   assert.doesNotMatch(worker, /route.*record/i);
 });
+
+test("health checks preserve a live generation and reconnect only after failure", () => {
+  assert.match(
+    worker,
+    /alarm\.name === HEALTH_ALARM\)[\s\S]*?refreshNativeStatus\(\)[\s\S]*?alarm\.name === RECONNECT_ALARM\)[\s\S]*?recover\(\)/
+  );
+  assert.doesNotMatch(
+    worker,
+    /alarm\.name === HEALTH_ALARM \|\| alarm\.name === RECONNECT_ALARM/
+  );
+});
