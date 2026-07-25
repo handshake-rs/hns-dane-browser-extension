@@ -10,7 +10,7 @@ use hns_resolver::{
 };
 use hns_transport::{
     OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead, OriginTransport,
-    OriginTunnel, TlsaRecordSource, TransportError,
+    OriginTunnel, TlsaRecordSource, TlsaTransport, TransportError,
 };
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -39,9 +39,25 @@ pub enum HnsHttpsMode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedTlsaRecords {
+    pub dnssec_state: TlsaDnssecState,
     pub secure: bool,
     pub records: Vec<TlsaRecord>,
     pub source: Option<TlsaRecordSource>,
+}
+
+/// Successful TLSA discovery states. Resolver errors are the fourth,
+/// fail-closed `bogus-or-indeterminate` outcome and are never converted into
+/// one of these successful states.
+///
+/// This is a compatibility boundary local to the historical browser clone.
+/// Its owner derivation and outcome mapping are intentionally isolated so a
+/// canonical shared ICANN DANE engine can replace them without changing the
+/// browser request-boundary policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TlsaDnssecState {
+    SecurePresent,
+    AuthenticatedAbsence,
+    InsecureDelegation,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -264,7 +280,8 @@ where
         self.validate_origin_port(request.origin.port)?;
 
         let resolution = self.resolver.resolve(&request.resolution)?;
-        if !resolution.secure {
+        let name_class = classify_name(&request.origin.host);
+        if !resolution.secure && name_class != NameClass::Icann {
             return Err(GatewayError::InsecureResolution);
         }
 
@@ -303,8 +320,15 @@ where
                 }
             }
             origin_request.tls.service_port = origin_request.port;
-            let resolved_tlsa =
-                self.resolve_tlsa_records(&origin_request.host, origin_request.port)?;
+            origin_request.tls.service_transport = match origin_request.protocol {
+                OriginProtocol::Http11 | OriginProtocol::Http2 => TlsaTransport::Tcp,
+                OriginProtocol::Http3 => TlsaTransport::Udp,
+            };
+            let resolved_tlsa = self.resolve_tlsa_records(
+                &origin_request.host,
+                origin_request.port,
+                origin_request.tls.service_transport,
+            )?;
             origin_request.tls.dnssec_secure = resolved_tlsa.secure;
             origin_request.tls.tlsa_records = resolved_tlsa.records;
             origin_request.tls.tlsa_source = resolved_tlsa.source;
@@ -337,29 +361,51 @@ where
         &self,
         host: &str,
         port: u16,
+        transport: TlsaTransport,
     ) -> Result<ResolvedTlsaRecords, GatewayError> {
-        let Some(request) = tlsa_resolution_request(host, port) else {
+        let Some(request) = tlsa_resolution_request(host, port, transport) else {
             return Ok(ResolvedTlsaRecords {
+                dnssec_state: TlsaDnssecState::InsecureDelegation,
                 secure: false,
                 records: Vec::new(),
                 source: None,
             });
         };
 
-        self.resolve_native_tlsa_records(&request)
+        self.resolve_native_tlsa_records(&request, classify_name(host) == NameClass::Icann)
     }
 
     fn resolve_native_tlsa_records(
         &self,
         request: &ResolutionRequest,
+        allow_insecure_webpki_fallback: bool,
     ) -> Result<ResolvedTlsaRecords, GatewayError> {
         let answer = self.resolver.resolve(request)?;
+        // A validating resolver returns AD=0 for a provably insecure
+        // delegation and a DNS error (normally SERVFAIL) for bogus DNSSEC.
+        // Ignore all unsigned TLSA bytes for ICANN and retain WebPKI; never
+        // turn a resolver error into an empty TLSA answer.
+        if !answer.secure && allow_insecure_webpki_fallback {
+            return Ok(ResolvedTlsaRecords {
+                dnssec_state: TlsaDnssecState::InsecureDelegation,
+                secure: false,
+                records: Vec::new(),
+                source: None,
+            });
+        }
         let records = tlsa_records(&answer.records, &request.qname)?;
         if self.config.require_secure_resolution && !answer.secure && !records.is_empty() {
             return Err(GatewayError::InsecureResolution);
         }
 
         Ok(ResolvedTlsaRecords {
+            dnssec_state: if !answer.secure {
+                TlsaDnssecState::InsecureDelegation
+            } else if records.is_empty() {
+                TlsaDnssecState::AuthenticatedAbsence
+            } else {
+                TlsaDnssecState::SecurePresent
+            },
             secure: answer.secure,
             source: (!records.is_empty()).then_some(TlsaRecordSource::NativeTlsa),
             records,
@@ -376,7 +422,7 @@ where
                 qtype: qtype.code(),
             };
             let answer = self.resolver.resolve(&request)?;
-            if !answer.secure {
+            if !answer.secure && classify_name(&origin.host) != NameClass::Icann {
                 return Err(GatewayError::InsecureResolution);
             }
             if let Some(address) = first_resolved_address(&answer.records, &origin.host) {
@@ -396,6 +442,9 @@ where
             qname: normalize_host(&request.host),
             qtype: RecordType::Https.code(),
         })?;
+        if !answer.secure && classify_name(&request.host) == NameClass::Icann {
+            return Ok(());
+        }
         if self.config.require_secure_resolution && !answer.secure {
             return Err(GatewayError::InsecureResolution);
         }
@@ -493,8 +542,17 @@ fn cname_target_for_owner(records: &[ResourceRecord], owner: &DnsName) -> Option
     (end == record.rdata.len()).then_some(target)
 }
 
-fn tlsa_resolution_request(host: &str, port: u16) -> Option<ResolutionRequest> {
-    let qname = DnsName::from_ascii(&format!("_{port}._tcp.{}", normalize_host(host))).ok()?;
+fn tlsa_resolution_request(
+    host: &str,
+    port: u16,
+    transport: TlsaTransport,
+) -> Option<ResolutionRequest> {
+    let transport = match transport {
+        TlsaTransport::Tcp => "tcp",
+        TlsaTransport::Udp => "udp",
+    };
+    let qname =
+        DnsName::from_ascii(&format!("_{port}._{transport}.{}", normalize_host(host))).ok()?;
     Some(ResolutionRequest {
         qname: qname.to_string(),
         qtype: RecordType::Tlsa.code(),
@@ -1378,7 +1436,7 @@ mod tests {
                             ),
                         ],
                     ),
-                    response("_8443._tcp.name", RecordType::Tlsa.code(), true, vec![]),
+                    response("_8443._udp.name", RecordType::Tlsa.code(), true, vec![]),
                 ],
                 Arc::clone(&requests),
             ),
@@ -1402,7 +1460,7 @@ mod tests {
         assert_eq!(
             requests.lock().unwrap().last().unwrap(),
             &ResolutionRequest {
-                qname: "_8443._tcp.name".to_owned(),
+                qname: "_8443._udp.name".to_owned(),
                 qtype: RecordType::Tlsa.code(),
             },
         );
@@ -1762,6 +1820,148 @@ mod tests {
                     qtype: RecordType::Tlsa.code(),
                 },
             ],
+        );
+    }
+
+    #[test]
+    fn icann_unsigned_delegation_ignores_unsigned_tlsa_and_uses_webpki() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            ScriptedResolver::new(
+                vec![
+                    response(
+                        "example.com",
+                        RecordType::A.code(),
+                        false,
+                        vec![address_record_for("example.com")],
+                    ),
+                    response("example.com", RecordType::Https.code(), false, vec![]),
+                    response(
+                        "_443._tcp.example.com",
+                        RecordType::Tlsa.code(),
+                        false,
+                        vec![tlsa_record("_443._tcp.example.com", vec![3, 1, 1, 0xaa])],
+                    ),
+                ],
+                Arc::clone(&requests),
+            ),
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        gateway
+            .handle(&request("example.com", "example.com"))
+            .unwrap();
+
+        let captured = gateway
+            .transport()
+            .last_request
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(captured.tls.mode, DomainTrustMode::IcannWebPki);
+        assert!(!captured.tls.dnssec_secure);
+        assert!(captured.tls.tlsa_records.is_empty());
+        assert_eq!(captured.tls.tlsa_source, None);
+        assert_eq!(
+            requests.lock().unwrap().last().unwrap().qname,
+            "_443._tcp.example.com",
+        );
+    }
+
+    #[test]
+    fn tlsa_dnssec_state_preserves_three_successful_discovery_outcomes() {
+        let request = ResolutionRequest {
+            qname: "_443._tcp.example.com".to_owned(),
+            qtype: RecordType::Tlsa.code(),
+        };
+        for (secure, records, expected) in [
+            (
+                true,
+                vec![tlsa_record("_443._tcp.example.com", vec![3, 1, 1, 0xaa])],
+                TlsaDnssecState::SecurePresent,
+            ),
+            (true, Vec::new(), TlsaDnssecState::AuthenticatedAbsence),
+            (false, Vec::new(), TlsaDnssecState::InsecureDelegation),
+        ] {
+            let gateway = Gateway::new(
+                GatewayConfig::default(),
+                StaticResolver { secure, records },
+                StaticTransport,
+            )
+            .unwrap();
+            let discovery = gateway.resolve_native_tlsa_records(&request, true).unwrap();
+            assert_eq!(discovery.dnssec_state, expected);
+        }
+    }
+
+    #[test]
+    fn icann_tlsa_resolver_failure_never_becomes_authenticated_absence() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            ScriptedResolver::new(
+                vec![
+                    response(
+                        "example.com",
+                        RecordType::A.code(),
+                        true,
+                        vec![address_record_for("example.com")],
+                    ),
+                    response("example.com", RecordType::Https.code(), true, vec![]),
+                ],
+                Arc::new(Mutex::new(Vec::new())),
+            ),
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            gateway
+                .handle(&request("example.com", "example.com"))
+                .unwrap_err(),
+            GatewayError::Resolver(ResolverError::ProofUnavailable),
+        );
+        assert!(gateway.transport().last_request.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn http3_derives_udp_tlsa_service_owner() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            ScriptedResolver::new(
+                vec![
+                    response("name", RecordType::A.code(), true, vec![address_record()]),
+                    response(
+                        "name",
+                        RecordType::Https.code(),
+                        true,
+                        vec![https_record("name", 1, ".", vec![alpn_param(&[b"h3"])])],
+                    ),
+                    response("_443._udp.name", RecordType::Tlsa.code(), true, vec![]),
+                ],
+                Arc::clone(&requests),
+            ),
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        gateway.handle(&request("name", "name")).unwrap();
+
+        let captured = gateway
+            .transport()
+            .last_request
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(captured.protocol, OriginProtocol::Http3);
+        assert_eq!(captured.tls.service_transport, TlsaTransport::Udp);
+        assert_eq!(
+            requests.lock().unwrap().last().unwrap().qname,
+            "_443._udp.name",
         );
     }
 

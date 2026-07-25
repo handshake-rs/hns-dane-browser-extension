@@ -77,10 +77,10 @@ class BrowserUrlClassifierTest {
     }
 
     @Test
-    fun icannDaneTestHostUsesNativeGatewayMode() {
+    fun icannDaneTestHostUsesNormalWebModeUntilRequestBoundaryDiscovery() {
         val target = classifier.classify("dane-test.denuoweb.com")
 
-        assertEquals(BrowserTargetKind.NativeGateway, target.kind)
+        assertEquals(BrowserTargetKind.ExactUrl, target.kind)
         assertEquals("https://dane-test.denuoweb.com/", target.url)
         assertEquals("dane-test.denuoweb.com", target.displayHost)
     }

@@ -67,6 +67,7 @@ pub struct TlsValidation {
     pub tlsa_records: Vec<TlsaRecord>,
     pub tlsa_source: Option<TlsaRecordSource>,
     pub service_port: u16,
+    pub service_transport: TlsaTransport,
     pub stateless_dane: StatelessDaneConfig,
 }
 
@@ -74,6 +75,12 @@ pub struct TlsValidation {
 pub enum TlsaRecordSource {
     NativeTlsa,
     HnsProofTxt,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TlsaTransport {
+    Tcp,
+    Udp,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -394,6 +401,7 @@ impl Default for TlsValidation {
             tlsa_records: Vec::new(),
             tlsa_source: None,
             service_port: 443,
+            service_transport: TlsaTransport::Tcp,
             stateless_dane: StatelessDaneConfig::default(),
         }
     }
@@ -407,6 +415,7 @@ impl TlsValidation {
             tlsa_records,
             tlsa_source: None,
             service_port: 443,
+            service_transport: TlsaTransport::Tcp,
             stateless_dane: StatelessDaneConfig::default(),
         }
     }
@@ -418,6 +427,7 @@ impl TlsValidation {
             tlsa_records,
             tlsa_source: None,
             service_port: 443,
+            service_transport: TlsaTransport::Tcp,
             stateless_dane: StatelessDaneConfig::default(),
         }
     }

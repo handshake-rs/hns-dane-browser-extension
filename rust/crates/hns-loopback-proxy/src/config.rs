@@ -72,15 +72,17 @@ pub enum LoopbackBind {
 /// Determines which browser requests one proxy generation may route.
 ///
 /// The default remains the Android-compatible immutable HNS scope. Chromium
-/// uses `HnsOnly` behind a mandatory PAC file, with the Rust admission boundary
-/// independently rejecting every non-HNS request. Whole-browser routing is an
-/// explicit opt-in for engines whose proxy configuration cannot express an
-/// HNS-only match rule.
+/// can use `DaneBrowser` behind a mandatory PAC file so every canonical DNS
+/// host reaches the same Rust request boundary for namespace classification,
+/// DNSSEC/TLSA discovery, and origin trust selection. Whole-browser routing is
+/// an explicit opt-in for engines whose proxy configuration cannot express a
+/// DNS-name-only match rule.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ProxyRoutingMode {
     #[default]
     ScopedHns,
     HnsOnly,
+    DaneBrowser,
     WholeBrowser,
 }
 
@@ -335,6 +337,21 @@ impl ProxyConfig {
         }
     }
 
+    /// Creates a Chromium-style generation which admits canonical HNS and
+    /// ICANN DNS names to the native gateway while rejecting special-use,
+    /// search, and IP-literal targets.
+    pub fn dane_browser(instance: ProxyInstanceId) -> Self {
+        Self {
+            instance,
+            hns_scope: None,
+            local_certificate_authority: None,
+            limits: ProxyLimits::default(),
+            timeouts: ProxyTimeouts::default(),
+            bind: LoopbackBind::default(),
+            routing_mode: ProxyRoutingMode::DaneBrowser,
+        }
+    }
+
     pub fn with_controls(
         instance: ProxyInstanceId,
         scope: HostScope,
@@ -543,5 +560,9 @@ mod tests {
         let hns_only = ProxyConfig::hns_only(icann_only.instance().clone());
         assert_eq!(hns_only.hns_scope(), None);
         assert_eq!(hns_only.routing_mode(), ProxyRoutingMode::HnsOnly);
+
+        let dane_browser = ProxyConfig::dane_browser(hns_only.instance().clone());
+        assert_eq!(dane_browser.hns_scope(), None);
+        assert_eq!(dane_browser.routing_mode(), ProxyRoutingMode::DaneBrowser);
     }
 }

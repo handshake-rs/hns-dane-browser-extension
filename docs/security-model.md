@@ -11,6 +11,11 @@ The default proof-backed path does not trust a single peer, external HNS resolve
 - HNS proof failure: fail closed.
 - DNSSEC validation failure: fail closed.
 - TLSA exists but DANE validation fails: fail closed.
+- ICANN TLSA discovery is a four-state decision at the shared Rust request
+  boundary: secure RRset (enforce), authenticated absence (WebPKI), proven
+  insecure/unsigned delegation (discard unsigned TLSA and use WebPKI), or
+  bogus/indeterminate (fail closed). A resolver error is never cached or
+  represented as no TLSA.
 - Experimental stateless DANE certificate evidence is off by default. When enabled, certificate evidence can only supply HNS TLSA policy after its Urkel proof matches a recent locally synced tree root and its direct-zone DNSSEC chain validates from the HNS-proven DS RRset. Missing certificate evidence falls back to the normal live proof/resolver path; malformed or invalid supported certificate evidence fails closed when it is used.
 - Sync stale: block HNS secure state and show a sync-specific browser error.
 - Sync attempts that make no progress must distinguish up-to-date peers from all-peer failure.
@@ -24,6 +29,12 @@ The default proof-backed path does not trust a single peer, external HNS resolve
 - Verified HNS non-inclusion must surface as name-not-found instead of origin-address-missing.
 - Proof-anchored `hnsdns=1` metadata and RFC 9461 `_dns.<nameserver>` SVCB records may add only RFC 8484 authoritative DoH transport endpoints for HNS-proven nameservers. They do not synthesize origin A/AAAA, HTTPS, or TLSA answers; malformed matching declarations fail closed, and all resulting DNS answers still validate against the HNS-proven DS.
 - A whole-browser proxy target must authenticate before host classification, DNS, or dialing. ICANN forwarding accepts only canonical public IP literals or public A/AAAA addresses returned by the runtime's bounded, explicit-bootstrap, WebPKI-authenticated DoH client. NXDOMAIN, truncated, wrong-class, unrelated-owner, ambiguous CNAME, private/special address, and unsafe-port results fail before an origin socket is opened.
+- Chromium PAC schema 2 routes every ICANN HTTPS/WSS DNS origin and every HNS
+  origin through the authenticated native gateway. The gateway derives TLSA
+  from the effective port and transport after HTTPS/SVCB selection, so
+  navigations, redirects, subresources, Service Workers, downloads, and
+  WebSockets use the same decision. Special-use names and IP literals remain
+  outside PAC admission and are rejected by the native DANE-browser mode.
 
 ## Hardened WebView Profile
 

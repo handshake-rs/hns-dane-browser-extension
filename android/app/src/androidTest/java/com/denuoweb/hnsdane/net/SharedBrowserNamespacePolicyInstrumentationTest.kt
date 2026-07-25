@@ -21,12 +21,12 @@ class SharedBrowserNamespacePolicyInstrumentationTest {
         assertEquals(BrowserNamespaceClass.Icann, NativeBridge.classifyHost("example.com"))
         assertEquals(BrowserNamespaceClass.Icann, NativeBridge.classifyHost("printer.local"))
         assertEquals(
-            BrowserNamespaceClass.NativeGateway,
+            BrowserNamespaceClass.Icann,
             NativeBridge.classifyHost("DANE-TEST.DENUOWEB.COM."),
         )
         assertEquals(BrowserNamespaceClass.Invalid, NativeBridge.classifyHost("two words"))
         assertEquals(
-            NativeGatewayHostDecision.Required,
+            NativeGatewayHostDecision.Direct,
             HnsHostPolicy.nativeGatewayDecision("dane-test.denuoweb.com", NativeBridge),
         )
     }

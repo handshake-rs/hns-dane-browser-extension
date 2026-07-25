@@ -1150,7 +1150,7 @@ mod tests {
         );
         assert_eq!(
             android_browser_namespace_code("DANE-TEST.DENUOWEB.COM."),
-            ANDROID_BROWSER_NAMESPACE_NATIVE_GATEWAY
+            ANDROID_BROWSER_NAMESPACE_ICANN
         );
         for host in [
             "example.com",

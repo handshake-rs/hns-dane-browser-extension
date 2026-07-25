@@ -2,11 +2,18 @@
 
 ## Scope
 
-The Manifest V3 extension routes only names classified as Handshake through an
-authenticated IPv4-loopback HTTP/CONNECT proxy. Rust generates the PAC from
-the same vendored IANA and special-use snapshots used at the proxy admission
-boundary. ICANN, special-use, search, and IP-literal targets remain `DIRECT`
-and are rejected if they reach the HNS-only proxy anyway.
+The Manifest V3 extension routes every HNS request and every ICANN HTTPS/WSS
+request through an authenticated IPv4-loopback HTTP/CONNECT proxy. Rust
+generates PAC schema 2 from the same vendored IANA and special-use snapshots
+used at the proxy admission boundary. Ordinary ICANN HTTP, special-use,
+search, and IP-literal targets remain `DIRECT`; the Rust DANE-browser
+admission mode independently rejects special-use, search, and IP-literal
+targets if they reach it.
+
+Routing all ICANN HTTPS/WSS is intentional. A PAC cannot know whether a host
+publishes TLSA without performing forbidden resolver work, so discovery must
+happen after authenticated native admission. This newer browser-wide DANE
+requirement supersedes the earlier HNS-only PAC scope.
 
 The native host owns sync, HNS proof validation, delegated DNSSEC, TLSA/DANE,
 origin transport, proxy credentials, certificate issuance, policy revisions,
@@ -14,8 +21,19 @@ and monotonic runtime status. JavaScript owns only browser APIs, native-message
 transport, bounded settings, and UI.
 
 No production path sends an HNS name to a public recursive resolver or accepts
-WebPKI for HNS HTTPS. ICANN traffic remains on the browser's normal DNS and
-WebPKI path.
+WebPKI for HNS HTTPS. For ICANN HTTPS/WSS, Rust derives the TLSA owner from the
+effective origin port and transport, queries through validating ICANN DoH, and
+applies one closed decision:
+
+- a securely present supported TLSA RRset is enforced;
+- authenticated TLSA absence uses WebPKI;
+- an unsigned/insecure delegation ignores all unsigned TLSA bytes and uses
+  WebPKI;
+- bogus or indeterminate DNSSEC, resolver failure, and malformed responses
+  fail closed and are never converted to absence.
+
+HTTP/1.1, HTTP/2, and WSS use `_port._tcp.host`; HTTPS/SVCB-selected HTTP/3
+uses `_port._udp.host`. Status calls this path `DANE via ICANN DoH`.
 
 ## Rust-owned security results
 
@@ -92,9 +110,9 @@ user's Root store. No system-wide native-host registration is performed.
 Installing a root CA is security-sensitive. This CA is generated independently
 for each installation, its P-256 private key is stored only in the native
 host's mode-0600 data bundle on Unix, and the Rust issuer creates only
-exact-host, short-lived leaf certificates after HNS admission. The extension
-will not activate its PAC until the platform trust command succeeds and the
-installer writes the matching SHA-256 marker.
+exact-host, short-lived leaf certificates after native DNS-name admission.
+The extension will not activate its PAC until the platform trust command
+succeeds and the installer writes the matching SHA-256 marker.
 
 The browser registration locations follow the native-messaging host contracts
 published by [Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging),
@@ -129,6 +147,10 @@ the service worker also clears it during orderly suspension.
 - Windows switches inherited standard streams to binary mode before reading a
   frame.
 - The generated PAC contains no `dnsResolve`, socket, DoH, or fallback path.
+- PAC schema 2 sends HNS plus ICANN HTTPS/WSS to the native gateway, so main
+  frames, redirects, subresources, Service Workers, downloads, and WebSockets
+  share one request-boundary decision instead of relying on initial-page
+  classification.
 - Proxy authentication is accepted only for the active `127.0.0.1` generation.
 - CA-not-installed, host disconnect, malformed response, unsupported policy,
   PAC installation failure, and proxy restart all clear browser proxy state.
@@ -152,23 +174,26 @@ The 2026-07-25 portable checkpoint passed:
 ```sh
 cargo +1.92.0 test --locked --offline \
   --manifest-path rust/Cargo.toml \
+  -p hns-gateway -p hns-loopback-proxy \
   -p hns-browser-runtime -p hns-chromium-native-host
 
 cargo +1.92.0 clippy --locked --offline \
   --manifest-path rust/Cargo.toml \
+  -p hns-gateway -p hns-loopback-proxy \
   -p hns-browser-runtime -p hns-chromium-native-host \
   --all-targets -- -D warnings
 
 npm run check:extension
 ```
 
-The focused Rust gate passed 128 browser-runtime and 10 native-host unit tests.
-The extension gate passed 11 Node tests, including isolated Linux
+The automatic ICANN DANE checkpoint passed 43 gateway, 151 loopback-proxy,
+129 browser-runtime, and 11 native-host unit tests. The extension gate passed
+all 6 Node suites, including isolated Linux
 install/uninstall, Windows registration/removal coverage, PAC parity, native
 messaging, stale-generation rejection, health-generation preservation, and
 the unpacked MV3 build. Socket-backed Rust tests require permission to bind
 loopback in a restricted sandbox; they passed when run with that local access.
-The full Rust workspace test and strict-clippy gates also passed.
+The focused strict-clippy gate above also passed.
 
 The `./scripts/check.sh` wrapper currently stops at its pre-existing
 third-party-notice preflight: Cargo fingerprints are stale and the locked
@@ -178,7 +203,11 @@ offline. No notice freshness success is claimed by this checkpoint.
 
 ## Remaining integration boundary
 
-This clone still contains its historical `hns-browser-runtime` implementation.
+This clone still contains its historical `hns-browser-runtime`,
+`hns-gateway`, and `hns-transport` implementations. The portable ICANN work in
+this checkpoint keeps TLSA owner derivation and the typed DNSSEC outcome
+mapping isolated in those lower Rust layers, but it remains a duplicate until
+reconciled into the canonical engine.
 The separately coordinated `hns-dane-engine` repository now defines the
 canonical session-bound browser authority and bridge-authorization boundary.
 This checkpoint aligns Chromium observability with its session, runtime

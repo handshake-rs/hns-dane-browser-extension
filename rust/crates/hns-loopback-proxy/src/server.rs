@@ -674,9 +674,9 @@ fn admit_target_host(
 ) -> Result<AdmittedHost, RouteRejection> {
     if matches!(
         context.routing_mode,
-        ProxyRoutingMode::ScopedHns | ProxyRoutingMode::HnsOnly
+        ProxyRoutingMode::ScopedHns | ProxyRoutingMode::HnsOnly | ProxyRoutingMode::DaneBrowser
     ) {
-        return authorize_hns_host(context, raw_host).map(AdmittedHost::Hns);
+        return authorize_native_gateway_host(context, raw_host).map(AdmittedHost::Hns);
     }
 
     if let Ok(address) = raw_host.parse::<std::net::IpAddr>() {
@@ -706,17 +706,28 @@ fn admit_target_host(
     }
 }
 
-fn authorize_hns_host(
+fn authorize_native_gateway_host(
     context: &ServerContext,
     raw_host: &str,
 ) -> Result<crate::NormalizedHost, RouteRejection> {
-    if context.routing_mode == ProxyRoutingMode::HnsOnly {
+    if matches!(
+        context.routing_mode,
+        ProxyRoutingMode::HnsOnly | ProxyRoutingMode::DaneBrowser
+    ) {
         let host = crate::NormalizedHost::parse(raw_host)
             .map_err(|error| RouteRejection::Scope(HostScopeError::InvalidHost(error)))?;
-        return if classify_name(host.as_str()) == NameClass::Hns {
-            Ok(host)
-        } else {
-            Err(RouteRejection::InvalidClass)
+        return match classify_name(host.as_str()) {
+            NameClass::Hns => Ok(host),
+            NameClass::Icann
+                if context.routing_mode == ProxyRoutingMode::DaneBrowser
+                    && !is_browser_special_use_host(host.as_str()) =>
+            {
+                Ok(host)
+            }
+            NameClass::Icann if context.routing_mode == ProxyRoutingMode::DaneBrowser => {
+                Err(RouteRejection::SpecialUse)
+            }
+            NameClass::Icann | NameClass::Search => Err(RouteRejection::InvalidClass),
         };
     }
 
@@ -2009,7 +2020,9 @@ fn handle_connected_http(
             return;
         }
     };
-    let canonical_host = match authorize_hns_host(context, target.authority().host()).ok() {
+    let canonical_host = match authorize_native_gateway_host(context, target.authority().host())
+        .ok()
+    {
         Some(host) if host == *outer_host && target.authority().port() == connected_to.port() => {
             host
         }
@@ -3730,6 +3743,10 @@ mod tests {
 
     fn hns_only_config() -> ProxyConfig {
         ProxyConfig::hns_only(ProxyInstanceId::new(ProxySessionId::generate().unwrap(), 1))
+    }
+
+    fn dane_browser_config() -> ProxyConfig {
+        ProxyConfig::dane_browser(ProxyInstanceId::new(ProxySessionId::generate().unwrap(), 1))
     }
 
     fn start_proxy_with_icann_network(
@@ -5864,6 +5881,34 @@ mod tests {
             assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 403);
         }
         assert_eq!(backend.request_count(), 2);
+    }
+
+    #[test]
+    fn dane_browser_routes_hns_and_icann_through_one_backend_boundary() {
+        let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain("native")));
+        let proxy = RunningProxy::start(
+            dane_browser_config(),
+            backend.clone(),
+            Arc::new(NoopProxyObserver),
+        )
+        .unwrap();
+
+        for host in ["welcome", "sub.unregistered-hns-root", "example.com"] {
+            let request = format!(
+                "GET http://{host}/ HTTP/1.1\r\nHost: {host}\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 200);
+        }
+
+        for host in ["localhost", "example.onion", "127.0.0.1"] {
+            let request = format!(
+                "GET http://{host}/ HTTP/1.1\r\nHost: {host}\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 403);
+        }
+        assert_eq!(backend.request_count(), 3);
     }
 
     #[test]

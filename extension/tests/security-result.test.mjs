@@ -51,6 +51,7 @@ test("security UI accepts only the current Rust runtime and policy generation", 
 
 test("security UI uses fixed labels instead of inferring transport or validation", () => {
   assert.equal(transportLabel("directAuthoritativeUdp"), "Direct authoritative UDP");
+  assert.equal(transportLabel("icannDoh"), "Validating ICANN DoH");
   assert.equal(transportLabel("handshakeP2pDnsRelay"), "Handshake P2P DNS Relay");
   assert.equal(transportLabel("futureTransport"), "Unavailable");
   assert.equal(stateLabel("notEvaluated"), "Not Evaluated");

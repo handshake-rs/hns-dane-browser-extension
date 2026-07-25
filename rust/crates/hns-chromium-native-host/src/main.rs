@@ -1,5 +1,5 @@
 use hns_browser_runtime::{
-    BrowserHostClass, NetworkKind, chromium_hns_only_pac_script, classify_browser_host,
+    BrowserHostClass, NetworkKind, chromium_dane_pac_script, classify_browser_host,
 };
 use hns_chromium_native_host::{
     LocalCaStore, NativeHostController, native_messaging_host_manifest_json, serve_native_messaging,
@@ -22,7 +22,7 @@ fn run() -> Result<(), String> {
         UtilityCommand::PrintPac(port) => {
             print!(
                 "{}",
-                chromium_hns_only_pac_script(port).map_err(|error| error.to_string())?
+                chromium_dane_pac_script(port).map_err(|error| error.to_string())?
             );
             return Ok(());
         }

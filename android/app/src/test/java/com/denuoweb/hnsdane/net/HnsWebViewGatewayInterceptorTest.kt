@@ -104,34 +104,19 @@ class HnsWebViewGatewayInterceptorTest {
     }
 
     @Test
-    fun icannDaneTestHostUsesNativeGatewayBridge() {
-        val bridge = RecordingGatewayBridge(
-            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
-                .toByteArray(StandardCharsets.ISO_8859_1),
-        )
+    fun icannDaneDiscoveryIsNotAHostnameAllowlist() {
+        val bridge = RecordingGatewayBridge(ByteArray(0))
         val dataDir = createTempDirectory("icann-dane-webview-intercept-test").toFile()
         val interceptor = HnsWebViewGatewayInterceptor(dataDir, bridge, TEST_BROWSER_NAMESPACE_POLICY)
 
-        val response = interceptor.intercept(
-            method = "GET",
-            url = "https://dane-test.denuoweb.com/path",
-            requestHeaders = emptyMap(),
-        )
-
-        requireNotNull(response)
-        assertEquals(
-            GatewayCall(
-                dataDir.absolutePath,
-                "GET",
-                "https",
-                "dane-test.denuoweb.com",
-                443,
-                "/path",
-                forwardedGatewayHeaders(),
-                "",
+        assertNull(
+            interceptor.intercept(
+                method = "GET",
+                url = "https://dane-test.denuoweb.com/path",
+                requestHeaders = emptyMap(),
             ),
-            bridge.calls.single(),
         )
+        assertTrue(bridge.calls.isEmpty())
         dataDir.deleteRecursively()
     }
 

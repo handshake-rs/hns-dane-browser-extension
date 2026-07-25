@@ -4,6 +4,7 @@ import com.denuoweb.hnsdane.core.BrowserNamespaceClass
 import com.denuoweb.hnsdane.core.FixedBrowserNamespacePolicy
 import com.denuoweb.hnsdane.core.TEST_BROWSER_NAMESPACE_POLICY
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class HnsServiceWorkerGatewayClientTest {
@@ -74,9 +75,8 @@ class HnsServiceWorkerGatewayClientTest {
     }
 
     @Test
-    fun sharedRustCompatibilityHostUsesTheGatewayRoute() {
-        assertEquals(
-            BrowserProxyRoute.CompatibilityInterceptor,
+    fun icannDaneDiscoveryIsNotAServiceWorkerHostnameAllowlist() {
+        assertNull(
             serviceWorkerProxyRoute(
                 "https",
                 "dane-test.denuoweb.com",

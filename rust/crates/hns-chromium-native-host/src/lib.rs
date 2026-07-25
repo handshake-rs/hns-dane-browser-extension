@@ -11,7 +11,7 @@ use getrandom::fill as fill_random;
 use hns_browser_runtime::{
     BrowserHostClass, BrowserProxy, BrowserProxySecurityPath, BrowserProxyStatus,
     BrowserProxyStatusObserver, BrowserRuntime, NetworkKind, ResolutionMode, RuntimeConfiguration,
-    RuntimePolicy, chromium_hns_only_pac_script, classify_browser_host, diagnostics_json,
+    RuntimePolicy, chromium_dane_pac_script, classify_browser_host, diagnostics_json,
 };
 use hns_loopback_proxy::LocalCertificateAuthority;
 use serde::{Deserialize, Serialize};
@@ -138,6 +138,7 @@ enum ChromiumDnsTransport {
     DirectAuthoritativeUdp,
     DirectAuthoritativeTcp,
     AuthenticatedAuthoritativeDoh,
+    IcannDoh,
     HandshakeP2pOdoh,
     HandshakeP2pDnsRelay,
     Unavailable,
@@ -335,10 +336,10 @@ fn chromium_security_result_from_trace(
                     ) && attempt.get("status").and_then(Value::as_str) != Some("ok")
                 })
             });
-    let nameserver_authority = if actual_selected_transport == ChromiumDnsTransport::Unavailable {
-        "unavailable"
-    } else {
-        "delegatedAuthoritativeNameserver"
+    let nameserver_authority = match actual_selected_transport {
+        ChromiumDnsTransport::Unavailable => "unavailable",
+        ChromiumDnsTransport::IcannDoh => "validatingIcannResolver",
+        _ => "delegatedAuthoritativeNameserver",
     };
 
     ChromiumSecurityResult {
@@ -402,10 +403,10 @@ fn selected_dns_transport(
         Some(
             BrowserProxySecurityPath::DaneThirdPartyDoh
             | BrowserProxySecurityPath::HnsThirdPartyDoh
-            | BrowserProxySecurityPath::StatelessDane
-            | BrowserProxySecurityPath::DaneIcannDoh,
+            | BrowserProxySecurityPath::StatelessDane,
         )
         | None => selected_dns_transport_from_trace(trace),
+        Some(BrowserProxySecurityPath::DaneIcannDoh) => ChromiumDnsTransport::IcannDoh,
         Some(_) => ChromiumDnsTransport::Unavailable,
     }
 }
@@ -414,6 +415,7 @@ fn selected_dns_transport_from_trace(trace: &Value) -> ChromiumDnsTransport {
     let candidate = match trace.get("resolutionSource").and_then(Value::as_str) {
         Some("authoritative_doh") => ChromiumDnsTransport::AuthenticatedAuthoritativeDoh,
         Some("authoritative_dns") => return selected_direct_dns_transport(trace),
+        Some("trusted_icann_doh") => ChromiumDnsTransport::IcannDoh,
         Some("p2p_odoh") => ChromiumDnsTransport::HandshakeP2pOdoh,
         Some("p2p_dns_relay") => ChromiumDnsTransport::HandshakeP2pDnsRelay,
         _ => return ChromiumDnsTransport::Unavailable,
@@ -450,6 +452,7 @@ fn selected_dns_attempt(transport: ChromiumDnsTransport, trace: &Value) -> Optio
         ChromiumDnsTransport::DirectAuthoritativeUdp => "udp53",
         ChromiumDnsTransport::DirectAuthoritativeTcp => "tcp53",
         ChromiumDnsTransport::AuthenticatedAuthoritativeDoh => "authoritative_doh",
+        ChromiumDnsTransport::IcannDoh => "icann_doh",
         ChromiumDnsTransport::HandshakeP2pOdoh => "p2p_odoh",
         ChromiumDnsTransport::HandshakeP2pDnsRelay => "p2p_dns_relay",
         ChromiumDnsTransport::Unavailable => return None,
@@ -1019,7 +1022,7 @@ impl NativeHostController {
                             "manifestV3": true,
                             "nativeMessaging": true,
                             "authenticatedLoopbackProxy": true,
-                            "hnsOnlyPac": true,
+                            "dnsNameDanePac": true,
                             "proxyAuthentication": true,
                             "perInstallLocalCa": true,
                             "chromiumSecurityResults": true,
@@ -1101,7 +1104,7 @@ impl NativeHostController {
         });
         let proxy = self
             .runtime
-            .start_hns_only_proxy_with_certificate_authority_and_observer(
+            .start_dane_browser_proxy_with_certificate_authority_and_observer(
                 self.local_ca.authority().clone(),
                 observer,
             )
@@ -1115,7 +1118,7 @@ impl NativeHostController {
             network: self.runtime.network().as_str().to_owned(),
             policy: policy.clone(),
         });
-        let pac_script = chromium_hns_only_pac_script(proxy.port())
+        let pac_script = chromium_dane_pac_script(proxy.port())
             .map_err(|error| ("pacGenerationFailed", error.to_string()))?;
         let result = json!({
             "state": "active",
@@ -1550,6 +1553,49 @@ mod tests {
         assert_eq!(encoded["proxyTargetSeparation"], "notApplicable");
         assert_eq!(encoded["directRelayFallback"], false);
         assert_eq!(encoded["authoritativeFallbackOccurred"], true);
+    }
+
+    #[test]
+    fn icann_dane_result_names_the_validating_icann_doh_path() {
+        let context = ActiveSecurityContext {
+            runtime_session: "runtime-session".to_owned(),
+            runtime_generation: 13,
+            policy_generation: 5,
+            network: "mainnet".to_owned(),
+            policy: ExtensionPolicy::default(),
+        };
+        let trace = json!({
+            "resolutionSource": "trusted_icann_doh",
+            "hnsProof": "not_applicable",
+            "dnssec": "secure",
+            "dnsAttempts": [{
+                "protocol": "icann_doh",
+                "server": "https://cloudflare-dns.com/dns-query",
+                "status": "ok"
+            }],
+            "tls": {
+                "tlsaStatus": "present",
+                "dane": { "decision": "verified" }
+            }
+        });
+        let result = chromium_security_result_from_trace(
+            &context,
+            13,
+            "dane.example",
+            200,
+            true,
+            Some(BrowserProxySecurityPath::DaneIcannDoh),
+            &trace,
+            14,
+        );
+        let encoded = serde_json::to_value(result).unwrap();
+
+        assert_eq!(encoded["actualSelectedTransport"], "icannDoh");
+        assert_eq!(encoded["nameserverAuthority"], "validatingIcannResolver");
+        assert_eq!(
+            encoded["peerIdentity"],
+            "https://cloudflare-dns.com/dns-query"
+        );
     }
 
     #[test]
