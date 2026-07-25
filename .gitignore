@@ -49,6 +49,7 @@ firebase-adminsdk*.json
 *.apks
 *.idsig
 dist/play-store/*-mapping.zip
+/dist/chromium-extension/
 captures/
 .externalNativeBuild/
 .cxx/

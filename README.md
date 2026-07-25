@@ -2,14 +2,17 @@
 
 Cross-platform Handshake-first browser core with local HNS proofs, authoritative DNS, an experimental HNS P2P DNS relay, RFC 8484 DoH transport, DNSSEC, and DANE diagnostics. Android is the validated shipping baseline; the repository also contains the native iOS 17.0-or-later shell and Apple ABI/build integration. The Apple build and simulator gate uses the stable iOS 26.5 SDK with Xcode 26.5 or 26.6; a signed external-TestFlight device pass is the recommended final iOS release gate and has not been completed.
 
-This worktree is the source clone for the Chromium-extension extraction. Its
-shared runtime already enforces the extension security boundary documented in
-`docs/hns-no-public-recursive-policy.md`; mobile-only packaging remains present
-until the native-host and extension build replace it.
+This worktree contains the Chromium-extension extraction: a Manifest V3
+package, versioned Rust native-messaging host, HNS-only PAC/proxy boundary,
+per-install local CA lifecycle, and user-level installers for six Chromium
+browsers on Linux, macOS, and Windows. Mobile-only packaging remains present
+until the source-history split is complete.
 
 ## Layout
 
 - `rust/`: Cargo workspace for consensus primitives, header chain, Urkel proof interfaces, resolver, DNSSEC, DANE, transport, gateway, cache, the shared browser runtime, the platform-neutral loopback proxy, Android JNI, and the stable Apple C ABI.
+- `rust/crates/hns-chromium-native-host/`: bounded native messaging, persistent local CA, proxy lifecycle, policy, status, and installer utilities.
+- `extension/`: Manifest V3 service worker, options/popup UI, packaging tests, and user-level native-host/CA installers.
 - `rust/fuzz/`: `cargo-fuzz` parser harnesses for DNS, HNS resource values, P2P frames, Urkel proofs, TLSA records, and X.509 SPKI extraction.
 - `android/`: Kotlin Android browser shell with WebView, URL classification, scoped proxy admission, lifecycle integration, and a thin JNI bridge.
 - `ios/`: Swift/UIKit WKWebView shell with whole-data-store proxy admission, lifecycle/certificate integration, and a generated Xcode project definition.
@@ -56,7 +59,11 @@ Android has completed its Rust-only proxy cutover: `MainActivity` uses the share
 ```sh
 ./scripts/check.sh
 ./scripts/fuzz-smoke.sh
+npm run check:extension
 ```
+
+See `docs/chromium-extension.md` for the Chromium build, install, trust,
+recovery, and complete-uninstall flow.
 
 Android builds on ARM64 host use APK Workbench:
 

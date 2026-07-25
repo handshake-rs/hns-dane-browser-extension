@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HNS DANE Browser settings</title>
+    <link rel="stylesheet" href="ui.css">
+  </head>
+  <body>
+    <main class="panel wide">
+      <p class="eyebrow">RUST-VERIFIED HANDSHAKE</p>
+      <h1>Extension settings</h1>
+      <p class="lede">
+        Handshake authority, cryptography, transports, and proxy credentials stay in the native
+        Rust host. Changes create a fresh proxy generation.
+      </p>
+
+      <form id="policy-form">
+        <label class="row check">
+          <span>
+            <strong>P2P DNS relay</strong>
+            <small>Opt in to proof-backed peers; DNSSEC and DANE are still verified locally.</small>
+          </span>
+          <input id="p2p-dns-relay" type="checkbox">
+        </label>
+
+        <label class="row">
+          <span><strong>P2P ODoH</strong><small>Requester privacy mode.</small></span>
+          <select id="p2p-odoh">
+            <option value="off">Off</option>
+            <option value="preferred">Preferred</option>
+            <option value="required">Required</option>
+            <option value="directAllowed">Direct allowed</option>
+          </select>
+        </label>
+
+        <label class="row">
+          <span><strong>Privacy downgrade</strong><small>Behavior when privacy transport fails.</small></span>
+          <select id="privacy-downgrade">
+            <option value="failClosed">Fail closed</option>
+            <option value="allowDirect">Allow direct</option>
+          </select>
+        </label>
+
+        <label class="row">
+          <span><strong>HNSR</strong><small>Private route role exposed only through Rust.</small></span>
+          <select id="hnsr">
+            <option value="off">Off</option>
+            <option value="client">Client</option>
+            <option value="endpoint">Endpoint</option>
+          </select>
+        </label>
+
+        <label class="row">
+          <span><strong>Experimental wire profile</strong><small>Exact negotiated draft assignment set.</small></span>
+          <select id="wire-profile">
+            <option value="stable">Stable only</option>
+            <option value="hipDrafts">HIP drafts</option>
+            <option value="denuoExtension">Denuo extension envelope</option>
+          </select>
+        </label>
+
+        <div class="actions">
+          <button type="submit">Apply and restart</button>
+          <button id="diagnostics" type="button" class="secondary">Refresh diagnostics</button>
+        </div>
+      </form>
+
+      <section aria-live="polite">
+        <h2>Runtime status</h2>
+        <pre id="status">Loading…</pre>
+      </section>
+      <section>
+        <h2>Diagnostics</h2>
+        <pre id="diagnostic-output">Not requested.</pre>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

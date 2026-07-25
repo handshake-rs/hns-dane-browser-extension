@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HNS DANE Browser</title>
+    <link rel="stylesheet" href="ui.css">
+  </head>
+  <body>
+    <main class="panel popup">
+      <p class="eyebrow">HNS SECURITY PATH</p>
+      <h1 id="state-title">Checking runtime…</h1>
+      <p id="state-detail" class="lede"></p>
+      <dl>
+        <div><dt>Runtime generation</dt><dd id="runtime-generation">—</dd></div>
+        <div><dt>Policy generation</dt><dd id="policy-generation">—</dd></div>
+        <div><dt>Local CA</dt><dd id="ca-state">—</dd></div>
+      </dl>
+      <div class="actions">
+        <button id="retry" type="button">Retry</button>
+        <button id="settings" type="button" class="secondary">Settings</button>
+      </div>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
