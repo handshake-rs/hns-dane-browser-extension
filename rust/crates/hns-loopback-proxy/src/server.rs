@@ -133,7 +133,10 @@ impl RunningProxy {
         let rate_limiter =
             RequestRateLimiter::new(rate_limit_config(limits)).map_err(ProxyError::RateLimit)?;
         let cancellation = CancellationToken::new();
-        let tls_identities = Arc::new(LocalTlsIdentityStore::new(config.instance().clone()));
+        let tls_identities = Arc::new(LocalTlsIdentityStore::with_certificate_authority(
+            config.instance().clone(),
+            config.local_certificate_authority().cloned(),
+        ));
         let stop_state = Arc::new(ProxyStopState::new());
         let context = Arc::new(ServerContext {
             authorization: Arc::clone(&authorization),
@@ -669,14 +672,11 @@ fn admit_target_host(
     context: &ServerContext,
     raw_host: &str,
 ) -> Result<AdmittedHost, RouteRejection> {
-    if context.routing_mode == ProxyRoutingMode::ScopedHns {
-        return context
-            .hns_scope
-            .as_ref()
-            .ok_or(RouteRejection::InvalidClass)?
-            .authorize(raw_host)
-            .map(AdmittedHost::Hns)
-            .map_err(RouteRejection::Scope);
+    if matches!(
+        context.routing_mode,
+        ProxyRoutingMode::ScopedHns | ProxyRoutingMode::HnsOnly
+    ) {
+        return authorize_hns_host(context, raw_host).map(AdmittedHost::Hns);
     }
 
     if let Ok(address) = raw_host.parse::<std::net::IpAddr>() {
@@ -704,6 +704,28 @@ fn admit_target_host(
         NameClass::Icann => Ok(AdmittedHost::Icann(IcannHost::Name(host))),
         NameClass::Search => Err(RouteRejection::InvalidClass),
     }
+}
+
+fn authorize_hns_host(
+    context: &ServerContext,
+    raw_host: &str,
+) -> Result<crate::NormalizedHost, RouteRejection> {
+    if context.routing_mode == ProxyRoutingMode::HnsOnly {
+        let host = crate::NormalizedHost::parse(raw_host)
+            .map_err(|error| RouteRejection::Scope(HostScopeError::InvalidHost(error)))?;
+        return if classify_name(host.as_str()) == NameClass::Hns {
+            Ok(host)
+        } else {
+            Err(RouteRejection::InvalidClass)
+        };
+    }
+
+    context
+        .hns_scope
+        .as_ref()
+        .ok_or(RouteRejection::InvalidClass)?
+        .authorize(raw_host)
+        .map_err(RouteRejection::Scope)
 }
 
 #[derive(Clone, Copy)]
@@ -1987,11 +2009,7 @@ fn handle_connected_http(
             return;
         }
     };
-    let canonical_host = match context
-        .hns_scope
-        .as_ref()
-        .and_then(|scope| scope.authorize(target.authority().host()).ok())
-    {
+    let canonical_host = match authorize_hns_host(context, target.authority().host()).ok() {
         Some(host) if host == *outer_host && target.authority().port() == connected_to.port() => {
             host
         }
@@ -3708,6 +3726,10 @@ mod tests {
             ProxyInstanceId::new(ProxySessionId::generate().unwrap(), 1),
             scope.map(|root| crate::HostScope::new(root).unwrap()),
         )
+    }
+
+    fn hns_only_config() -> ProxyConfig {
+        ProxyConfig::hns_only(ProxyInstanceId::new(ProxySessionId::generate().unwrap(), 1))
     }
 
     fn start_proxy_with_icann_network(
@@ -5814,6 +5836,34 @@ mod tests {
         assert_eq!(backend.request_count(), 1);
         assert_eq!(network.resolve_calls(), 0);
         assert_eq!(network.connect_calls(), 0);
+    }
+
+    #[test]
+    fn hns_only_routes_unrelated_hns_roots_and_rejects_every_other_namespace() {
+        let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain("hns")));
+        let proxy = RunningProxy::start(
+            hns_only_config(),
+            backend.clone(),
+            Arc::new(NoopProxyObserver),
+        )
+        .unwrap();
+
+        for host in ["welcome", "sub.unregistered-hns-root"] {
+            let request = format!(
+                "GET http://{host}/ HTTP/1.1\r\nHost: {host}\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 200);
+        }
+
+        for host in ["example.com", "localhost", "127.0.0.1"] {
+            let request = format!(
+                "GET http://{host}/ HTTP/1.1\r\nHost: {host}\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 403);
+        }
+        assert_eq!(backend.request_count(), 2);
     }
 
     #[test]

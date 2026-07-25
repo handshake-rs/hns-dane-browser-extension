@@ -31,7 +31,10 @@ pub use backend::{
     ProxyResponse, ProxyResponseBody, ProxyResponseHead, ProxyTunnel, ProxyTunnelIo,
     ProxyTunnelOpen,
 };
-pub use certificate::{CertificateSha256, LocalCertificatePin};
+pub use certificate::{
+    CertificateSha256, GeneratedLocalCertificateAuthority, LocalCertificateAuthority,
+    LocalCertificateAuthorityError, LocalCertificatePin,
+};
 pub use config::{
     LoopbackBind, ProxyConfig, ProxyInstanceId, ProxyLimits, ProxyLimitsError, ProxyRoutingMode,
     ProxySessionId, ProxyTimeouts, ProxyTimeoutsError, SessionIdGenerationError,

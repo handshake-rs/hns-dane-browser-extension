@@ -591,6 +591,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hns-chromium-native-host"
+version = "0.5.0"
+dependencies = [
+ "base64",
+ "getrandom 0.3.4",
+ "hns-browser-runtime",
+ "hns-loopback-proxy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
 name = "hns-core"
 version = "0.5.0"
 dependencies = [
@@ -646,6 +660,7 @@ version = "0.5.0"
 dependencies = [
  "base64",
  "hns-core",
+ "hns-dane",
  "hns-resolver",
  "httparse",
  "idna",
@@ -654,6 +669,7 @@ dependencies = [
  "rustls",
  "subtle",
  "thiserror 2.0.18",
+ "time",
  "zeroize",
 ]
 
@@ -1394,6 +1410,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2090,3 +2119,9 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"

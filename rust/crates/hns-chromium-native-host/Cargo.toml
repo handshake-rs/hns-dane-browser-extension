@@ -1,0 +1,16 @@
+[package]
+name = "hns-chromium-native-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64.workspace = true
+getrandom.workspace = true
+hns-browser-runtime.workspace = true
+hns-loopback-proxy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true

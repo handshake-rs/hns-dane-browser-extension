@@ -1,7 +1,14 @@
 //! Per-generation local TLS identities for scoped CONNECT termination.
 
 use crate::{NormalizedHost, ProxyInstanceId};
-use ring::digest::{SHA256, digest};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use hns_dane::extract_spki_der;
+use rcgen::{
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
+    KeyUsagePurpose, PublicKeyData,
+};
+use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, SHA256, digest};
 use rustls::ServerConfig;
 use rustls::crypto::ring::sign::any_ecdsa_type;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -13,10 +20,231 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
+use time::{Duration, OffsetDateTime};
 use zeroize::Zeroizing;
 
 const MAX_CACHED_IDENTITIES: usize = 128;
 const MAX_PRESENTED_CERTIFICATE_DER_BYTES: usize = 64 * 1024;
+const MAX_LOCAL_CA_PRIVATE_KEY_DER_BYTES: usize = 16 * 1024;
+const LOCAL_LEAF_VALIDITY_DAYS: i64 = 90;
+const LOCAL_CA_VALIDITY_DAYS: i64 = 3_650;
+const LOCAL_CA_COMMON_NAME: &str = "HNS DANE Browser Local CA";
+
+#[derive(Clone)]
+pub struct LocalCertificateAuthority {
+    inner: Arc<LocalCertificateAuthorityInner>,
+}
+
+struct LocalCertificateAuthorityInner {
+    issuer: Issuer<'static, KeyPair>,
+    certificate_der: Vec<u8>,
+    certificate_sha1: [u8; 20],
+    certificate_sha256: [u8; 32],
+}
+
+pub struct GeneratedLocalCertificateAuthority {
+    authority: LocalCertificateAuthority,
+    private_key_der: Zeroizing<Vec<u8>>,
+}
+
+impl GeneratedLocalCertificateAuthority {
+    pub fn authority(&self) -> &LocalCertificateAuthority {
+        &self.authority
+    }
+
+    /// Explicit secret export for the native host's mode-0600 per-install
+    /// persistence boundary.
+    pub fn private_key_der(&self) -> &[u8] {
+        &self.private_key_der
+    }
+}
+
+impl fmt::Debug for GeneratedLocalCertificateAuthority {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GeneratedLocalCertificateAuthority")
+            .field("authority", &self.authority)
+            .field("private_key_der", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum LocalCertificateAuthorityError {
+    #[error("local CA certificate is empty or exceeds the size bound")]
+    InvalidCertificateSize,
+    #[error("local CA private key is empty or exceeds the size bound")]
+    InvalidPrivateKeySize,
+    #[error("unable to generate the local CA")]
+    Generation,
+    #[error("unable to parse the local CA private key")]
+    InvalidPrivateKey,
+    #[error("unable to parse the local CA certificate")]
+    InvalidCertificate,
+    #[error("the local CA certificate does not match its private key")]
+    KeyMismatch,
+}
+
+impl LocalCertificateAuthority {
+    pub fn generate() -> Result<GeneratedLocalCertificateAuthority, LocalCertificateAuthorityError>
+    {
+        let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
+            .map_err(|_| LocalCertificateAuthorityError::Generation)?;
+        let private_key_der = Zeroizing::new(key.serialize_der());
+        let params = local_ca_params();
+        let certificate = params
+            .self_signed(&key)
+            .map_err(|_| LocalCertificateAuthorityError::Generation)?;
+        let certificate_der = certificate.der().as_ref().to_vec();
+        let authority = Self::from_parts(params, key, certificate_der)?;
+        Ok(GeneratedLocalCertificateAuthority {
+            authority,
+            private_key_der,
+        })
+    }
+
+    pub fn from_der(
+        certificate_der: Vec<u8>,
+        private_key_der: &[u8],
+    ) -> Result<Self, LocalCertificateAuthorityError> {
+        validate_ca_material_sizes(&certificate_der, private_key_der)?;
+        let private_key = rustls::pki_types::PrivatePkcs8KeyDer::from(private_key_der);
+        let key =
+            KeyPair::from_pkcs8_der_and_sign_algo(&private_key, &rcgen::PKCS_ECDSA_P256_SHA256)
+                .map_err(|_| LocalCertificateAuthorityError::InvalidPrivateKey)?;
+        let certificate_spki = extract_spki_der(&certificate_der)
+            .map_err(|_| LocalCertificateAuthorityError::InvalidCertificate)?;
+        let key_spki = key.subject_public_key_info();
+        if certificate_spki.len() != key_spki.len()
+            || !bool::from(certificate_spki.ct_eq(&key_spki))
+        {
+            return Err(LocalCertificateAuthorityError::KeyMismatch);
+        }
+        let certificate = rustls::pki_types::CertificateDer::from(certificate_der.clone());
+        let issuer = Issuer::from_ca_cert_der(&certificate, key)
+            .map_err(|_| LocalCertificateAuthorityError::InvalidCertificate)?;
+        Ok(Self::from_issuer(issuer, certificate_der))
+    }
+
+    pub fn certificate_der(&self) -> &[u8] {
+        &self.inner.certificate_der
+    }
+
+    pub fn certificate_pem(&self) -> String {
+        let encoded = STANDARD.encode(self.certificate_der());
+        let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+        for (index, character) in encoded.chars().enumerate() {
+            pem.push(character);
+            if (index + 1) % 64 == 0 {
+                pem.push('\n');
+            }
+        }
+        if !encoded.len().is_multiple_of(64) {
+            pem.push('\n');
+        }
+        pem.push_str("-----END CERTIFICATE-----\n");
+        pem
+    }
+
+    pub fn certificate_sha256_hex(&self) -> String {
+        self.inner
+            .certificate_sha256
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// SHA-1 is exposed only as the identifier required by macOS and Windows
+    /// certificate-store removal commands. It is never used for trust.
+    pub fn certificate_sha1_hex(&self) -> String {
+        self.inner
+            .certificate_sha1
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn from_parts(
+        params: CertificateParams,
+        key: KeyPair,
+        certificate_der: Vec<u8>,
+    ) -> Result<Self, LocalCertificateAuthorityError> {
+        validate_ca_material_sizes(&certificate_der, key.serialized_der())?;
+        Ok(Self::from_issuer(Issuer::new(params, key), certificate_der))
+    }
+
+    fn from_issuer(issuer: Issuer<'static, KeyPair>, certificate_der: Vec<u8>) -> Self {
+        let sha1_fingerprint = digest(&SHA1_FOR_LEGACY_USE_ONLY, &certificate_der);
+        let mut certificate_sha1 = [0_u8; 20];
+        certificate_sha1.copy_from_slice(sha1_fingerprint.as_ref());
+        let fingerprint = digest(&SHA256, &certificate_der);
+        let mut certificate_sha256 = [0_u8; 32];
+        certificate_sha256.copy_from_slice(fingerprint.as_ref());
+        Self {
+            inner: Arc::new(LocalCertificateAuthorityInner {
+                issuer,
+                certificate_der,
+                certificate_sha1,
+                certificate_sha256,
+            }),
+        }
+    }
+
+    fn issuer(&self) -> &Issuer<'static, KeyPair> {
+        &self.inner.issuer
+    }
+}
+
+impl PartialEq for LocalCertificateAuthority {
+    fn eq(&self, other: &Self) -> bool {
+        bool::from(
+            self.inner
+                .certificate_sha256
+                .ct_eq(&other.inner.certificate_sha256),
+        )
+    }
+}
+
+impl Eq for LocalCertificateAuthority {}
+
+impl fmt::Debug for LocalCertificateAuthority {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalCertificateAuthority")
+            .field("certificate_sha256", &"[REDACTED]")
+            .finish()
+    }
+}
+
+fn validate_ca_material_sizes(
+    certificate_der: &[u8],
+    private_key_der: &[u8],
+) -> Result<(), LocalCertificateAuthorityError> {
+    if certificate_der.is_empty() || certificate_der.len() > MAX_PRESENTED_CERTIFICATE_DER_BYTES {
+        return Err(LocalCertificateAuthorityError::InvalidCertificateSize);
+    }
+    if private_key_der.is_empty() || private_key_der.len() > MAX_LOCAL_CA_PRIVATE_KEY_DER_BYTES {
+        return Err(LocalCertificateAuthorityError::InvalidPrivateKeySize);
+    }
+    Ok(())
+}
+
+fn local_ca_params() -> CertificateParams {
+    let now = OffsetDateTime::now_utc();
+    let mut distinguished_name = DistinguishedName::new();
+    distinguished_name.push(DnType::CommonName, LOCAL_CA_COMMON_NAME);
+    let mut params = CertificateParams::default();
+    params.not_before = now - Duration::days(1);
+    params.not_after = now + Duration::days(LOCAL_CA_VALIDITY_DAYS);
+    params.distinguished_name = distinguished_name;
+    params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+    params.key_usages = vec![
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::CrlSign,
+    ];
+    params
+}
 
 /// Opaque SHA-256 equality token for one generated local certificate.
 ///
@@ -181,14 +409,24 @@ impl StoreState {
 /// Exact-host identity cache owned by one proxy generation.
 pub(crate) struct LocalTlsIdentityStore {
     instance: ProxyInstanceId,
+    certificate_authority: Option<LocalCertificateAuthority>,
     active: Arc<AtomicBool>,
     state: Mutex<StoreState>,
 }
 
 impl LocalTlsIdentityStore {
+    #[cfg(test)]
     pub(crate) fn new(instance: ProxyInstanceId) -> Self {
+        Self::with_certificate_authority(instance, None)
+    }
+
+    pub(crate) fn with_certificate_authority(
+        instance: ProxyInstanceId,
+        certificate_authority: Option<LocalCertificateAuthority>,
+    ) -> Self {
         Self {
             instance,
+            certificate_authority,
             active: Arc::new(AtomicBool::new(true)),
             state: Mutex::new(StoreState::default()),
         }
@@ -238,6 +476,7 @@ impl LocalTlsIdentityStore {
             self.instance.clone(),
             host.clone(),
             Arc::clone(&self.active),
+            self.certificate_authority.as_ref(),
         )?);
         if !self.active.load(Ordering::Acquire) {
             return Err(CertificateError::Inactive);
@@ -300,6 +539,10 @@ impl fmt::Debug for LocalTlsIdentityStore {
         formatter
             .debug_struct("LocalTlsIdentityStore")
             .field("instance", &"[REDACTED]")
+            .field(
+                "certificate_authority",
+                &self.certificate_authority.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("active", &self.active.load(Ordering::Acquire))
             .field("entry_count", &entry_count)
             .finish()
@@ -349,9 +592,13 @@ fn generate_identity(
     instance: ProxyInstanceId,
     host: NormalizedHost,
     active: Arc<AtomicBool>,
+    certificate_authority: Option<&LocalCertificateAuthority>,
 ) -> Result<LocalTlsIdentity, CertificateError> {
     let mut params = rcgen::CertificateParams::new(vec![host.as_str().to_owned()])
         .map_err(|_| CertificateError::CertificateGeneration)?;
+    let now = OffsetDateTime::now_utc();
+    params.not_before = now - Duration::minutes(5);
+    params.not_after = now + Duration::days(LOCAL_LEAF_VALIDITY_DAYS);
     params.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
 
@@ -362,9 +609,12 @@ fn generate_identity(
         rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
             .map_err(|_| CertificateError::CertificateGeneration)?,
     );
-    let certificate = params
-        .self_signed(&*key_pair)
-        .map_err(|_| CertificateError::CertificateGeneration)?;
+    let certificate = if let Some(certificate_authority) = certificate_authority {
+        params.signed_by(&*key_pair, certificate_authority.issuer())
+    } else {
+        params.self_signed(&*key_pair)
+    }
+    .map_err(|_| CertificateError::CertificateGeneration)?;
     let certificate_der = certificate.der().as_ref().to_vec();
     if certificate_der.len() > MAX_PRESENTED_CERTIFICATE_DER_BYTES {
         return Err(CertificateError::CertificateGeneration);
@@ -493,6 +743,73 @@ mod tests {
             store.prepare(&welcome),
             Err(CertificateError::Inactive)
         ));
+    }
+
+    #[test]
+    fn local_ca_material_round_trips_and_rejects_a_mismatched_key() {
+        let generated = LocalCertificateAuthority::generate().unwrap();
+        let authority = generated.authority().clone();
+        let reloaded = LocalCertificateAuthority::from_der(
+            authority.certificate_der().to_vec(),
+            generated.private_key_der(),
+        )
+        .unwrap();
+        assert_eq!(authority, reloaded);
+        assert_eq!(
+            authority.certificate_sha256_hex(),
+            reloaded.certificate_sha256_hex()
+        );
+        assert!(
+            authority
+                .certificate_pem()
+                .starts_with("-----BEGIN CERTIFICATE-----\n")
+        );
+        assert!(
+            authority
+                .certificate_pem()
+                .ends_with("-----END CERTIFICATE-----\n")
+        );
+
+        let other = LocalCertificateAuthority::generate().unwrap();
+        assert_eq!(
+            LocalCertificateAuthority::from_der(
+                authority.certificate_der().to_vec(),
+                other.private_key_der(),
+            )
+            .unwrap_err(),
+            LocalCertificateAuthorityError::KeyMismatch
+        );
+    }
+
+    #[test]
+    fn ca_signed_leaf_validates_for_only_its_exact_host() {
+        let generated = LocalCertificateAuthority::generate().unwrap();
+        let authority = generated.authority().clone();
+        let store = LocalTlsIdentityStore::with_certificate_authority(
+            instance(19),
+            Some(authority.clone()),
+        );
+        let lease = store.prepare(&host("welcome")).unwrap();
+
+        assert_eq!(
+            trusted_handshake(
+                lease.server_config(),
+                "welcome",
+                &rustls::version::TLS13,
+                &authority,
+            )
+            .unwrap(),
+            Some(b"http/1.1".to_vec())
+        );
+        assert!(
+            trusted_handshake(
+                lease.server_config(),
+                "other.welcome",
+                &rustls::version::TLS13,
+                &authority,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -723,8 +1040,36 @@ mod tests {
                 .with_no_client_auth();
         client_config.enable_sni = send_sni;
         client_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        handshake_with_client_config(server_config, sni, Arc::new(client_config))
+    }
+
+    fn trusted_handshake(
+        server_config: Arc<ServerConfig>,
+        sni: &str,
+        version: &'static SupportedProtocolVersion,
+        authority: &LocalCertificateAuthority,
+    ) -> Result<Option<Vec<u8>>, RustlsError> {
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(CertificateDer::from(authority.certificate_der().to_vec()))
+            .map_err(|error| RustlsError::General(error.to_string()))?;
+        let mut client_config =
+            ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_protocol_versions(&[version])
+                .map_err(|error| RustlsError::General(error.to_string()))?
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+        client_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        handshake_with_client_config(server_config, sni, Arc::new(client_config))
+    }
+
+    fn handshake_with_client_config(
+        server_config: Arc<ServerConfig>,
+        sni: &str,
+        client_config: Arc<ClientConfig>,
+    ) -> Result<Option<Vec<u8>>, RustlsError> {
         let server_name = ServerName::try_from(sni.to_owned()).unwrap();
-        let mut client = ClientConnection::new(Arc::new(client_config), server_name)?;
+        let mut client = ClientConnection::new(client_config, server_name)?;
         let mut server = ServerConnection::new(server_config)?;
 
         for _ in 0..32 {

@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 base64.workspace = true
 hns-core.workspace = true
+hns-dane.workspace = true
 hns-resolver.workspace = true
 httparse.workspace = true
 idna.workspace = true
@@ -16,4 +17,5 @@ ring.workspace = true
 rustls.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+time.workspace = true
 zeroize.workspace = true

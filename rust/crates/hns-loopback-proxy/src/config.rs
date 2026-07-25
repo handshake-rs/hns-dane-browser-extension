@@ -6,6 +6,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::rand::{SecureRandom, SystemRandom};
 use thiserror::Error;
 
+use crate::LocalCertificateAuthority;
 use crate::host::HostScope;
 
 const SESSION_ID_RANDOM_BYTES: usize = 16;
@@ -70,13 +71,16 @@ pub enum LoopbackBind {
 
 /// Determines which browser requests one proxy generation may route.
 ///
-/// The default remains the Android-compatible immutable HNS scope. Whole
-/// browser routing is an explicit opt-in for browser engines whose proxy
-/// configuration cannot safely express an HNS-only match rule.
+/// The default remains the Android-compatible immutable HNS scope. Chromium
+/// uses `HnsOnly` behind a mandatory PAC file, with the Rust admission boundary
+/// independently rejecting every non-HNS request. Whole-browser routing is an
+/// explicit opt-in for engines whose proxy configuration cannot express an
+/// HNS-only match rule.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ProxyRoutingMode {
     #[default]
     ScopedHns,
+    HnsOnly,
     WholeBrowser,
 }
 
@@ -282,6 +286,7 @@ impl Default for ProxyTimeouts {
 pub struct ProxyConfig {
     instance: ProxyInstanceId,
     hns_scope: Option<HostScope>,
+    local_certificate_authority: Option<LocalCertificateAuthority>,
     limits: ProxyLimits,
     timeouts: ProxyTimeouts,
     bind: LoopbackBind,
@@ -293,6 +298,7 @@ impl ProxyConfig {
         Self {
             instance,
             hns_scope: Some(scope),
+            local_certificate_authority: None,
             limits: ProxyLimits::default(),
             timeouts: ProxyTimeouts::default(),
             bind: LoopbackBind::default(),
@@ -307,10 +313,25 @@ impl ProxyConfig {
         Self {
             instance,
             hns_scope,
+            local_certificate_authority: None,
             limits: ProxyLimits::default(),
             timeouts: ProxyTimeouts::default(),
             bind: LoopbackBind::default(),
             routing_mode: ProxyRoutingMode::WholeBrowser,
+        }
+    }
+
+    /// Creates a Chromium-style generation which admits any canonical HNS
+    /// name and rejects ICANN, special-use, search, and IP-literal targets.
+    pub fn hns_only(instance: ProxyInstanceId) -> Self {
+        Self {
+            instance,
+            hns_scope: None,
+            local_certificate_authority: None,
+            limits: ProxyLimits::default(),
+            timeouts: ProxyTimeouts::default(),
+            bind: LoopbackBind::default(),
+            routing_mode: ProxyRoutingMode::HnsOnly,
         }
     }
 
@@ -324,6 +345,7 @@ impl ProxyConfig {
         Self {
             instance,
             hns_scope: Some(scope),
+            local_certificate_authority: None,
             limits,
             timeouts,
             bind,
@@ -333,6 +355,18 @@ impl ProxyConfig {
 
     pub fn instance(&self) -> &ProxyInstanceId {
         &self.instance
+    }
+
+    pub fn with_local_certificate_authority(
+        mut self,
+        certificate_authority: LocalCertificateAuthority,
+    ) -> Self {
+        self.local_certificate_authority = Some(certificate_authority);
+        self
+    }
+
+    pub fn local_certificate_authority(&self) -> Option<&LocalCertificateAuthority> {
+        self.local_certificate_authority.as_ref()
     }
 
     pub fn hns_scope(&self) -> Option<&HostScope> {
@@ -495,6 +529,7 @@ mod tests {
 
         assert_eq!(config.instance(), &instance);
         assert_eq!(config.hns_scope(), Some(&scope));
+        assert!(config.local_certificate_authority().is_none());
         assert_eq!(config.routing_mode(), ProxyRoutingMode::ScopedHns);
         assert_eq!(config.bind(), LoopbackBind::Ipv4);
         assert_eq!(config.limits(), ProxyLimits::default());
@@ -504,5 +539,9 @@ mod tests {
         let icann_only = ProxyConfig::whole_browser(instance, None);
         assert_eq!(icann_only.hns_scope(), None);
         assert_eq!(icann_only.routing_mode(), ProxyRoutingMode::WholeBrowser);
+
+        let hns_only = ProxyConfig::hns_only(icann_only.instance().clone());
+        assert_eq!(hns_only.hns_scope(), None);
+        assert_eq!(hns_only.routing_mode(), ProxyRoutingMode::HnsOnly);
     }
 }
