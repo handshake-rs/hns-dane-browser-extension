@@ -9,7 +9,7 @@ separate canonical
 [`hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile)
 repository. The shared namespace, DANE, and resolution-policy crates are pinned to
 `handshake-rs/hns-dane-engine` commit
-`127b9ad55852df00b4df40826517715048dc3571`.
+`2850ac1f50e361e2772e18f2e5ecbd7e77085afb`.
 
 ## Layers
 

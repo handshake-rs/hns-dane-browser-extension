@@ -258,7 +258,7 @@ requester/provider transport policy now consume the canonical
 `hns-icann-dane`, `hns-namespace-resolution`, and `hns-resolution-policy`
 crates through immutable Git dependencies on
 `handshake-rs/hns-dane-engine` commit
-`127b9ad55852df00b4df40826517715048dc3571`. The surrounding gateway,
+`2850ac1f50e361e2772e18f2e5ecbd7e77085afb`. The surrounding gateway,
 resolver adapter, and transport integration remain historical clone code
 pending broader engine consolidation.
 The separately coordinated `hns-dane-engine` repository now defines the
