@@ -1,4 +1,4 @@
-//! Platform-neutral browser runtime shared by native application shells.
+//! Chromium product runtime and platform adapter for the native browser host.
 
 #![cfg_attr(
     not(test),

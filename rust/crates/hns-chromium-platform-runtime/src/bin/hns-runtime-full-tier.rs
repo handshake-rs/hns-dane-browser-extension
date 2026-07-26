@@ -1,4 +1,4 @@
-use hns_browser_runtime::{
+use hns_chromium_platform_runtime::{
     BrowserRuntime, GatewayHttpRequest, ResolutionMode, RuntimeConfiguration, RuntimePolicy,
     SyncOptions,
 };

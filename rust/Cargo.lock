@@ -535,27 +535,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hns-browser-runtime"
-version = "0.5.0"
-dependencies = [
- "hns-chain",
- "hns-core",
- "hns-dane",
- "hns-gateway",
- "hns-loopback-proxy",
- "hns-namespace-resolution",
- "hns-p2p",
- "hns-resolver",
- "hns-sync",
- "hns-transport",
- "hns-urkel",
- "httparse",
- "rusqlite",
- "sha2",
- "thiserror",
-]
-
-[[package]]
 name = "hns-cache"
 version = "0.5.0"
 
@@ -574,13 +553,34 @@ version = "0.5.0"
 dependencies = [
  "base64",
  "getrandom 0.3.4",
- "hns-browser-runtime",
+ "hns-chromium-platform-runtime",
  "hns-loopback-proxy",
  "hns-resolution-policy",
  "serde",
  "serde_json",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "hns-chromium-platform-runtime"
+version = "0.5.0"
+dependencies = [
+ "hns-chain",
+ "hns-core",
+ "hns-dane",
+ "hns-gateway",
+ "hns-loopback-proxy",
+ "hns-namespace-resolution",
+ "hns-p2p",
+ "hns-resolver",
+ "hns-sync",
+ "hns-transport",
+ "hns-urkel",
+ "httparse",
+ "rusqlite",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]

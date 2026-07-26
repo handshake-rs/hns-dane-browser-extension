@@ -3,7 +3,7 @@ resolver = "3"
 exclude = ["fuzz"]
 members = [
     "crates/hns-chromium-native-host",
-    "crates/hns-browser-runtime",
+    "crates/hns-chromium-platform-runtime",
     "crates/hns-cache",
     "crates/hns-chain",
     "crates/hns-core",
@@ -31,7 +31,7 @@ bytes = "1"
 hex = "0.4"
 getrandom = "0.3"
 hns-cache = { path = "crates/hns-cache" }
-hns-browser-runtime = { path = "crates/hns-browser-runtime" }
+hns-chromium-platform-runtime = { path = "crates/hns-chromium-platform-runtime" }
 hns-chain = { path = "crates/hns-chain" }
 hns-core = { path = "crates/hns-core" }
 hns-dane = { path = "crates/hns-dane" }

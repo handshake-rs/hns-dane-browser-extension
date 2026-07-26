@@ -251,7 +251,7 @@ copied into the unpacked extension, and installed beside the native host.
 
 ## Remaining integration boundary
 
-This clone still contains its historical `hns-browser-runtime`,
+This clone still contains its product-specific `hns-chromium-platform-runtime`,
 `hns-gateway`, and `hns-transport` implementations. TLSA owner derivation,
 validating-DoH trust decisions, dual-root namespace selection, and the typed
 requester/provider transport policy now consume the canonical
@@ -262,11 +262,13 @@ crates through immutable Git dependencies on
 resolver adapter, and transport integration remain historical clone code
 pending broader engine consolidation.
 The separately coordinated `hns-dane-engine` repository now defines the
-canonical session-bound browser authority and bridge-authorization boundary.
+canonical session-bound browser authority and bridge-authorization boundary
+in its distinct `hns-browser-runtime` crate.
 This checkpoint aligns Chromium observability with its session, runtime
 generation, policy generation, and event-sequence invariants, but does not
-claim that the duplicate runtime has been replaced or that the canonical
-contract is a registry-published dependency. That consolidation, P2P ODoH,
+claim that the Chromium product adapter has been replaced by the canonical
+engine runtime or that the canonical contract is a registry-published
+dependency. That consolidation, P2P ODoH,
 HNSR, and non-stable experimental wire profiles remain fail-closed work.
 
 The retained Android/iOS source and FFI directories are historical and excluded

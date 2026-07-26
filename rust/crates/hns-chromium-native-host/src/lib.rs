@@ -8,7 +8,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use getrandom::fill as fill_random;
-use hns_browser_runtime::{
+use hns_chromium_platform_runtime::{
     BrowserProxy, BrowserProxySecurityPath, BrowserProxyStatus, BrowserProxyStatusObserver,
     BrowserRuntime, NetworkKind, ResolutionMode, RuntimeConfiguration, RuntimePolicy,
     chromium_dane_pac_script, diagnostics_json,

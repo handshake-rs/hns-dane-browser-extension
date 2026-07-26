@@ -11,6 +11,12 @@ repository. The shared namespace, DANE, and resolution-policy crates are pinned 
 `handshake-rs/hns-dane-engine` commit
 `2850ac1f50e361e2772e18f2e5ecbd7e77085afb`.
 
+The active local `hns-chromium-platform-runtime` crate is this Chromium
+product's storage, network, proxy, PAC, and native-host adapter. It is distinct
+from the canonical engine's `hns-browser-runtime`, which owns the shared
+session-bound authority lifecycle and monotonic clock. This rename does not
+claim that the canonical lifecycle has already replaced the product adapter.
+
 ## Layers
 
 ```text
@@ -25,14 +31,14 @@ Android UI / Browser Shell                         [historical/non-release]
   -> process-global AndroidX ProxyController ownership
   -> RustBrowserProxy + thin android-ffi JNI adapter
   -> authenticated hns-loopback-proxy HTTP/CONNECT/TLS endpoint
-  -> persistent hns-browser-runtime handle
+  -> persistent hns-chromium-platform-runtime handle
   -> HNS resolver, DNSSEC, DANE, transport, cache
   -> HNS peers, ICANN DNS, TCP TLS, QUIC/HTTP3
 iOS UI / Browser Shell                             [historical/non-release]
   -> BrowserProxyCoordinator + persistent WKWebsiteDataStore
   -> authenticated, no-failover whole-browser proxy configuration
   -> thin versioned ios-ffi C ABI / XCFramework
-  -> the same hns-loopback-proxy + hns-browser-runtime
+  -> the same hns-loopback-proxy + hns-chromium-platform-runtime
 ```
 
 ## Rust Crates
@@ -56,7 +62,7 @@ iOS UI / Browser Shell                             [historical/non-release]
   provider/output role, and legacy compatibility stay off. The historical
   runtime relay boolean is derived only from whether that canonical plan
   contains the P2P DNS-relay transport.
-- `hns-browser-runtime`: platform-neutral, JNI-free ownership boundary for immutable network and storage configuration, revisioned runtime policy, independent experimental-relay and legacy-DoH controls, per-handle HTTP transport, synchronization and maintenance coordination, peer-state serialization, header sync and snapshots, resolver cache controls, proof diagnostics, gateway requests, and a typed `RuntimeProxyBackend` that shares the runtime's resolver/storage/transport state with ordinary and Upgrade proxy traffic. Its live delegated resolver now follows the canonical order: direct authoritative UDP/TCP 53, proof-authenticated authoritative DoH, the private P2P relay, and optional legacy DoH. It exposes both immutable exact-HNS-scope startup for Android and optional-scope whole-browser startup for Apple. Whole-browser ICANN address discovery uses bounded WebPKI-authenticated DoH to explicit bootstrap addresses and returns only validated public A/AAAA endpoints; it does not resolve browser targets through the host operating system. The runtime also converts trusted internal response metadata into a bounded, typed, trace-redacted `BrowserProxyStatus` surface for native security UI.
+- `hns-chromium-platform-runtime`: Chromium product ownership boundary for immutable network and storage configuration, revisioned runtime policy, independent experimental-relay and legacy-DoH controls, per-handle HTTP transport, synchronization and maintenance coordination, peer-state serialization, header sync and snapshots, resolver cache controls, proof diagnostics, gateway requests, and a typed `RuntimeProxyBackend` that shares the runtime's resolver/storage/transport state with ordinary and Upgrade proxy traffic. Its live delegated resolver now follows the canonical order: direct authoritative UDP/TCP 53, proof-authenticated authoritative DoH, the private P2P relay, and optional legacy DoH. It retains the historical immutable exact-HNS-scope startup for Android and optional-scope whole-browser startup for Apple. Whole-browser ICANN address discovery uses bounded WebPKI-authenticated DoH to explicit bootstrap addresses and returns only validated public A/AAAA endpoints; it does not resolve browser targets through the host operating system. The runtime also converts trusted internal response metadata into a bounded, typed, trace-redacted `BrowserProxyStatus` surface for native security UI.
 - `hns-loopback-proxy`: platform-neutral, JNI-free loopback proxy with a fresh authenticated endpoint on an ephemeral IPv4 `127.0.0.1` port. Its Android mode has an immutable exact HNS root/subdomain scope and rejects everything else. Its Apple mode covers the whole WebKit data store: the admitted HNS scope uses the shared HNS backend and Rust-owned exact-host P-256 TLS identities, while ICANN HTTP, CONNECT, and WebSocket traffic is forwarded only to explicit public addresses supplied by the runtime. Both modes share strict bounded HTTP/1 parsing/framing, unsafe-port and special-address policy, request/response header sanitization, active-client limits, streamed response bodies, live instance/host/certificate authorization, typed status, and owned cancellation-and-join lifecycle.
 - `android-ffi`: historical Android JNI adapter, excluded from workspace membership and this release graph.
 - `ios-ffi`: historical Apple C ABI adapter, excluded from workspace membership and this release graph.
@@ -67,7 +73,7 @@ iOS UI / Browser Shell                             [historical/non-release]
 Everything in this section describes retained source, not the Chromium release
 target or current mobile qualification.
 
-- The shared `hns-browser-runtime` crate and its persistent `BrowserRuntime` API are in place and have no JNI dependency or exported Java symbols.
+- The local `hns-chromium-platform-runtime` crate and its persistent `BrowserRuntime` API are retained and have no JNI dependency or exported Java symbols.
 - Runtime identity, configuration, policy, transport reuse, storage coordination, ordinary gateway requests, and file-backed gateway requests are handle-backed. The Rust proxy adapter uses typed requests, responses, internal security metadata, typed security status, and Upgrade tunnels; the Android bridge preserves the existing encoded-HTTP schema while executing those requests on the persistent runtime.
 - `MainActivity` now routes HNS navigation through `BrowserProxyCoordinator`. The coordinator keeps the latest navigation pending until it owns the process-global WebView proxy override and the exact immutable root/subdomain-scoped proxy has started and been applied. Scope or policy changes revoke the published endpoint, authentication challenge, certificate trust, and status binding before the retired proxy is joined off the UI thread; transition and out-of-scope HNS requests fail closed.
 - `HnsProxyController` serializes access to AndroidX `ProxyController`, whose override is process-global. A newer owner immediately revokes the older coordinator, and callbacks from an older owner cannot publish a route or clear a newer override. Owner generations form a permanent process high-water mark: after a newer Activity claims ownership, an older Activity stays retired even if that newer owner releases, preventing stale proxy state from being resurrected after a lifecycle handoff. Direct navigation and the exact compatibility-interceptor route wait for confirmed ownership/clear outcomes rather than racing a possibly installed override.

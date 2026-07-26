@@ -20,14 +20,14 @@ Generator schema: 3
 Generated input SHA-256:
   scripts/generate-third-party-notices.py = b19f8b0304c4a6df4be3e7701e543d547aef91db2bab5017d3e724f897a8c53a
   scripts/verify_cargo_git_policy.py = 950de5ed8d9f103247a1c72585df2227808dd3c36c79de32039ae5be123dc665
-  rust/Cargo.toml = 45957634532b91adb2e112d17f749f360d186b51b7311b4893736358b51e58b2
-  rust/Cargo.lock = dae412f88f2f80a1869006922febe0a0313d1b31646bec3b0bcdb8cd351c4b6b
+  rust/Cargo.toml = 273efaee0bc745365678c449cac81f515ad9aabcd0697609fb843a4b93272a03
+  rust/Cargo.lock = 7ed92d371f42c2d6dcad2cbaafedaaae561651b396d73a3624061df4d4b773c6
   extension/manifest.json = ce63799e4ea7e340469fc9cddf888fab9f0628d02e18bc2d84180ef0d632bbcd
   package.json = 7929e8f469474ecfcb747e7e31cc9a72f443e49f0ce2dfb9bf096eab14f86599
-  rust/crates/hns-browser-runtime/Cargo.toml = eb294c8474e78e3bbc768bce3cd2ebb6eb53ee42859d2275484095f2f3e342c9
   rust/crates/hns-cache/Cargo.toml = ecb37feb5e48f51bc3f4e8319aa3e8edca4178f419a3390215640e2e7c2ff058
   rust/crates/hns-chain/Cargo.toml = 0fdd59304d88167acd7cf0a0ceb2c333aa5cc79d45c46a26828d9788df944814
-  rust/crates/hns-chromium-native-host/Cargo.toml = 40adffd35281c6beaad718bfc887d290a428eb23791bef206445b792b51a74e5
+  rust/crates/hns-chromium-native-host/Cargo.toml = f2f7529fb9e2f70da8ad362a449eb0f48a7472e93efa053e7f767d84434bd038
+  rust/crates/hns-chromium-platform-runtime/Cargo.toml = 340b0e48202e61a1a95ac1d4e09f2436a2a21836e0ac14ec4a9b7b5305f56aea
   rust/crates/hns-core/Cargo.toml = 0d2b63145e61850dc9c243cfd483a92cb7157672f87fcaa7879d7b42c0c91a6d
   rust/crates/hns-dane/Cargo.toml = e101a2c614120830bc2ead4b56f1cb7604cef15fda4104bc819060a562aa8d29
   rust/crates/hns-dnssec/Cargo.toml = 06c0ed11d5b80a3ff2f1780e9642e9986b13ecf1f34755cf1cd1d94b6a043cf0

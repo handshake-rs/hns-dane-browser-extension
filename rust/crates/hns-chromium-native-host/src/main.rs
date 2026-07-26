@@ -1,7 +1,7 @@
-use hns_browser_runtime::{NetworkKind, chromium_dane_pac_script};
 use hns_chromium_native_host::{
     LocalCaStore, NativeHostController, native_messaging_host_manifest_json, serve_native_messaging,
 };
+use hns_chromium_platform_runtime::{NetworkKind, chromium_dane_pac_script};
 use std::env;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;

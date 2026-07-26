@@ -28,7 +28,7 @@ runtime `GatewayConfig` instances use strict HNS HTTPS mode.
 
 ## Verification
 
-The `hns-browser-runtime` tests cover policy normalization, request-header
+The `hns-chromium-platform-runtime` tests cover policy normalization, request-header
 rejection, proof-anchored authoritative DoH, strict origin TLS behavior, and
 separate ICANN resolution. Production builds do not construct either of the
 retired public-recursive HNS resolver types.
