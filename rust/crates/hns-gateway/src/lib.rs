@@ -5,6 +5,11 @@ use hns_core::dns::{
 };
 use hns_core::network_policy::{is_browser_blocked_port, is_publicly_routable};
 use hns_dane::{DaneError, DomainTrustMode, StatelessDaneConfig, TlsaRecord};
+use hns_icann_dane::{
+    BrowserTlsDecision, DiscoveryError as IcannDaneDiscoveryError, DnssecQueryMode,
+    IcannDnssecStatus, ResolverAuthentication, TlsaDenial, TlsaOwner, ValidatingDohEvidence,
+    decide_browser_tls,
+};
 use hns_resolver::{
     NameClass, ResolutionAnswer, ResolutionRequest, Resolver, ResolverError, classify_name,
 };
@@ -29,6 +34,8 @@ pub struct GatewayConfig {
     pub hns_https_mode: HnsHttpsMode,
     pub supported_origin_protocols: Vec<OriginProtocol>,
     pub stateless_dane: StatelessDaneConfig,
+    pub icann_resolver_authentication: ResolverAuthentication,
+    pub icann_dnssec_query_mode: DnssecQueryMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,25 +46,10 @@ pub enum HnsHttpsMode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedTlsaRecords {
-    pub dnssec_state: TlsaDnssecState,
+    pub browser_tls_decision: Option<BrowserTlsDecision>,
     pub secure: bool,
     pub records: Vec<TlsaRecord>,
     pub source: Option<TlsaRecordSource>,
-}
-
-/// Successful TLSA discovery states. Resolver errors are the fourth,
-/// fail-closed `bogus-or-indeterminate` outcome and are never converted into
-/// one of these successful states.
-///
-/// This is a compatibility boundary local to the historical browser clone.
-/// Its owner derivation and outcome mapping are intentionally isolated so a
-/// canonical shared ICANN DANE engine can replace them without changing the
-/// browser request-boundary policy.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TlsaDnssecState {
-    SecurePresent,
-    AuthenticatedAbsence,
-    InsecureDelegation,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -107,6 +99,8 @@ pub enum GatewayError {
     UnsafeOriginPort(u16),
     #[error("TLSA record is invalid: {0}")]
     InvalidTlsa(#[from] DaneError),
+    #[error("ICANN DANE discovery failed: {0}")]
+    IcannDane(#[from] IcannDaneDiscoveryError),
     #[error("HTTPS/SVCB record is invalid: {0}")]
     InvalidSvcb(ParseError),
     #[error("HTTPS/SVCB service binding is unsupported")]
@@ -138,6 +132,8 @@ impl Default for GatewayConfig {
                 OriginProtocol::Http3,
             ],
             stateless_dane: StatelessDaneConfig::default(),
+            icann_resolver_authentication: ResolverAuthentication::Authenticated,
+            icann_dnssec_query_mode: DnssecQueryMode::Validate,
         }
     }
 }
@@ -163,6 +159,11 @@ impl std::fmt::Debug for GatewayConfig {
                 &self.supported_origin_protocols,
             )
             .field("stateless_dane", &self.stateless_dane)
+            .field(
+                "icann_resolver_authentication",
+                &self.icann_resolver_authentication,
+            )
+            .field("icann_dnssec_query_mode", &self.icann_dnssec_query_mode)
             .finish()
     }
 }
@@ -332,6 +333,7 @@ where
             origin_request.tls.dnssec_secure = resolved_tlsa.secure;
             origin_request.tls.tlsa_records = resolved_tlsa.records;
             origin_request.tls.tlsa_source = resolved_tlsa.source;
+            origin_request.tls.browser_tls_decision = resolved_tlsa.browser_tls_decision;
         }
         self.validate_origin_port(origin_request.port)?;
 
@@ -363,15 +365,7 @@ where
         port: u16,
         transport: TlsaTransport,
     ) -> Result<ResolvedTlsaRecords, GatewayError> {
-        let Some(request) = tlsa_resolution_request(host, port, transport) else {
-            return Ok(ResolvedTlsaRecords {
-                dnssec_state: TlsaDnssecState::InsecureDelegation,
-                secure: false,
-                records: Vec::new(),
-                source: None,
-            });
-        };
-
+        let request = tlsa_resolution_request(host, port, transport)?;
         self.resolve_native_tlsa_records(&request, classify_name(host) == NameClass::Icann)
     }
 
@@ -381,31 +375,22 @@ where
         allow_insecure_webpki_fallback: bool,
     ) -> Result<ResolvedTlsaRecords, GatewayError> {
         let answer = self.resolver.resolve(request)?;
-        // A validating resolver returns AD=0 for a provably insecure
-        // delegation and a DNS error (normally SERVFAIL) for bogus DNSSEC.
-        // Ignore all unsigned TLSA bytes for ICANN and retain WebPKI; never
-        // turn a resolver error into an empty TLSA answer.
-        if !answer.secure && allow_insecure_webpki_fallback {
-            return Ok(ResolvedTlsaRecords {
-                dnssec_state: TlsaDnssecState::InsecureDelegation,
-                secure: false,
-                records: Vec::new(),
-                source: None,
-            });
+        if allow_insecure_webpki_fallback {
+            return icann_tlsa_records(
+                request,
+                &answer,
+                self.config.icann_resolver_authentication,
+                self.config.icann_dnssec_query_mode,
+            );
         }
+
         let records = tlsa_records(&answer.records, &request.qname)?;
         if self.config.require_secure_resolution && !answer.secure && !records.is_empty() {
             return Err(GatewayError::InsecureResolution);
         }
 
         Ok(ResolvedTlsaRecords {
-            dnssec_state: if !answer.secure {
-                TlsaDnssecState::InsecureDelegation
-            } else if records.is_empty() {
-                TlsaDnssecState::AuthenticatedAbsence
-            } else {
-                TlsaDnssecState::SecurePresent
-            },
+            browser_tls_decision: None,
             secure: answer.secure,
             source: (!records.is_empty()).then_some(TlsaRecordSource::NativeTlsa),
             records,
@@ -546,33 +531,129 @@ fn tlsa_resolution_request(
     host: &str,
     port: u16,
     transport: TlsaTransport,
-) -> Option<ResolutionRequest> {
-    let transport = match transport {
-        TlsaTransport::Tcp => "tcp",
-        TlsaTransport::Udp => "udp",
-    };
-    let qname =
-        DnsName::from_ascii(&format!("_{port}._{transport}.{}", normalize_host(host))).ok()?;
-    Some(ResolutionRequest {
-        qname: qname.to_string(),
+) -> Result<ResolutionRequest, IcannDaneDiscoveryError> {
+    let owner = TlsaOwner::derive(host, port, transport)?;
+    Ok(ResolutionRequest {
+        qname: owner.resolver_name().to_owned(),
         qtype: RecordType::Tlsa.code(),
     })
+}
+
+fn icann_tlsa_records(
+    request: &ResolutionRequest,
+    answer: &ResolutionAnswer,
+    resolver_authentication: ResolverAuthentication,
+    query_mode: DnssecQueryMode,
+) -> Result<ResolvedTlsaRecords, GatewayError> {
+    // `IcannDohResolver` is fixed to a WebPKI-authenticated endpoint, sets DO,
+    // leaves CD clear, and converts transport/HTTP/rcode/parser failures into
+    // `ResolverError` before this adapter is called. AD=0 is consequently the
+    // successful proven-insecure state; bogus or indeterminate lookup results
+    // remain terminal errors.
+    let records = if answer.secure {
+        tlsa_records(&answer.records, &request.qname)?
+    } else {
+        Vec::new()
+    };
+    let decision = decide_browser_tls(ValidatingDohEvidence {
+        resolver_authentication,
+        query_mode,
+        dnssec: if answer.secure {
+            IcannDnssecStatus::Secure
+        } else {
+            IcannDnssecStatus::InsecureDelegation
+        },
+        tlsa_record_count: records.len(),
+        denial: if answer.secure && records.is_empty() {
+            TlsaDenial::Authenticated
+        } else {
+            TlsaDenial::None
+        },
+    })?;
+
+    match decision {
+        BrowserTlsDecision::EnforceDane { .. } => Ok(ResolvedTlsaRecords {
+            browser_tls_decision: Some(decision),
+            secure: true,
+            source: Some(TlsaRecordSource::NativeTlsa),
+            records,
+        }),
+        BrowserTlsDecision::WebPkiAuthenticatedAbsence => Ok(ResolvedTlsaRecords {
+            browser_tls_decision: Some(decision),
+            secure: true,
+            source: None,
+            records: Vec::new(),
+        }),
+        BrowserTlsDecision::WebPkiInsecureDelegation => Ok(ResolvedTlsaRecords {
+            browser_tls_decision: Some(decision),
+            secure: false,
+            source: None,
+            records: Vec::new(),
+        }),
+    }
 }
 
 fn tlsa_records(
     records: &[ResourceRecord],
     service_qname: &str,
 ) -> Result<Vec<TlsaRecord>, GatewayError> {
-    let owner = match DnsName::from_ascii(service_qname) {
-        Ok(owner) => owner,
-        Err(_) => return Ok(Vec::new()),
-    };
+    let mut owner = DnsName::from_ascii(service_qname)
+        .map_err(|_| GatewayError::Resolver(ResolverError::InvalidDnsResponse))?;
+    let mut seen = Vec::new();
+    let mut followed_cname = false;
+    for _depth in 0..=MAX_CNAME_CHAIN_LEN {
+        if seen.contains(&owner) {
+            return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+        }
+        seen.push(owner.clone());
+        if records.iter().any(|record| {
+            record.name == owner
+                && matches!(record.record_type, RecordType::Tlsa | RecordType::Cname)
+                && record.class != 1
+        }) {
+            return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+        }
 
-    records
-        .iter()
-        .filter(|record| record.record_type == RecordType::Tlsa && record.name == owner)
-        .map(|record| TlsaRecord::parse_rdata(&record.rdata).map_err(GatewayError::from))
-        .collect()
+        let owner_tlsa = records
+            .iter()
+            .filter(|record| record.record_type == RecordType::Tlsa && record.name == owner)
+            .collect::<Vec<_>>();
+        let owner_cnames = records
+            .iter()
+            .filter(|record| record.record_type == RecordType::Cname && record.name == owner)
+            .collect::<Vec<_>>();
+        if !owner_tlsa.is_empty() && !owner_cnames.is_empty() {
+            return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+        }
+        if !owner_tlsa.is_empty() {
+            return owner_tlsa
+                .into_iter()
+                .map(|record| TlsaRecord::parse_rdata(&record.rdata).map_err(GatewayError::from))
+                .collect();
+        }
+        let [cname] = owner_cnames.as_slice() else {
+            return if owner_cnames.is_empty() {
+                if followed_cname {
+                    // The clone's response adapter retains AD but drops the
+                    // terminal NSEC/NSEC3 authority proof. Do not infer a
+                    // negative TLSA result after an alias without that proof.
+                    Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse))
+                } else {
+                    Ok(Vec::new())
+                }
+            } else {
+                Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse))
+            };
+        };
+        let (target, end) = DnsName::parse_wire(&cname.rdata, 0)
+            .map_err(|_| GatewayError::Resolver(ResolverError::InvalidDnsResponse))?;
+        if end != cname.rdata.len() {
+            return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+        }
+        owner = target;
+        followed_cname = true;
+    }
+    Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse))
 }
 
 fn apply_https_service_policy(
@@ -1692,6 +1773,10 @@ mod tests {
         assert_eq!(captured.tls.mode, DomainTrustMode::IcannWebPki);
         assert!(captured.tls.tlsa_records.is_empty());
         assert_eq!(captured.tls.tlsa_source, None);
+        assert_eq!(
+            captured.tls.browser_tls_decision,
+            Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence),
+        );
     }
 
     #[test]
@@ -1743,6 +1828,12 @@ mod tests {
         );
         assert_eq!(captured.tls.tlsa_records[0].matching, TlsaMatching::Sha256);
         assert_eq!(captured.tls.tlsa_records[0].association_data, vec![0xaa]);
+        assert_eq!(
+            captured.tls.browser_tls_decision,
+            Some(BrowserTlsDecision::EnforceDane {
+                record_count: std::num::NonZeroUsize::new(1).unwrap(),
+            }),
+        );
         assert_eq!(
             *requests.lock().unwrap(),
             vec![
@@ -1805,6 +1896,10 @@ mod tests {
         assert!(captured.tls.tlsa_records.is_empty());
         assert_eq!(captured.tls.tlsa_source, None);
         assert_eq!(
+            captured.tls.browser_tls_decision,
+            Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence),
+        );
+        assert_eq!(
             *requests.lock().unwrap(),
             vec![
                 ResolutionRequest {
@@ -1866,13 +1961,17 @@ mod tests {
         assert!(captured.tls.tlsa_records.is_empty());
         assert_eq!(captured.tls.tlsa_source, None);
         assert_eq!(
+            captured.tls.browser_tls_decision,
+            Some(BrowserTlsDecision::WebPkiInsecureDelegation),
+        );
+        assert_eq!(
             requests.lock().unwrap().last().unwrap().qname,
             "_443._tcp.example.com",
         );
     }
 
     #[test]
-    fn tlsa_dnssec_state_preserves_three_successful_discovery_outcomes() {
+    fn canonical_icann_policy_selects_all_three_successful_discovery_outcomes() {
         let request = ResolutionRequest {
             qname: "_443._tcp.example.com".to_owned(),
             qtype: RecordType::Tlsa.code(),
@@ -1881,10 +1980,20 @@ mod tests {
             (
                 true,
                 vec![tlsa_record("_443._tcp.example.com", vec![3, 1, 1, 0xaa])],
-                TlsaDnssecState::SecurePresent,
+                BrowserTlsDecision::EnforceDane {
+                    record_count: std::num::NonZeroUsize::new(1).unwrap(),
+                },
             ),
-            (true, Vec::new(), TlsaDnssecState::AuthenticatedAbsence),
-            (false, Vec::new(), TlsaDnssecState::InsecureDelegation),
+            (
+                true,
+                Vec::new(),
+                BrowserTlsDecision::WebPkiAuthenticatedAbsence,
+            ),
+            (
+                false,
+                Vec::new(),
+                BrowserTlsDecision::WebPkiInsecureDelegation,
+            ),
         ] {
             let gateway = Gateway::new(
                 GatewayConfig::default(),
@@ -1893,7 +2002,120 @@ mod tests {
             )
             .unwrap();
             let discovery = gateway.resolve_native_tlsa_records(&request, true).unwrap();
-            assert_eq!(discovery.dnssec_state, expected);
+            assert_eq!(discovery.browser_tls_decision, Some(expected));
+        }
+    }
+
+    #[test]
+    fn invalid_icann_tlsa_owner_is_terminal_not_webpki() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            StaticResolver {
+                secure: false,
+                records: Vec::new(),
+            },
+            StaticTransport,
+        )
+        .unwrap();
+
+        assert_eq!(
+            gateway
+                .resolve_tlsa_records("has space.example", 443, TlsaTransport::Tcp)
+                .unwrap_err(),
+            GatewayError::IcannDane(IcannDaneDiscoveryError::InvalidHost),
+        );
+    }
+
+    #[test]
+    fn unauthenticated_icann_resolver_cannot_select_a_browser_trust_action() {
+        let gateway = Gateway::new(
+            GatewayConfig {
+                icann_resolver_authentication: ResolverAuthentication::Unauthenticated,
+                ..GatewayConfig::default()
+            },
+            StaticResolver {
+                secure: true,
+                records: Vec::new(),
+            },
+            StaticTransport,
+        )
+        .unwrap();
+
+        assert_eq!(
+            gateway
+                .resolve_tlsa_records("example.com", 443, TlsaTransport::Tcp)
+                .unwrap_err(),
+            GatewayError::IcannDane(IcannDaneDiscoveryError::UnauthenticatedResolver),
+        );
+    }
+
+    #[test]
+    fn secure_icann_tlsa_cname_reaches_terminal_records_without_webpki_downgrade() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            ScriptedResolver::new(
+                vec![
+                    response(
+                        "example.com",
+                        RecordType::A.code(),
+                        true,
+                        vec![address_record_for("example.com")],
+                    ),
+                    response("example.com", RecordType::Https.code(), true, vec![]),
+                    response(
+                        "_443._tcp.example.com",
+                        RecordType::Tlsa.code(),
+                        true,
+                        vec![
+                            cname_record("_443._tcp.example.com", "_443._tcp.edge.example.com"),
+                            tlsa_record("_443._tcp.edge.example.com", vec![3, 1, 1, 0xaa]),
+                        ],
+                    ),
+                ],
+                Arc::new(Mutex::new(Vec::new())),
+            ),
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        gateway
+            .handle(&request("example.com", "example.com"))
+            .unwrap();
+        let captured = gateway
+            .transport()
+            .last_request
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(captured.tls.tlsa_records.len(), 1);
+        assert!(matches!(
+            captured.tls.browser_tls_decision,
+            Some(BrowserTlsDecision::EnforceDane { record_count })
+                if record_count.get() == 1
+        ));
+    }
+
+    #[test]
+    fn malformed_icann_tlsa_cname_shapes_fail_closed() {
+        let owner = "_443._tcp.example.com";
+        let target = "_443._tcp.edge.example.com";
+        for records in [
+            vec![cname_record(owner, target)],
+            vec![cname_record(owner, target), cname_record(target, owner)],
+            vec![
+                cname_record(owner, target),
+                cname_record(owner, "_443._tcp.other.example.com"),
+            ],
+            vec![
+                cname_record(owner, target),
+                tlsa_record(owner, vec![3, 1, 1, 0xaa]),
+            ],
+        ] {
+            assert_eq!(
+                tlsa_records(&records, owner).unwrap_err(),
+                GatewayError::Resolver(ResolverError::InvalidDnsResponse),
+            );
         }
     }
 

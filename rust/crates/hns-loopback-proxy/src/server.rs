@@ -1922,6 +1922,18 @@ fn handle_connect(
         );
         return;
     }
+    if is_browser_blocked_port(authority.port()) {
+        reject_scoped_request(
+            &mut stream,
+            context,
+            &canonical_host,
+            method,
+            403,
+            "Destination Port Denied",
+            RequestRejectionReason::InvalidRequest,
+        );
+        return;
+    }
     if cancellation.is_cancelled() {
         observe_request(
             context,
@@ -5909,6 +5921,24 @@ mod tests {
             assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 403);
         }
         assert_eq!(backend.request_count(), 3);
+    }
+
+    #[test]
+    fn dane_browser_rejects_named_icann_unsafe_connect_port_before_tls_and_backend() {
+        let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain("unreachable")));
+        let proxy = RunningProxy::start(
+            dane_browser_config(),
+            backend.clone(),
+            Arc::new(NoopProxyObserver),
+        )
+        .unwrap();
+        let request = format!(
+            "CONNECT example.com:22 HTTP/1.1\r\nHost: example.com:22\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+
+        assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 403);
+        assert_eq!(backend.request_count(), 0);
     }
 
     #[test]

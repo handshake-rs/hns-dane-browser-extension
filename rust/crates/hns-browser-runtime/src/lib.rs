@@ -47,8 +47,8 @@ use hns_sync::{
 pub use hns_transport::DEFAULT_MAX_REQUEST_BODY_BYTES;
 use hns_transport::{
     OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead, OriginTransport, ReadWrite,
-    TcpHttpTransport, TlsCertificateInspection, TlsValidation, TlsaRecordSource, TlsaTransport,
-    TransportError, TransportLimits,
+    TcpHttpTransport, TlsCertificateInspection, TlsValidation, TlsaOwner, TlsaRecordSource,
+    TlsaTransport, TransportError, TransportLimits,
 };
 use hns_urkel::UrkelProofVerifier;
 use sha2::{Digest, Sha256};
@@ -5911,11 +5911,9 @@ fn sha256_hex(value: &[u8]) -> String {
 }
 
 fn tlsa_owner_name(host: &str, port: u16, transport: TlsaTransport) -> String {
-    let transport = match transport {
-        TlsaTransport::Tcp => "tcp",
-        TlsaTransport::Udp => "udp",
-    };
-    format!("_{}._{}.{}", port, transport, host.trim_end_matches('.'))
+    TlsaOwner::derive(host, port, transport)
+        .map(|owner| owner.resolver_name().to_owned())
+        .unwrap_or_default()
 }
 
 fn tlsa_status_name(tls_validation: Option<&TlsValidation>) -> &'static str {
@@ -5997,6 +5995,7 @@ fn tlsa_blocked_by(error: Option<&GatewayError>) -> Option<&'static str> {
         Some(GatewayError::InvalidSvcb(_)) | Some(GatewayError::UnsupportedSvcb) => {
             Some("https_service_unsupported")
         }
+        Some(GatewayError::IcannDane(_)) => Some("icann_dane_discovery_failed"),
         Some(GatewayError::HostResolutionMismatch) => Some("hns_request_mismatch"),
         Some(GatewayError::Transport(TransportError::UnsupportedTransport)) => {
             Some("transport_unsupported")
@@ -6931,6 +6930,11 @@ fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) 
             502,
             "HNS DANE Validation Failed",
             "DANE/TLSA validation failed closed.",
+        ),
+        GatewayError::IcannDane(_) => (
+            502,
+            "ICANN DANE Discovery Failed",
+            "Automatic ICANN TLSA discovery failed closed.",
         ),
         GatewayError::InvalidSvcb(_) | GatewayError::UnsupportedSvcb => (
             502,

@@ -186,9 +186,11 @@ cargo +1.92.0 clippy --locked --offline \
 npm run check:extension
 ```
 
-The automatic ICANN DANE checkpoint passed 43 gateway, 151 loopback-proxy,
-129 browser-runtime, and 11 native-host unit tests. The extension gate passed
-all 6 Node suites, including isolated Linux
+The automatic ICANN DANE checkpoint passed all 47 gateway tests. The existing
+151-test loopback-proxy gate remained compile/clippy clean, and the added
+named-ICANN unsafe-port regression passed in isolation. The preceding
+checkpoint also passed 129 browser-runtime and 11 native-host tests. The
+extension gate passed all 6 Node suites, including isolated Linux
 install/uninstall, Windows registration/removal coverage, PAC parity, native
 messaging, stale-generation rejection, health-generation preservation, and
 the unpacked MV3 build. Socket-backed Rust tests require permission to bind
@@ -204,17 +206,18 @@ offline. No notice freshness success is claimed by this checkpoint.
 ## Remaining integration boundary
 
 This clone still contains its historical `hns-browser-runtime`,
-`hns-gateway`, and `hns-transport` implementations. The portable ICANN work in
-this checkpoint keeps TLSA owner derivation and the typed DNSSEC outcome
-mapping isolated in those lower Rust layers, but it remains a duplicate until
-reconciled into the canonical engine.
+`hns-gateway`, and `hns-transport` implementations. TLSA owner derivation and
+the validating-DoH trust decision now come from the canonical
+`hns-icann-dane` crate through a checked path dependency. The surrounding
+gateway, resolver adapter, and transport integration remain historical clone
+code pending broader engine consolidation.
 The separately coordinated `hns-dane-engine` repository now defines the
 canonical session-bound browser authority and bridge-authorization boundary.
 This checkpoint aligns Chromium observability with its session, runtime
 generation, policy generation, and event-sequence invariants, but does not
-claim that the duplicate runtime has been replaced by a published canonical
-engine dependency. That consolidation, P2P ODoH, HNSR, and non-stable
-experimental wire profiles remain fail-closed work.
+claim that the duplicate runtime has been replaced or that the canonical
+contract is a published dependency. That consolidation, P2P ODoH, HNSR, and
+non-stable experimental wire profiles remain fail-closed work.
 
 ## Release gates still requiring target hardware
 
