@@ -54,7 +54,6 @@ hns-urkel = { path = "crates/hns-urkel" }
 http = "1"
 httparse = "1.10"
 idna = "1.1"
-jni = "0.21"
 num-bigint = "0.4"
 num-traits = "0.2"
 p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
@@ -81,10 +80,3 @@ codegen-units = 1
 debug = "line-tables-only"
 lto = "thin"
 panic = "abort"
-
-# FFI exports contain explicit panic boundaries. Apple release artifacts keep
-# unwinding enabled so a panic can be translated into a fail-closed ABI result
-# instead of crossing the C boundary or aborting the host application.
-[profile.ios-release]
-inherits = "release"
-panic = "unwind"

@@ -28,7 +28,7 @@ from verify_cargo_git_policy import (
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "extension/THIRD_PARTY_NOTICES.txt"
 OUTPUT_SHA256 = ROOT / "scripts/third-party-notices.sha256"
-SCHEMA = "3"
+SCHEMA = "4"
 LOCKED_INPUT_PATHS = (
     "scripts/generate-third-party-notices.py",
     "scripts/verify_cargo_git_policy.py",
@@ -70,7 +70,6 @@ RUST_SHIPPING_TARGETS = (
 # family and contain the project license texts named by the package manifest.
 RUST_LICENSE_FILE_FALLBACKS = {
     ("asn1-rs-impl", "0.2.0"): ("asn1-rs", "0.7.2"),
-    ("jni-sys-macros", "0.4.1"): ("jni-sys", "0.4.1"),
 }
 
 
@@ -394,7 +393,7 @@ def generate() -> str:
         "below is generated from the locked non-development Cargo dependency closures reachable",
         "from hns-chromium-native-host on every supported desktop target. Cargo build-time",
         "dependencies are retained conservatively. Workspace-owned HNS DANE Browser crates and",
-        "test-only, lint, mobile, fuzz, and snapshot-exporter dependencies are excluded.",
+        "test-only, lint, fuzz, and snapshot-exporter dependencies are excluded.",
         "The extension JavaScript has no third-party runtime package dependency.",
         "",
         "Supported desktop Rust target closure counts:",

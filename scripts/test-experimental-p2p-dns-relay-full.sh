@@ -13,7 +13,7 @@ native browser runtime through local Urkel, DNSSEC, TLSA/DANE, and HTTPS checks.
 The tier mounts the current host Node executable, its glibc directory, and the
 local hsd checkout into the cached Python harness image. It does not download
 or build an hsd image. --preflight performs static checks without daemon access.
---keep retains the topology and Android-facing loopback ports 14038 and 18443.
+--keep retains the topology and host loopback ports 14038 and 18443.
 EOF
 }
 
@@ -24,8 +24,8 @@ COMPOSE_FILE="$HARNESS_DIR/full-compose.yaml"
 CERTIFICATE_GENERATOR="$HARNESS_DIR/generate-origin-certificate.sh"
 HSD_REPO=${HSD_REPO:-"$(CDPATH= cd -- "$REPO_ROOT/.." && pwd -P)/hsd"}
 PYTHON_IMAGE=${PYTHON_IMAGE:-python:3.12-alpine}
-FULL_TIER_ANDROID_P2P_PORT=${FULL_TIER_ANDROID_P2P_PORT:-14038}
-FULL_TIER_ANDROID_ORIGIN_PORT=${FULL_TIER_ANDROID_ORIGIN_PORT:-18443}
+FULL_TIER_HOST_P2P_PORT=${FULL_TIER_HOST_P2P_PORT:-14038}
+FULL_TIER_HOST_ORIGIN_PORT=${FULL_TIER_HOST_ORIGIN_PORT:-18443}
 PREFLIGHT_ONLY=0
 KEEP=0
 
@@ -129,7 +129,7 @@ rm -f -- \
 rmdir "$CERTIFICATE_PREFLIGHT_DIR"
 
 export HSD_REPO PYTHON_IMAGE HOST_NODE HOST_ELF_INTERPRETER HOST_MULTIARCH_DIR
-export FULL_TIER_ANDROID_P2P_PORT FULL_TIER_ANDROID_ORIGIN_PORT
+export FULL_TIER_HOST_P2P_PORT FULL_TIER_HOST_ORIGIN_PORT
 CONFIG_CLIENT=${FULL_TIER_CLIENT:-/bin/true}
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -203,7 +203,7 @@ bash "$CERTIFICATE_GENERATOR" "$ARTIFACT_DIR"
 chmod 1777 "$ARTIFACT_DIR"
 # The disposable key must be readable by a remapped container identity. It is
 # removed after teardown, or retained only while an explicit --keep topology is
-# still using it for the Android-facing HTTPS origin.
+# still using it for the host-published HTTPS origin.
 chmod 0644 "$ARTIFACT_DIR/origin-key.pem"
 export ARTIFACT_DIR
 export COMPOSE_PROJECT_NAME="hns-relay-full-$PPID-$$"
@@ -216,12 +216,8 @@ cleanup() {
     docker compose -f "$COMPOSE_FILE" logs --no-color >"$ARTIFACT_DIR/full-compose.log" 2>&1 || true
     if ((KEEP)); then
       printf 'containers kept: project=%s\n' "$COMPOSE_PROJECT_NAME" >&2
-      printf 'Host P2P endpoint: 127.0.0.1:%s\n' "$FULL_TIER_ANDROID_P2P_PORT" >&2
-      printf 'Host HTTPS endpoint: 127.0.0.1:%s\n' "$FULL_TIER_ANDROID_ORIGIN_PORT" >&2
-      printf 'adb reverse tcp:14038 tcp:%s\n' \
-        "$FULL_TIER_ANDROID_P2P_PORT" >&2
-      printf 'adb reverse tcp:18443 tcp:%s\n' \
-        "$FULL_TIER_ANDROID_ORIGIN_PORT" >&2
+      printf 'Host P2P endpoint: 127.0.0.1:%s\n' "$FULL_TIER_HOST_P2P_PORT" >&2
+      printf 'Host HTTPS endpoint: 127.0.0.1:%s\n' "$FULL_TIER_HOST_ORIGIN_PORT" >&2
     else
       docker compose -f "$COMPOSE_FILE" down --volumes --remove-orphans >/dev/null 2>&1 || true
     fi
@@ -272,9 +268,9 @@ assert_loopback_publication() {
 STARTED=1
 docker compose -f "$COMPOSE_FILE" up -d --wait "${SERVICES[@]}"
 assert_loopback_publication \
-  hsd-owner-good 14038 "$FULL_TIER_ANDROID_P2P_PORT"
+  hsd-owner-good 14038 "$FULL_TIER_HOST_P2P_PORT"
 assert_loopback_publication \
-  full-device-origin 18443 "$FULL_TIER_ANDROID_ORIGIN_PORT"
+  full-device-origin 18443 "$FULL_TIER_HOST_ORIGIN_PORT"
 docker compose -f "$COMPOSE_FILE" run --rm --no-deps full-provision \
   2>&1 | tee "$ARTIFACT_DIR/full-provision.log"
 docker compose -f "$COMPOSE_FILE" run --rm --no-deps full-browser \

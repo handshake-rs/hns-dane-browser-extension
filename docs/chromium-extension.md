@@ -2,112 +2,72 @@
 
 ## Scope
 
-The Manifest V3 extension routes every ordinary DNS hostname used by
-HTTP/HTTPS/WS/WSS through an authenticated IPv4-loopback HTTP/CONNECT proxy.
-Rust generates syntax-only PAC schema 3. It uses no IANA suffix list and does
-no resolver work; special-use names, malformed names, non-web schemes, and IP
-literals remain `DIRECT` and are independently rejected if they reach the
-native DANE-browser admission mode.
+The Manifest V3 extension and Rust native host support Chrome, Chromium, Edge,
+Brave, Vivaldi, and Opera on Linux, macOS, and Windows.
 
-The native request boundary resolves the complete hostname independently
-through HNS and ICANN. It retains one complete plan per root, including
-A/AAAA/CNAME, HTTPS/SVCB, the effective service port and transport, and TLSA:
+Rust generates syntax-only PAC schema 3. Every ordinary DNS hostname used by
+HTTP, HTTPS, WS, or WSS is sent to an authenticated IPv4-loopback proxy.
+Because routing occurs at the browser proxy boundary, the same policy covers
+initial pages, redirects, subresources, Service Workers, downloads, and
+WebSockets.
 
-- HNS only selects HNS;
-- ICANN only selects ICANN;
-- matching plans are convergent;
-- different plans apply a persistent sticky binding when one exists, otherwise
-  the first-use ICANN default;
-- authenticated absence in both roots is a resolution failure;
-- any timeout, bogus or indeterminate DNSSEC result, malformed response, or
-  other root failure makes classification indeterminate and fails closed.
+The PAC does not classify namespaces and contains no IANA suffix decision,
+resolver call, socket, DoH request, or fallback. Rust resolves the complete
+hostname through HNS and ICANN, then records HNS-only, ICANN-only, convergent,
+divergent, neither, or indeterminate. The IANA snapshot is a hint only. Bogus
+or indeterminate DNSSEC fails closed and is never converted to absence.
 
-The IANA snapshot may remain an internal scheduling hint, but it is not an
-authority boundary and cannot select or bypass a namespace.
+For a selected ICANN HTTPS or WSS plan, Rust derives and validates the TLSA
+owner for the effective port and transport. Secure supported TLSA is enforced;
+authenticated denial or an unsigned delegation uses WebPKI; bogus DNSSEC,
+malformed data, and resolver failure fail closed. TCP applications use
+`_<port>._tcp.<host>` and HTTPS/SVCB-selected HTTP/3 uses
+`_<port>._udp.<host>`. The UI describes this as `DANE via ICANN DoH`.
 
-Each root plan queries and validates both A and AAAA, requires their
-alias/terminal-owner paths to agree, and retains the complete deterministic
-endpoint set. A whole-name NXDOMAIN can terminate that root; NODATA for one
-family cannot hide the other. The Gateway dials only the selected plan and
-performs no later resolver lookup that could introduce an omitted address.
-Consequently, roots with matching A but different AAAA results are divergent.
+The five canonical browser contracts are pinned to
+`handshake-rs/hns-dane-engine` revision
+`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`.
 
-Persistent namespace selection treats HTTPS/WSS and HTTP/WS as paired security
-origins for the same host and effective port, so a page and its WebSocket
-cannot select different roots merely because their wire schemes differ. The
-actual scheme remains in each plan and decision fingerprint.
+## Security-result boundary
 
-The native host owns sync, HNS proof validation, delegated DNSSEC, TLSA/DANE,
-origin transport, namespace bindings, proxy credentials, certificate issuance,
-policy revisions, and monotonic runtime status. JavaScript owns only browser
-APIs, native-message transport, bounded settings, and UI.
+The native host owns synchronization, Handshake proof validation, delegated
+DNSSEC, ICANN validating DoH, TLSA/DANE, namespace bindings, proxy
+credentials, certificate issuance, policy revisions, and monotonic runtime
+status. JavaScript owns browser APIs, native-message framing, bounded settings,
+and presentation.
 
-No production path sends an HNS lookup to a public recursive resolver or
-accepts WebPKI for a selected HNS HTTPS plan. For a selected ICANN HTTPS/WSS
-plan, Rust derives the TLSA owner from the effective origin port and transport,
-queries through validating ICANN DoH, and applies one closed decision:
+Every request uses one admission stamp bound to its exact runtime session,
+runtime generation, policy generation, and monotonic event. Response heads,
+streamed and file-backed bodies, downloads, and tunnels must still hold that
+authority at publication. Stop, policy update, readiness loss, and generation
+rotation invalidate earlier work.
 
-- a securely present supported TLSA RRset is enforced;
-- authenticated TLSA absence uses WebPKI;
-- an unsigned/insecure delegation ignores all unsigned TLSA bytes and uses
-  WebPKI;
-- bogus or indeterminate DNSSEC, resolver failure, and malformed responses
-  fail closed and are never converted to absence.
+The proxy removes private internal metadata before sending a response to the
+browser. The native host publishes only a sanitized, checked security result.
+The extension requires an exact session/generation/policy/event match before
+rendering it. A newer observation without exact canonical evidence clears the
+older result and reports unavailable rather than synthesizing state.
 
-HTTP/1.1, HTTP/2, and WSS use `_port._tcp.host`; HTTPS/SVCB-selected HTTP/3
-uses `_port._udp.host`. Status calls this path `DANE via ICANN DoH`.
+## Browser policy
 
-ICANN plan freshness is bounded by the earliest expiry across every retained
-address, alias, HTTPS/SVCB, denial, and TLSA observation, including RRSIG
-expiration. Because the legacy HNS delegated resolver does not yet expose
-exact RR/RRSIG expiry, a plan that uses delegated HNS DNS is conservatively
-reusable for at most one second; direct Urkel-only evidence retains its
-anchor-bounded lifetime.
+The options page has one experimental P2P DNS-relay requester checkbox:
 
-The old stateless-DANE parser/transport capability is not an active Chromium
-feature in this checkpoint. The atomic dual-root plan requires live
-DNSSEC-secure TLSA for selected HNS HTTPS and fails closed before certificate
-evidence can authorize a TLS connection. Re-enabling stateless DANE requires a
-typed trust policy in the shared plan contract and remains a release blocker
-for that feature claim.
+- `false` maps to requester policy `Disabled`;
+- `true` maps to direct-authority-first requester policy `Auto`.
 
-## Rust-owned security results
+It is explicit browser consent to consume an untrusted DNS transport. It does
+not enable opaque relay serving, an output node, or any other provider
+service. This Chromium product advertises no such service and all provider
+roles are off.
 
-The loopback proxy observes typed internal response metadata before removing
-the private `X-HNS-*` fields from the browser-visible response. The native
-host converts that observation into security-result schema 3. Each result is
-bound to the exact runtime session, runtime generation, policy generation, and
-the request's exact monotonic admission event. Callback completion order cannot
-replace that admission order. A proxy stop or policy restart clears all
-retained results before revoking the old proxy generation.
-
-The result reports the five-way namespace outcome, selected root and reason,
-each root's state, network and chain-currentness anchor, actual selected DNS
-transport, local HNS-proof state, local DNSSEC state, TLSA state, DANE state,
-peer/proxy/target identities where applicable, privacy policy, registry
-profile, and fallback/separation outcomes. Divergence is visible in the popup.
-A relayed result continues to name the delegated nameserver as the authority
-and identifies the relay only as an intermediary.
-
-Only a bounded 32-result in-memory diagnostic window and the latest main-frame
-result are retained. Every security field comes from the checked canonical
-status; the trace may contribute only a bounded diagnostic final-error string.
-The raw trace never crosses the native-messaging boundary because it can
-contain a complete URL and certificate material. When a newer main-frame
-observation has no canonical status, the native host clears the previous
-result and reports a separate unavailable reason instead of synthesizing
-cryptographic state. The popup displays only the sanitized Rust result using
-fixed labels. Before rendering, the service worker requires exact session,
-runtime-generation, policy-generation, and event-sequence values; stale
-results render as unavailable.
-
-The periodic health alarm requests status from the existing generation. It
-does not restart a healthy proxy. Reconnection alone creates a new generation,
-new credentials, and a new PAC installation.
+HNSR is not offered in the UI. HNSR, P2P ODoH, unsupported privacy
+downgrades, and draft wire profiles remain unimplemented and fail closed.
+Historical public-HNS-DoH settings are removed without granting relay
+requester consent.
 
 ## Build
 
-Required development tools are Rust 1.92.0 and Node.js 22 or later.
+Install Rust 1.92.0 and Node.js 22 or later, then run:
 
 ```sh
 cargo +1.92.0 build --release --locked \
@@ -116,12 +76,13 @@ cargo +1.92.0 build --release --locked \
 npm run check:extension
 ```
 
-The unpacked extension is written to `dist/chromium-extension`. The build does
-not bundle a native executable or a trust anchor into the extension.
+The unpacked extension is written to `dist/chromium-extension`. The extension
+bundle does not contain the native executable, a CA private key, or a trust
+anchor.
 
 ## Install
 
-First load `dist/chromium-extension` through the target browser's extensions
+Load `dist/chromium-extension` through the target browser's extension
 developer page and copy its 32-character extension ID. Close every selected
 browser before registering the native host and local CA.
 
@@ -141,27 +102,19 @@ extension\install\install.ps1 `
   -Browser all
 ```
 
-Repeat `--extension-id` on Unix, or pass a PowerShell string array, when store
-and sideloaded builds use different IDs. `--browser` can be repeated with any
-of `chrome`, `chromium`, `edge`, `brave`, `vivaldi`, and `opera`.
+Repeat `--extension-id` on Unix, or provide a PowerShell string array, when
+store and sideloaded builds use different IDs. `--browser` accepts `chrome`,
+`chromium`, `edge`, `brave`, `vivaldi`, `opera`, or `all`.
 
-The Unix installer requires `certutil` on Linux (`libnss3-tools` on
-Debian/Ubuntu or `nss-tools` on Fedora). It uses the current user's NSS
-database. macOS uses the user's login keychain. Windows uses the current
-user's Root store. No system-wide native-host registration is performed.
+Linux requires `certutil` from `libnss3-tools` or `nss-tools` and modifies only
+the current user's NSS database. macOS uses the user's login keychain. Windows
+uses the current user's Root store. Native-host registration is user-level.
 
-Installing a root CA is security-sensitive. This CA is generated independently
-for each installation, its P-256 private key is stored only in the native
-host's mode-0600 data bundle on Unix, and the Rust issuer creates only
-exact-host, short-lived leaf certificates after native DNS-name admission.
-The extension will not activate its PAC until the platform trust command
-succeeds and the installer writes the matching SHA-256 marker.
-
-The browser registration locations follow the native-messaging host contracts
-published by [Chrome](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging),
-[Microsoft Edge](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging),
-and [Opera](https://help.opera.com/en/extensions/message-passing/). Brave and
-Vivaldi use their Chromium user-profile `NativeMessagingHosts` directories.
+The installer creates one P-256 CA per installation. Its private key remains
+in the native host's protected data bundle. Rust issues only exact-host,
+short-lived leaf certificates after native name admission. The extension does
+not activate the PAC until platform trust installation succeeds and the
+matching SHA-256 marker exists.
 
 ## Uninstall
 
@@ -177,128 +130,57 @@ or:
 extension\install\uninstall.ps1 -Browser all
 ```
 
-The uninstaller removes only this host's per-browser registrations, its exact
-per-install trust anchor, native executable, CA key material, marker, chain
-state, cache, and other extension runtime data. The browser removes the
-extension-owned proxy setting when the extension is disabled or uninstalled;
-the service worker also clears it during orderly suspension.
+The uninstaller removes this host's browser registrations, exact per-install
+trust anchor, native executable, key material, marker, chain state, cache, and
+runtime data. The browser removes extension-owned proxy settings when the
+extension is disabled or uninstalled; orderly suspension also clears them.
 
-## Security and recovery invariants
+## Recovery and security invariants
 
-- Native messages use schema version 1, bounded request IDs, bounded
-  native-endian frames, one active port, and monotonic event sequence numbers.
-- Windows switches inherited standard streams to binary mode before reading a
-  frame.
-- The generated PAC contains no `dnsResolve`, socket, DoH, or fallback path.
-- PAC schema 3 sends every ordinary HTTP/HTTPS/WS/WSS DNS hostname to the
-  native gateway, so main frames, redirects, subresources, Service Workers,
-  downloads, and WebSockets share the same dual-root request-boundary policy.
-- Namespace decision fingerprints partition connection pools, TLS verifier and
-  resumption state, and Alt-Svc state. Records from different roots are never
-  mixed into one plan.
-- The live HNS delegated resolver follows the shared plan's direct-authority
-  order: UDP, TCP fallback, authenticated authoritative DoH, then any enabled
-  P2P DNS-relay fallback.
-- HTTPS/WSS and HTTP/WS share their persistent namespace binding at equal host
-  and effective port, while retaining distinct request-plan fingerprints.
-- Proxy authentication is accepted only for the active `127.0.0.1` generation.
-- CA-not-installed, host disconnect, malformed response, unsupported policy,
-  PAC installation failure, and proxy restart all clear browser proxy state.
-- Service-worker restart reconnects through `hello` and starts a fresh proxy
-  generation with fresh credentials.
-- A live health check preserves its current generation; stale or malformed
-  status clears the PAC and credentials before reconnecting.
-- Security UI and diagnostics consume only sanitized Rust results from the
-  current session/runtime/policy tuple. JavaScript never infers cryptographic
-  state from browser-visible headers.
-- Historical public-HNS-DoH settings are removed without granting P2P relay
-  consent.
-- The existing P2P DNS-relay checkbox remains an independent requester opt-in
-  in this extension schema. Rust maps it to the canonical shared policy's
-  `Disabled` or direct-authority-first `Auto` requester mode. This browser
-  product opts out of the ecosystem's default-on opaque provider-relay role.
-  Output/target roles remain separate default-off opt-ins and are not enabled
-  by requester settings. HNSR is not offered as an extension setting; legacy
-  non-off HNSR requests, P2P ODoH, privacy downgrade, and draft wire profiles
-  remain fail-closed rather than silently downgrading.
-- A policy update is written to extension storage only after the native host
-  has accepted it and returned an active proxy generation.
+- Native messages use bounded schema-1 frames, request IDs, and one active
+  port.
+- The PAC contains no DNS or fallback logic.
+- Proxy authentication is valid only for the active `127.0.0.1` generation.
+- A healthy status check preserves the current generation; reconnect creates
+  fresh credentials and reinstalls the PAC.
+- CA-not-installed, host disconnect, malformed native response, rejected
+  policy, PAC installation failure, or proxy restart clears proxy state.
+- Namespace fingerprints partition pools, TLS verification and resumption, and
+  Alt-Svc state.
+- Selected HNS HTTPS never falls back to WebPKI or a public recursive HNS
+  resolver.
+- Selected ICANN HTTPS applies generic validating-DoH TLSA policy to every DNS
+  host, not a hostname allowlist.
+- JavaScript never infers DNSSEC, TLSA, DANE, or namespace state from
+  browser-visible headers.
+- Policy storage is updated only after native acceptance and an active proxy
+  generation are returned.
 
-## Qualification evidence
+## Qualification
 
-The 2026-07-26 shared-policy checkpoint passed:
+Run the portable release gates:
 
 ```sh
-cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml \
-  --workspace --all-targets
-cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
-  --workspace --all-targets -- -D warnings
-cargo +1.92.0 fmt --manifest-path rust/Cargo.toml --all -- --check
-python3 -m unittest tests.test_cargo_git_policy tests.test_ci_changed_targets
+git diff --check
+python3 -m unittest -v tests/test_cargo_git_policy.py
 python3 scripts/verify_cargo_git_policy.py
 python3 scripts/generate-third-party-notices.py --check
+./scripts/check-version-consistency.sh
+./scripts/check-runtime-boundaries.sh
+./scripts/verify-supply-chain.sh
+cargo +1.92.0 fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
+  --workspace --all-targets -- -D warnings
+cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
+cargo +1.92.0 build --locked --release \
+  --manifest-path rust/Cargo.toml -p hns-chromium-native-host
 npm run check:extension
 ```
 
-The final Chromium checkpoint passed 49 gateway, 154 loopback-proxy, 173
-browser-runtime, 17 native-host, 65 resolver, and 56 transport tests. The
-extension gate passed all 16 Node tests, including isolated Linux
-install/uninstall, Windows registration/removal coverage, PAC parity, native
-messaging, stale-generation rejection, health-generation preservation, and
-the unpacked MV3 build. The native suite also drives one production Neither
-request through the authenticated loopback response head, metadata observer,
-canonical status mapper, schema-v3 serializer, and the actual JavaScript
-validator. Socket-backed Rust tests require permission to bind loopback in a
-restricted sandbox; they passed with that local access. The full Chromium
-workspace also passed warning-denied Clippy and rustfmt.
+A signed release still requires native installation, browsing, restart,
+upgrade, and complete-removal testing on supported Windows and macOS versions
+and current stable builds of all six browsers. Store signing, review, and
+published extension IDs are distribution gates, not source-build evidence.
 
-The historical cross-platform `./scripts/check.sh` wrapper is not a release
-gate for this extraction because it still contains mobile packaging and ABI
-workflows. Its exact Cargo Git-source and notice checks are current, but the
-Chromium-specific commands above remain the authoritative local checkpoint.
-The active notice generator inventories the locked native-host closures for
-Linux, macOS, and Windows. `extension/THIRD_PARTY_NOTICES.txt` is checksummed,
-copied into the unpacked extension, and installed beside the native host.
-
-## Remaining integration boundary
-
-This clone still contains its product-specific `hns-chromium-platform-runtime`,
-`hns-gateway`, and `hns-transport` implementations. TLSA owner derivation,
-validating-DoH trust decisions, dual-root namespace selection, and the typed
-requester/provider transport policy now consume the canonical
-`hns-browser-runtime`, `hns-browser-observability`, `hns-icann-dane`,
-`hns-namespace-resolution`, and `hns-resolution-policy` crates through
-immutable Git dependencies on
-`handshake-rs/hns-dane-engine` commit
-`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`. The surrounding gateway,
-resolver adapter, and transport integration remain historical clone code
-pending broader engine consolidation.
-The Chromium adapter embeds the canonical session-bound authority and
-bridge-authorization boundary from `hns-browser-runtime`. A fresh authenticated
-listener may be bound while headers are still syncing, but it remains
-non-admitting: every request revalidates factual header currentness and proof
-service readiness before canonical activation. Policy, stop, readiness, and
-proxy-generation changes invalidate stamped work, origin streams, staged
-downloads, tunnels, typed status, and the final loopback response-head
-publication permit.
-Checked `hns-browser-observability` status is assembled only from the selected
-typed namespace plan and the exact per-request DNS transport event. Cached or
-legacy paths without exact transport evidence, and P2P relay paths without a
-negotiated registry fingerprint and protocol version, report an explicit
-typed-unavailable status rather than fabricated identity. This checkpoint does
-not claim that the Chromium product adapter has been replaced or that the
-canonical contract is a registry-published dependency. That consolidation, P2P ODoH,
-HNSR, and non-stable experimental wire profiles remain fail-closed work.
-
-The retained Android/iOS source and FFI directories are historical and excluded
-from the Cargo workspace/release graph. Mobile dual-root and ICANN-DANE
-qualification belongs to the separate canonical mobile repository; this
-Chromium checkpoint makes no all-browser coverage claim.
-
-## Release gates still requiring target hardware
-
-Linux unit and isolated installer tests run in this repository. Before a
-signed release, run the installer, browsing, restart, upgrade, and uninstaller
-matrix on supported Windows and macOS versions and on current stable releases
-of all six browsers. Store signing, review, and published extension IDs are
-distribution gates and are intentionally not fabricated by the source build.
+Current mobile qualification and release instructions are maintained only in
+[`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).

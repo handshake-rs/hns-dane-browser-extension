@@ -2,62 +2,76 @@
 
 Last audited: 2026-07-26
 
-> Most mobile evidence below is historical. The active workflow in this
-> extraction is Chromium-only: it always runs repository/supply-chain policy,
-> the Rust workspace and release native-host build, the Node extension
-> lint/tests/build, and a required aggregate gate. Android, Apple, TestFlight,
-> and screenshot jobs were removed from this repository's workflow graph.
+## Scope
 
-## Configured and Local Gates
+This audit covers the Chromium extension, Rust native host, active Cargo
+workspace, user-level installers, and generated desktop notices. Mobile build
+and release evidence is maintained in
+[`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-- The checked-in GitHub Actions workflow always runs the Chromium policy, Rust/native-host, and extension gates. Its permissions are read-only, release secrets are not provided, every non-local `uses:` reference is pinned to a full commit SHA, checkout credentials are not persisted, and concurrent runs on the same ref are cancelled. Historical evidence: the earlier `0.4.1` cross-platform tree passed every selected job in [run 29477163745](https://github.com/Denuo-Web/hns-dane-browser/actions/runs/29477163745); that run does not validate this checkpoint.
-- Dependabot watches GitHub Actions and the active Cargo workspace weekly.
-- Rust uses toolchain `1.92.0`; metadata, build, test, Clippy, and cargo-deny commands use the committed root lock with `--locked`. Registry packages carry Cargo checksums.
-- The root workspace lock contains exactly five reviewed Cargo Git packages: `hns-browser-observability`, `hns-browser-runtime`, `hns-icann-dane`, `hns-namespace-resolution`, and `hns-resolution-policy`, all from immutable `handshake-rs/hns-dane-engine` revision `a03648ec85a115362ebc2ab24bb9ea0f1be127fc`. The dedicated verifier and nine negative/positive policy tests reject another package, URL, declaration location, alias, moving selector, or lock revision.
-- cargo-deny permits only the canonical engine Git URL and reviews the active workspace's licenses, advisories, bans, and sources.
-- The Chromium notice generator takes the union of the locked non-development `hns-chromium-native-host` dependency closures for Linux, macOS, and Windows. It reproduces registry and canonical engine license text, fingerprints the active manifests and lock, and commits a full-asset SHA-256.
-- `extension/THIRD_PARTY_NOTICES.txt` is copied into the unpacked extension build and beside the installed native host on Linux, macOS, and Windows. CI verifies it without requiring a dependency cache.
-- The active workflow runs the exact-source policy tests/verifier, notice integrity, cargo-deny, workspace formatting/Clippy/tests, a release native-host build, all extension tests, and the unpacked MV3 build. Its required aggregate job fails unless every gate succeeds.
-- Historical mobile supply-chain scripts and inputs remain in this clone pending the reviewed repository trim. They are not Chromium release authority.
+## Locked inputs and policy
 
-## Audit Results
+- Rust is pinned to toolchain 1.92.0.
+- Cargo metadata, build, test, Clippy, cargo-deny, and notice generation use
+  the committed `rust/Cargo.lock` with `--locked`.
+- The only allowed Cargo Git source is
+  `https://github.com/handshake-rs/hns-dane-engine.git`.
+- Exactly five canonical packages are allowed from that source:
+  `hns-browser-runtime`, `hns-browser-observability`, `hns-icann-dane`,
+  `hns-namespace-resolution`, and `hns-resolution-policy`.
+- Every canonical package is locked to revision
+  `a03648ec85a115362ebc2ab24bb9ea0f1be127fc`.
+- The source-policy verifier and its negative tests reject extra packages,
+  alternate URLs, aliases, moving selectors, or a different lock revision.
+- cargo-deny reviews active licenses, advisories, bans, and sources.
+- Node.js 22 or later is required for extension lint, tests, and the unpacked
+  Manifest V3 build.
+- External GitHub Actions are pinned to full commit SHAs and workflow
+  permissions are read-only.
+- Dependabot watches GitHub Actions and Cargo.
 
-### Current Chromium `0.5.0` Candidate
+## Notices
 
-- The extension, native host, and Rust workspace declare `0.5.0`.
-- The active native-host graph consumes the five exact-pinned engine contracts above. Direct authoritative UDP/TCP precedes authenticated authoritative DoH and policy-admitted relay fallback.
-- The generated desktop notice inventories 166 external Cargo components for Linux and macOS and 171 for Windows; its committed SHA-256 is recorded in `scripts/third-party-notices.sha256`.
-- Focused qualification results for the final source checkpoint are retained in `docs/chromium-extension.md` and the ecosystem evidence repository. Hosted current-main CI remains required before release.
+The notice generator inventories the locked non-development dependency closure
+of `hns-chromium-native-host` for Linux, macOS, and Windows. It records license
+text for registry and canonical engine dependencies, fingerprints active
+manifests and the lock, and checks the committed notice digest.
 
-### Historical mobile `0.5.0` evidence
+`extension/THIRD_PARTY_NOTICES.txt` is copied into the unpacked extension and
+installed beside the native host. A notice mismatch is a release failure.
 
-- Android declares `0.5.0` / code 40 and the shared Rust workspace declares `0.5.0`. This is not a metadata-only release: it changes the shared resolver/P2P runtime and Android behavior.
-- The complete local `scripts/check.sh` gate passed on 2026-07-16, including supply-chain and version checks, warning-denied Clippy, all three cargo-deny scopes, the full Rust workspace tests, fuzz smoke, iOS C ABI tests, and the header-snapshot exporter. The final requester review and focused P2P suite also passed after closing query-profile, handshake-bound, forward-status, and peer-height issues.
-- Android passed 192 unit tests plus debug and release lint with no errors. A clean committed-tree build using Gradle 9.6.1, AGP 9.2.1, compile/target SDK 37, build-tools AAPT2 36.1.0, and NDK `28.2.13676358` passed R8/resource shrinking and the unsigned and upload-signed bundle gates.
-- The scripted isolated topology and bounded load tier passed, followed by the real four-`hsd` regtest tier at height 91 with a registered `relaytest` name, four matching chain/tree states, verified Urkel inclusion, local DNSSEC and DANE, HTTPS 200, bad-to-good relay failover, and no legacy DoH sentinel contact. The focused `hsd` responder suite passed 47 tests with ESLint clean.
-- Hosted path-policy, Rust, cold-cache Android, Apple, and required-result jobs are pending for the exact candidate commit.
-- The final upload-signed code 40 APK verifies with APK Signature Scheme v2 and the established single RSA-4096 certificate SHA-256 `D2:2F:F3:25:17:53:11:EB:E6:D6:E9:3D:A3:FD:F5:1D:84:89:22:A1:B8:1A:CB:B3:2F:22:39:CC:F9:4A:51:14`; it passes 16 KiB ZIP alignment. Its SHA-256 is `bff5ba468b0c5ad2d134603127f089ad6fdc9e9b5ceab921825e570cfefd60fb`.
-- The final upload-signed AAB passed content-signature, exact ABI inventory, 16 KiB ELF alignment, hardening, stripping, matching Build ID/debug-symbol, local-path, mapping, and notices gates. Its SHA-256 is `96c5926c559881ba74e380eea062dce3de6cefaf91d3753882e528cccc96e1d0`.
-- The separate debug test APK uses package `com.denuoweb.hnsdane.relaytest`, version `0.5.0-relay-test` / code 40, and SHA-256 `019aeb82b84de878716637fd053321a4590e0c384de3010e885af7e154803990`.
-- The exact signed release could not be installed because the previously attached Pixel 9 physically disconnected from USB before the install step. Device acceptance remains pending and is not inferred from build or host-side tests.
-- Third-party notices and their committed fingerprint were regenerated for the `0.5.0` Rust/dependency graph and passed the checked-in integrity gate.
-- Release signing and Play upload remain intentional secret-dependent gates. CI should build and structurally verify the release variant without signing credentials and must not publish.
+## Required portable gates
 
-### Historical `0.4.1` Evidence
+```sh
+python3 -m unittest -v tests/test_cargo_git_policy.py
+python3 scripts/verify_cargo_git_policy.py
+python3 scripts/generate-third-party-notices.py --check
+./scripts/check-version-consistency.sh
+./scripts/check-runtime-boundaries.sh
+./scripts/verify-supply-chain.sh
+cargo +1.92.0 fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
+  --workspace --all-targets -- -D warnings
+cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
+cargo +1.92.0 build --locked --release \
+  --manifest-path rust/Cargo.toml -p hns-chromium-native-host
+npm run check:extension
+```
 
-- `scripts/check.sh` passed locally on 2026-07-15 for Android `0.4.1` with shared Rust engine `0.4.0`, including supply-chain/version checks, formatting, clippy with warnings denied, all three cargo-deny scopes, the complete Rust test matrix, fuzz-target compilation, and the header-snapshot exporter.
-- The final `0.4.1` Android build passed 187 unit tests, debug and release lint with zero errors, R8/resource shrinking, upload signing, APK signature and 16 KiB ZIP-alignment verification, and both release-bundle gates. It used Gradle 9.6.1 / AGP 9.2.1, compile/target SDK 37, NDK `28.2.13676358`, and build-tools AAPT2 36.1.0. The signed AAB SHA-256 was `4b2cc8b1da7700675eedb1ed2319ccafd9541acc7114abff9bd60eb6399b4267`; the signed APK SHA-256 was `a5a9d50d5b19302af488f7f5e6c68281364070edc7edcb14e16dbb1e1a5d61a2`.
-- Independent artifact inspection confirmed both installed JNI libraries were NDK r28c API 34 ET_DYN files, stripped, 16 KiB-aligned, RELRO, non-executable-stack, immediate-binding, text-relocation-free, and paired with unstripped `.dbg` files carrying the same Build IDs. No checkout/home/NDK path was found; the signed release APK passed 16 KiB ZIP alignment.
-- The shared-runtime tree passed 5/5 connected Pixel instrumentation tests plus live `https://denuoweb/` and `https://aboutlife/` DNSSEC/DANE acceptance. The exact signed `0.4.1` APK subsequently upgraded the Pixel 9 from code 38 to code 39 and cold-launched its main activity successfully.
-- cargo-deny reported no known advisory, source, or license-policy failures for the shipping workspace, fuzz workspace, or exporter. Duplicate transitive versions and unused allow-list entries remained warnings.
-- No high-confidence secret or secret-bearing filename was found among tracked files.
-- The locally configured upload certificate SHA-256 matched the retained and published `0.4.0` APK signer and the `0.4.1` APK. It still needs an out-of-band comparison with the upload certificate shown by Play Console for the next release.
-- GitHub Actions [run 29477163745](https://github.com/Denuo-Web/hns-dane-browser/actions/runs/29477163745) passed the `0.4.1` code and build-policy tree before the evidence-only documentation update. Actions is disabled and `main` has neither branch protection nor a ruleset, so this is historical execution evidence rather than a continuously enforced control.
+CI has separate policy, Rust/native-host, and extension jobs plus a required
+aggregate result. A release must record the exact commit and exact-current-main
+CI run; historical runs do not qualify later source.
 
-## Residual Risks
+## Residual risks
 
-- This audit pins inputs but does not establish bit-for-bit reproducible APK/AAB output. Runner images, the JDK 21 patch release selected by setup-java, Android SDK packaging, archive timestamps, and signing can still vary. A future release process should compare independently built unsigned artifacts before signing.
-- Gradle verification metadata was generated from artifacts already obtained over the configured HTTPS repositories. Future checksum changes require a deliberate review; the metadata is an integrity pin, not independent provenance proof.
-- cargo-deny relies on the current RustSec advisory database at check time. CI availability or an upstream advisory-database outage can affect results.
-- The local JNI script defaults to and enforces NDK `28.2.13676358`; `HNS_ANDROID_NDK_VERSION` may override that expectation only for an intentional, reviewed toolchain change.
-- The upload certificate fingerprint is public configuration, but its approved value still needs an out-of-band comparison with the Play Console upload certificate before the next release.
+- The audit pins source and package inputs but does not yet establish
+  bit-for-bit reproducible native-host or extension artifacts.
+- Hosted runner images, host C toolchains, operating-system certificate tools,
+  archive metadata, and signing can vary.
+- cargo-deny depends on the RustSec advisory database available at check time.
+- Installer unit tests do not replace real user-level registration, trust,
+  restart, upgrade, and removal tests on Windows and macOS.
+- Store signing and review require external credentials and policy decisions;
+  source CI must not fabricate their completion.
+- An immutable Git revision is stronger than a branch selector but still
+  requires deliberate review before changing the pinned engine commit.

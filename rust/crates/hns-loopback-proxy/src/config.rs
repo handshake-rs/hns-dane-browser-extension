@@ -89,19 +89,15 @@ pub enum LoopbackBind {
 
 /// Determines which browser requests one proxy generation may route.
 ///
-/// The default remains the Android-compatible immutable HNS scope. Chromium
-/// can use `DaneBrowser` behind a mandatory PAC file so every canonical DNS
-/// host reaches the same Rust request boundary for namespace classification,
-/// DNSSEC/TLSA discovery, and origin trust selection. Whole-browser routing is
-/// an explicit opt-in for engines whose proxy configuration cannot express a
-/// DNS-name-only match rule.
+/// `DaneBrowser` is the Chromium release mode: every canonical DNS host
+/// reaches the same Rust request boundary for dual-root resolution,
+/// DNSSEC/TLSA discovery, and origin trust selection. `ScopedHns` remains as a
+/// narrow internal substrate for host-scope unit and integration coverage.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ProxyRoutingMode {
     #[default]
     ScopedHns,
-    HnsOnly,
     DaneBrowser,
-    WholeBrowser,
 }
 
 impl LoopbackBind {
@@ -323,35 +319,6 @@ impl ProxyConfig {
             timeouts: ProxyTimeouts::default(),
             bind: LoopbackBind::default(),
             routing_mode: ProxyRoutingMode::default(),
-        }
-    }
-
-    /// Creates a whole-browser generation. `None` is an explicit deny-all HNS
-    /// policy for an ICANN top-level page; `Some` admits only that immutable
-    /// HNS root and its subdomains.
-    pub fn whole_browser(instance: ProxyInstanceId, hns_scope: Option<HostScope>) -> Self {
-        Self {
-            instance,
-            hns_scope,
-            local_certificate_authority: None,
-            limits: ProxyLimits::default(),
-            timeouts: ProxyTimeouts::default(),
-            bind: LoopbackBind::default(),
-            routing_mode: ProxyRoutingMode::WholeBrowser,
-        }
-    }
-
-    /// Creates a Chromium-style generation which admits any canonical HNS
-    /// name and rejects ICANN, special-use, search, and IP-literal targets.
-    pub fn hns_only(instance: ProxyInstanceId) -> Self {
-        Self {
-            instance,
-            hns_scope: None,
-            local_certificate_authority: None,
-            limits: ProxyLimits::default(),
-            timeouts: ProxyTimeouts::default(),
-            bind: LoopbackBind::default(),
-            routing_mode: ProxyRoutingMode::HnsOnly,
         }
     }
 
@@ -586,15 +553,7 @@ mod tests {
         assert_eq!(config.timeouts(), ProxyTimeouts::default());
         assert!(!format!("{config:?}").contains(scope.root().as_str()));
 
-        let icann_only = ProxyConfig::whole_browser(instance, None);
-        assert_eq!(icann_only.hns_scope(), None);
-        assert_eq!(icann_only.routing_mode(), ProxyRoutingMode::WholeBrowser);
-
-        let hns_only = ProxyConfig::hns_only(icann_only.instance().clone());
-        assert_eq!(hns_only.hns_scope(), None);
-        assert_eq!(hns_only.routing_mode(), ProxyRoutingMode::HnsOnly);
-
-        let dane_browser = ProxyConfig::dane_browser(hns_only.instance().clone());
+        let dane_browser = ProxyConfig::dane_browser(instance);
         assert_eq!(dane_browser.hns_scope(), None);
         assert_eq!(dane_browser.routing_mode(), ProxyRoutingMode::DaneBrowser);
     }

@@ -324,6 +324,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "hns-namespace-resolution"
+version = "0.1.0"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=a03648ec85a115362ebc2ab24bb9ea0f1be127fc#a03648ec85a115362ebc2ab24bb9ea0f1be127fc"
+
+[[package]]
 name = "hns-p2p"
 version = "0.5.0"
 dependencies = [
@@ -342,6 +347,7 @@ dependencies = [
  "hns-core",
  "hns-dane",
  "hns-dnssec",
+ "hns-namespace-resolution",
  "rusqlite",
  "thiserror",
 ]

@@ -32,13 +32,12 @@ use hns_gateway::{
     Gateway, GatewayConfig, GatewayError, GatewayFailure, GatewayRequest, HnsHttpsMode,
 };
 use hns_loopback_proxy::{
-    BackendError as ProxyBackendError, CancellationToken as ProxyCancellationToken, HostScope,
-    HostScopeError, IcannNetwork, IcannNetworkError, InternalResponseMetadata,
-    LocalCertificateAuthority, NoopProxyObserver, NormalizedHost, ProxyBackend, ProxyConfig,
-    ProxyError, ProxyHeader, ProxyInstanceId, ProxyPublicationAuthority, ProxyPublicationPermit,
-    ProxyRequest as LoopbackProxyRequest, ProxyRequestBody, ProxyResponse, ProxyResponseBody,
-    ProxyResponseHead, ProxyResponseMetadataObservation, ProxyResponseMetadataObserver,
-    ProxySessionId, ProxyTunnel, ProxyTunnelIo, ProxyTunnelOpen, RunningProxy,
+    BackendError as ProxyBackendError, CancellationToken as ProxyCancellationToken, HostScopeError,
+    InternalResponseMetadata, LocalCertificateAuthority, NoopProxyObserver, ProxyBackend,
+    ProxyConfig, ProxyError, ProxyHeader, ProxyInstanceId, ProxyPublicationAuthority,
+    ProxyPublicationPermit, ProxyRequest as LoopbackProxyRequest, ProxyRequestBody, ProxyResponse,
+    ProxyResponseBody, ProxyResponseHead, ProxyResponseMetadataObservation,
+    ProxyResponseMetadataObserver, ProxySessionId, ProxyTunnel, ProxyTunnelOpen, RunningProxy,
     SessionIdGenerationError,
 };
 use hns_namespace_resolution::{
@@ -67,10 +66,10 @@ use hns_resolution_policy::{
 use hns_resolver::{
     AuthoritativeDnssecResolver, AuthoritativeDohEndpoint, AuthoritativeDohTlsAuthentication,
     DelegatedResolver, DelegatingResolver, DnsEndpointPolicy, DnsInterceptionStatus, DnsTransport,
-    HnsDelegation, HnsProofProvider, HnsResourceValueProvider, NameClass,
-    PreparedNamespaceResolution, ProvenNameRecords, ResolutionAnswer, ResolutionRequest, Resolver,
-    ResolverError, ResourceValueAnchor, SqliteResourceValueProvider, SystemDnssecVerifier,
-    UdpTcpDnsTransport, browser_icann_tld_snapshot, classify_name, hns_root_label,
+    HnsDelegation, HnsProofProvider, HnsResourceValueProvider, PreparedNamespaceResolution,
+    ProvenNameRecords, ResolutionAnswer, ResolutionRequest, Resolver, ResolverError,
+    ResourceValueAnchor, SqliteResourceValueProvider, SystemDnssecVerifier, UdpTcpDnsTransport,
+    hns_root_label,
 };
 use hns_sync::{
     HeaderSyncCoordinator, HeaderSyncRunner, HeaderSyncRunnerConfig, ProofScheduler, SyncError,
@@ -80,7 +79,7 @@ pub use hns_transport::DEFAULT_MAX_REQUEST_BODY_BYTES;
 use hns_transport::{
     BrowserTlsDecision, OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead,
     OriginTransport, OriginTunnel, ReadWrite, TcpHttpTransport, TlsCertificateInspection,
-    TlsValidation, TlsaOwner, TlsaRecordSource, TlsaTransport, TransportError, TransportLimits,
+    TlsValidation, TlsaOwner, TlsaRecordSource, TlsaTransport, TransportError,
 };
 use hns_urkel::UrkelProofVerifier;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -88,7 +87,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -105,225 +104,10 @@ const MAX_STATIC_RELAY_PEER_ENDPOINT_BYTES: usize = 320;
 const MAX_PENDING_CANONICAL_STATUSES: usize = 128;
 static GATEWAY_BODY_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// Shared browser-facing classification; native shells must not duplicate
-/// the resolver's generated ICANN and special-use namespace policy.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BrowserNameClass {
-    Hns = 0,
-    Icann = 1,
-    Search = 2,
-}
-
-/// Browser-shell namespace class retained at the platform boundary. Dynamic
-/// ICANN DANE admission is scheme-aware and occurs at the shared request
-/// boundary; it is not represented by a synchronous hostname allowlist.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BrowserHostClass {
-    Hns = 0,
-    Icann = 1,
-    NativeGateway = 2,
-    Search = 3,
-}
-
-pub fn classify_browser_name(input: &str) -> BrowserNameClass {
-    match classify_name(input) {
-        NameClass::Hns => BrowserNameClass::Hns,
-        NameClass::Icann => BrowserNameClass::Icann,
-        NameClass::Search => BrowserNameClass::Search,
-    }
-}
-
-pub fn classify_browser_host(input: &str) -> BrowserHostClass {
-    match classify_browser_name(input) {
-        BrowserNameClass::Hns => BrowserHostClass::Hns,
-        BrowserNameClass::Icann => BrowserHostClass::Icann,
-        BrowserNameClass::Search => BrowserHostClass::Search,
-    }
-}
-
-/// Returns the legacy embedded Android document-start policy used to keep
-/// WebSockets native while rejecting cross-scope HNS targets. The extracted
-/// Android tree is not a release target for the dual-root extension milestone;
-/// its scoped proxy must retain this guard until its separate whole-browser
-/// mobile migration is complete.
-pub fn browser_websocket_scope_policy_script() -> &'static str {
-    static SCRIPT: OnceLock<String> = OnceLock::new();
-    SCRIPT.get_or_init(|| {
-        let icann_tlds = browser_icann_tld_snapshot()
-            .lines()
-            .map(|value| format!("'{value}'"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let special_use_suffixes = browser_special_use_suffixes()
-            .iter()
-            .map(|value| format!("'{value}'"))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let mut script = String::with_capacity(icann_tlds.len() + special_use_suffixes.len() + 3_200);
-        script.push_str(
-            r#"(function() {
-  'use strict';
-  if (window.__hnsProxyWebSocketPolicyInstalled) return;
-  window.__hnsProxyWebSocketPolicyInstalled = true;
-  window.__hnsRustNamespacePolicyVersion = 1;
-
-  var NativeWebSocket = window.WebSocket;
-  if (!NativeWebSocket) return;
-  var icannTlds = new Set(["#,
-        );
-        script.push_str(&icann_tlds);
-        script.push_str(
-            r#"]);
-  var specialUseSuffixes = new Set(["#,
-        );
-        script.push_str(&special_use_suffixes);
-        script.push_str(
-            r#"]);
-
-  function normalizeHost(host) {
-    return String(host || '').replace(/^\[/, '').replace(/\]$/, '').replace(/\.+$/, '').toLowerCase();
-  }
-
-  function isIpLiteral(host) {
-    if (!host) return false;
-    if (host.indexOf(':') !== -1) return /^[0-9a-f:.]+$/i.test(host);
-    var parts = host.split('.');
-    if (parts.length !== 4) return false;
-    return parts.every(function(part) {
-      if (!/^[0-9]{1,3}$/.test(part)) return false;
-      var value = Number(part);
-      return value >= 0 && value <= 255;
-    });
-  }
-
-  function isValidDnsHost(host) {
-    if (!host || host.length > 253) return false;
-    return host.split('.').every(function(label) {
-      return label.length > 0 &&
-        label.length <= 63 &&
-        label.charAt(0) !== '-' &&
-        label.charAt(label.length - 1) !== '-' &&
-        /^[a-z0-9-]+$/i.test(label);
-    });
-  }
-
-  function requiresHnsResolution(host) {
-    host = normalizeHost(host);
-    if (!isValidDnsHost(host) || isIpLiteral(host)) return false;
-    var labels = host.split('.');
-    var suffix = labels[labels.length - 1];
-    if (specialUseSuffixes.has(suffix)) return false;
-    if (labels.length === 1) return true;
-    return !icannTlds.has(suffix);
-  }
-
-  function inPageScope(targetHost, pageHost) {
-    return targetHost === pageHost || targetHost.endsWith('.' + pageHost);
-  }
-
-  function ProxyScopedWebSocket(url, protocols) {
-    if (!(this instanceof ProxyScopedWebSocket)) {
-      throw new TypeError("Failed to construct 'WebSocket': Please use the 'new' operator.");
-    }
-    var pageUrl;
-    var targetUrl;
-    try {
-      pageUrl = new URL(window.location.href);
-      targetUrl = new URL(url, window.location.href);
-    } catch (error) {
-      return protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
-    }
-    var pageHost = normalizeHost(pageUrl.hostname);
-    var targetHost = normalizeHost(targetUrl.hostname);
-    if (requiresHnsResolution(targetHost) &&
-        (!requiresHnsResolution(pageHost) || !inPageScope(targetHost, pageHost))) {
-      throw new DOMException('HNS WebSocket target is outside the active proxy scope.', 'SecurityError');
-    }
-    return protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
-  }
-
-  ProxyScopedWebSocket.prototype = NativeWebSocket.prototype;
-  ProxyScopedWebSocket.CONNECTING = NativeWebSocket.CONNECTING;
-  ProxyScopedWebSocket.OPEN = NativeWebSocket.OPEN;
-  ProxyScopedWebSocket.CLOSING = NativeWebSocket.CLOSING;
-  ProxyScopedWebSocket.CLOSED = NativeWebSocket.CLOSED;
-  window.WebSocket = ProxyScopedWebSocket;
-})();"#,
-        );
-        script
-    })
-}
-
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum ChromiumPacError {
     #[error("the Chromium HNS proxy port must be nonzero")]
     ZeroProxyPort,
-}
-
-/// Generates the mandatory Chromium PAC program from the exact namespace
-/// snapshots used by Rust classification. The PAC routes only HNS names to the
-/// authenticated loopback proxy and never performs a DNS lookup itself.
-pub fn chromium_hns_only_pac_script(proxy_port: u16) -> Result<String, ChromiumPacError> {
-    if proxy_port == 0 {
-        return Err(ChromiumPacError::ZeroProxyPort);
-    }
-
-    let icann_tlds = pac_lookup_object(browser_icann_tld_snapshot().lines());
-    let special_use = pac_lookup_object(browser_special_use_suffixes().iter().copied());
-    Ok(format!(
-        r#"// Generated by hns-browser-runtime; schema {CHROMIUM_PAC_SCHEMA_VERSION}.
-var HNS_ICANN_TLDS = {{{icann_tlds}}};
-var HNS_SPECIAL_USE = {{{special_use}}};
-
-function hnsNormalizeHost(host) {{
-  return String(host || "").replace(/^\[/, "").replace(/\]$/, "").replace(/\.+$/, "").toLowerCase();
-}}
-
-function hnsIsIpLiteral(host) {{
-  if (!host) return false;
-  if (host.indexOf(":") !== -1) return /^[0-9a-f:.]+$/i.test(host);
-  var parts = host.split(".");
-  if (parts.length !== 4) return false;
-  for (var index = 0; index < parts.length; index += 1) {{
-    if (!/^[0-9]{{1,3}}$/.test(parts[index])) return false;
-    var value = Number(parts[index]);
-    if (value < 0 || value > 255) return false;
-  }}
-  return true;
-}}
-
-function hnsIsValidDnsHost(host) {{
-  if (!host || host.length > 253) return false;
-  var labels = host.split(".");
-  for (var index = 0; index < labels.length; index += 1) {{
-    var label = labels[index];
-    if (!label || label.length > 63 || label.charAt(0) === "-" ||
-        label.charAt(label.length - 1) === "-" || !/^[a-z0-9-]+$/i.test(label)) {{
-      return false;
-    }}
-  }}
-  return true;
-}}
-
-function hnsRequiresResolution(host) {{
-  host = hnsNormalizeHost(host);
-  if (!hnsIsValidDnsHost(host) || hnsIsIpLiteral(host)) return false;
-  var labels = host.split(".");
-  var suffix = labels[labels.length - 1];
-  if (HNS_SPECIAL_USE[suffix] === 1) return false;
-  return labels.length === 1 || HNS_ICANN_TLDS[suffix] !== 1;
-}}
-
-function FindProxyForURL(url, host) {{
-  return hnsRequiresResolution(host)
-    ? "PROXY 127.0.0.1:{proxy_port}"
-    : "DIRECT";
-}}
-"#
-    ))
 }
 
 /// Generates Chromium's mandatory DNS-name gateway PAC. Every canonical DNS
@@ -402,30 +186,6 @@ fn pac_lookup_object<'a>(values: impl Iterator<Item = &'a str>) -> String {
         .join(",")
 }
 
-/// Canonicalizes a DNS host or strict IP literal for proxy status identity.
-/// Exact bracketed IPv6 literals are accepted and returned without brackets.
-pub fn canonical_browser_host(input: &str) -> Option<String> {
-    if let Ok(address) = input.parse::<IpAddr>() {
-        return Some(address.to_string());
-    }
-    if let Some(address) = input
-        .strip_prefix('[')
-        .and_then(|inner| inner.strip_suffix(']'))
-        .and_then(|inner| inner.parse::<Ipv6Addr>().ok())
-    {
-        return Some(address.to_string());
-    }
-    NormalizedHost::parse(input)
-        .ok()
-        .map(|host| host.to_string())
-}
-
-/// Returns the canonical HNS root label only for an HNS-classified input.
-pub fn browser_hns_root_label(input: &str) -> Option<String> {
-    (classify_name(input) == NameClass::Hns)
-        .then(|| hns_root_label(input).ok())
-        .flatten()
-}
 const DNS_CLASS_IN: u16 = 1;
 const DNS_OPT_RECORD_TYPE: u16 = 41;
 const DNS_RCODE_NOERROR: u8 = 0;
@@ -467,15 +227,6 @@ const ICANN_DOH_BOOTSTRAP_ADDRESSES: &[IpAddr] = &[
     IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
     IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001)),
 ];
-const WHOLE_BROWSER_DOH_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const WHOLE_BROWSER_DOH_READ_TIMEOUT: Duration = Duration::from_secs(5);
-const WHOLE_BROWSER_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(6);
-const WHOLE_BROWSER_DOH_IO_POLL: Duration = Duration::from_millis(25);
-const WHOLE_BROWSER_TCP_READ_POLL: Duration = Duration::from_millis(25);
-const WHOLE_BROWSER_DOH_MAX_REQUEST_BODY_BYTES: usize = DEFAULT_DNS_UDP_PAYLOAD;
-const WHOLE_BROWSER_DOH_MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
-const WHOLE_BROWSER_DOH_MAX_RESPONSE_BODY_BYTES: usize = u16::MAX as usize;
-const MAX_WHOLE_BROWSER_CNAME_CHAIN: usize = 8;
 const HNS_GATEWAY_STRICT_MODE_HEADER: &str = "X-HNS-Browser-Strict-Mode";
 const HNS_GATEWAY_DOH_RESOLVER_HEADER: &str = "X-HNS-Browser-DoH-Resolver";
 const HNS_GATEWAY_P2P_DNS_RELAY_HEADER: &str = "X-HNS-Browser-P2P-DNS-Relay";
@@ -1095,12 +846,6 @@ pub struct BrowserProxy {
     statuses: Arc<CanonicalStatusRegistry>,
 }
 
-#[derive(Clone, Copy)]
-enum BrowserProxyAdmission {
-    HnsOnly,
-    DaneBrowser,
-}
-
 impl BrowserProxy {
     pub fn port(&self) -> u16 {
         self.running.endpoint().port()
@@ -1202,269 +947,6 @@ pub struct BrowserRuntime {
 pub struct RuntimeProxyBackend {
     runtime: BrowserRuntime,
     authority_generation: u64,
-}
-
-/// Bounded ICANN DoH resolver and explicit-address TCP dialer used by the
-/// whole-browser proxy. It deliberately has no hostname-based TCP path.
-#[derive(Clone, Copy, Debug, Default)]
-struct WholeBrowserIcannNetwork;
-
-impl IcannNetwork for WholeBrowserIcannNetwork {
-    fn resolve(
-        &self,
-        host: &str,
-        port: u16,
-        cancellation: &ProxyCancellationToken,
-    ) -> Result<Vec<SocketAddr>, IcannNetworkError> {
-        if cancellation.is_cancelled() {
-            return Err(IcannNetworkError::Cancelled);
-        }
-        if classify_name(host) != NameClass::Icann {
-            return Err(IcannNetworkError::ResolutionFailed);
-        }
-        let qname = DnsName::from_ascii(host).map_err(|_| IcannNetworkError::ResolutionFailed)?;
-        let now = Instant::now();
-        let deadline = now
-            .checked_add(WHOLE_BROWSER_RESOLUTION_TIMEOUT)
-            .unwrap_or(now);
-        let mut addresses = Vec::new();
-        let mut successful_query = false;
-        for record_type in [RecordType::A, RecordType::Aaaa] {
-            match resolve_whole_browser_icann_family(&qname, record_type, cancellation, deadline) {
-                Ok(resolved) => {
-                    successful_query = true;
-                    for address in resolved {
-                        let socket = SocketAddr::new(address, port);
-                        if !addresses.contains(&socket) {
-                            addresses.push(socket);
-                        }
-                    }
-                }
-                Err(IcannNetworkError::Cancelled) => return Err(IcannNetworkError::Cancelled),
-                Err(IcannNetworkError::ResolutionFailed | IcannNetworkError::ConnectionFailed) => {}
-            }
-        }
-        if cancellation.is_cancelled() {
-            return Err(IcannNetworkError::Cancelled);
-        }
-        if !successful_query || addresses.is_empty() {
-            return Err(IcannNetworkError::ResolutionFailed);
-        }
-        Ok(addresses)
-    }
-
-    fn connect(
-        &self,
-        address: SocketAddr,
-        timeout: Duration,
-        cancellation: &ProxyCancellationToken,
-    ) -> Result<Box<dyn ProxyTunnelIo>, IcannNetworkError> {
-        if cancellation.is_cancelled() {
-            return Err(IcannNetworkError::Cancelled);
-        }
-        let timeout = timeout.min(WHOLE_BROWSER_DOH_READ_TIMEOUT);
-        if timeout.is_zero() {
-            return Err(IcannNetworkError::ConnectionFailed);
-        }
-        let stream = TcpStream::connect_timeout(&address, timeout)
-            .map_err(|_error| IcannNetworkError::ConnectionFailed)?;
-        if cancellation.is_cancelled() {
-            return Err(IcannNetworkError::Cancelled);
-        }
-        stream
-            .set_nodelay(true)
-            .and_then(|()| stream.set_read_timeout(Some(WHOLE_BROWSER_TCP_READ_POLL)))
-            .and_then(|()| stream.set_write_timeout(Some(timeout)))
-            .map_err(|_error| IcannNetworkError::ConnectionFailed)?;
-        Ok(Box::new(stream))
-    }
-}
-
-fn resolve_whole_browser_icann_family(
-    qname: &DnsName,
-    record_type: RecordType,
-    cancellation: &ProxyCancellationToken,
-    deadline: Instant,
-) -> Result<Vec<IpAddr>, IcannNetworkError> {
-    let is_cancelled = || cancellation.is_cancelled();
-    resolve_whole_browser_icann_family_with_fetch(
-        qname,
-        record_type,
-        ICANN_DOH_BOOTSTRAP_ADDRESSES,
-        &is_cancelled,
-        deadline,
-        |bootstrap, query| {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .filter(|remaining| !remaining.is_zero())
-                .ok_or_else(|| {
-                    TransportError::Io("whole-browser DNS deadline exceeded".to_owned())
-                })?;
-            let transport = TcpHttpTransport::new(
-                WHOLE_BROWSER_DOH_CONNECT_TIMEOUT.min(remaining),
-                WHOLE_BROWSER_DOH_READ_TIMEOUT.min(remaining),
-                whole_browser_doh_transport_limits(),
-            );
-            fetch_doh_message_at_with_control(
-                &transport,
-                &default_icann_doh_endpoint(),
-                bootstrap,
-                query,
-                deadline,
-                is_cancelled,
-            )
-        },
-    )
-}
-
-fn resolve_whole_browser_icann_family_with_fetch<C, F>(
-    qname: &DnsName,
-    record_type: RecordType,
-    bootstrap_addresses: &[IpAddr],
-    is_cancelled: &C,
-    deadline: Instant,
-    mut fetch: F,
-) -> Result<Vec<IpAddr>, IcannNetworkError>
-where
-    C: Fn() -> bool + Sync,
-    F: FnMut(IpAddr, Vec<u8>) -> Result<OriginResponse, TransportError>,
-{
-    let query = build_doh_query(DOH_DNS_ID, qname, record_type)
-        .map_err(|_error| IcannNetworkError::ResolutionFailed)?;
-    for bootstrap in bootstrap_addresses {
-        check_whole_browser_resolution_control(is_cancelled, deadline)?;
-        let response = fetch(*bootstrap, query.clone());
-        let Ok(response) = response else {
-            check_whole_browser_resolution_control(is_cancelled, deadline)?;
-            continue;
-        };
-        check_whole_browser_resolution_control(is_cancelled, deadline)?;
-        if !doh_http_status_success(response.status)
-            || !doh_response_has_dns_message_content_type(&response)
-        {
-            continue;
-        }
-        let Ok(answer) = whole_browser_doh_answer_from_body(qname, record_type, &response.body)
-        else {
-            continue;
-        };
-        return addresses_for_dns_owner(&answer.records, qname, &record_type)
-            .map_err(|()| IcannNetworkError::ResolutionFailed);
-    }
-    Err(IcannNetworkError::ResolutionFailed)
-}
-
-fn check_whole_browser_resolution_control<C>(
-    is_cancelled: &C,
-    deadline: Instant,
-) -> Result<(), IcannNetworkError>
-where
-    C: Fn() -> bool + Sync,
-{
-    if is_cancelled() {
-        return Err(IcannNetworkError::Cancelled);
-    }
-    deadline
-        .checked_duration_since(Instant::now())
-        .filter(|remaining| !remaining.is_zero())
-        .map(|_remaining| ())
-        .ok_or(IcannNetworkError::ResolutionFailed)
-}
-
-const fn whole_browser_doh_transport_limits() -> TransportLimits {
-    TransportLimits {
-        max_request_body_bytes: WHOLE_BROWSER_DOH_MAX_REQUEST_BODY_BYTES,
-        max_response_header_bytes: WHOLE_BROWSER_DOH_MAX_RESPONSE_HEADER_BYTES,
-        max_response_body_bytes: WHOLE_BROWSER_DOH_MAX_RESPONSE_BODY_BYTES,
-    }
-}
-
-fn whole_browser_doh_answer_from_body(
-    qname: &DnsName,
-    record_type: RecordType,
-    body: &[u8],
-) -> Result<ResolutionAnswer, ResolverError> {
-    let message = DnsMessage::parse(body).map_err(|_| ResolverError::InvalidDnsResponse)?;
-    if message.header.flags.truncated() || message.header.flags.rcode() != DNS_RCODE_NOERROR {
-        return Err(ResolverError::InvalidDnsResponse);
-    }
-    doh_answer_from_body(DOH_DNS_ID, qname, record_type, body)
-}
-
-fn addresses_for_dns_owner(
-    records: &[ResourceRecord],
-    queried_owner: &DnsName,
-    expected: &RecordType,
-) -> Result<Vec<IpAddr>, ()> {
-    let mut owner = queried_owner.clone();
-    let mut visited = vec![owner.clone()];
-    for depth in 0..=MAX_WHOLE_BROWSER_CNAME_CHAIN {
-        if records.iter().any(|record| {
-            record.name == owner
-                && record.record_type == RecordType::Cname
-                && record.class != DNS_CLASS_IN
-        }) || records.iter().any(|record| {
-            record.name == owner && &record.record_type == expected && record.class != DNS_CLASS_IN
-        }) {
-            return Err(());
-        }
-        let cname_records: Vec<_> = records
-            .iter()
-            .filter(|record| {
-                record.name == owner
-                    && record.record_type == RecordType::Cname
-                    && record.class == DNS_CLASS_IN
-            })
-            .collect();
-        let address_records: Vec<_> = records
-            .iter()
-            .filter(|record| {
-                record.name == owner
-                    && &record.record_type == expected
-                    && record.class == DNS_CLASS_IN
-            })
-            .collect();
-        if !address_records.is_empty() {
-            if !cname_records.is_empty() {
-                return Err(());
-            }
-            let mut addresses = Vec::new();
-            for record in address_records {
-                let address = match expected {
-                    RecordType::A => <[u8; 4]>::try_from(record.rdata.as_slice())
-                        .map(Ipv4Addr::from)
-                        .map(IpAddr::V4)
-                        .map_err(|_error| ())?,
-                    RecordType::Aaaa => <[u8; 16]>::try_from(record.rdata.as_slice())
-                        .map(Ipv6Addr::from)
-                        .map(IpAddr::V6)
-                        .map_err(|_error| ())?,
-                    _ => return Err(()),
-                };
-                if !addresses.contains(&address) {
-                    addresses.push(address);
-                }
-            }
-            return Ok(addresses);
-        }
-        let [record] = cname_records.as_slice() else {
-            return if cname_records.is_empty() {
-                Ok(Vec::new())
-            } else {
-                Err(())
-            };
-        };
-        if depth == MAX_WHOLE_BROWSER_CNAME_CHAIN {
-            return Err(());
-        }
-        let (target, end) = DnsName::parse_wire(&record.rdata, 0).map_err(|_error| ())?;
-        if end != record.rdata.len() || visited.contains(&target) {
-            return Err(());
-        }
-        visited.push(target.clone());
-        owner = target;
-    }
-    Err(())
 }
 
 impl std::fmt::Debug for RuntimeProxyBackend {
@@ -2576,21 +2058,18 @@ impl BrowserRuntime {
         }
     }
 
-    /// Starts a fresh authenticated IPv4 loopback proxy restricted to the
-    /// exact HNS scope root and its subdomains. Every call receives fresh
-    /// credentials and a monotonically increasing runtime generation.
-    pub fn start_proxy(&self, scope_root: &str) -> Result<BrowserProxy, BrowserProxyError> {
+    #[cfg(test)]
+    fn start_proxy(&self, scope_root: &str) -> Result<BrowserProxy, BrowserProxyError> {
         self.start_proxy_with_observer(scope_root, Arc::new(NoopBrowserProxyStatusObserver))
     }
 
-    /// Starts a proxy generation and delivers typed, sensitive response
-    /// status before internal metadata is removed from browser-visible heads.
-    pub fn start_proxy_with_observer(
+    #[cfg(test)]
+    fn start_proxy_with_observer(
         &self,
         scope_root: &str,
         observer: Arc<dyn BrowserProxyStatusObserver>,
     ) -> Result<BrowserProxy, BrowserProxyError> {
-        let scope = HostScope::new(scope_root)?;
+        let scope = hns_loopback_proxy::HostScope::new(scope_root)?;
         let generation = self
             .inner
             .proxy_generation
@@ -2640,39 +2119,6 @@ impl BrowserRuntime {
         })
     }
 
-    /// Starts a fresh authenticated proxy which admits every canonical HNS
-    /// name and rejects all other namespaces. Chromium must additionally
-    /// install [`chromium_hns_only_pac_script`] so non-HNS traffic never
-    /// reaches this defense-in-depth boundary.
-    pub fn start_hns_only_proxy(&self) -> Result<BrowserProxy, BrowserProxyError> {
-        self.start_hns_only_proxy_with_observer(Arc::new(NoopBrowserProxyStatusObserver))
-    }
-
-    pub fn start_hns_only_proxy_with_certificate_authority(
-        &self,
-        certificate_authority: LocalCertificateAuthority,
-    ) -> Result<BrowserProxy, BrowserProxyError> {
-        self.start_hns_only_proxy_with_options(
-            Some(certificate_authority),
-            Arc::new(NoopBrowserProxyStatusObserver),
-        )
-    }
-
-    /// Starts an HNS-only Chromium generation with a persistent local CA and
-    /// delivers trusted, typed response status before proxy-only metadata is
-    /// removed from the browser-visible response.
-    pub fn start_hns_only_proxy_with_certificate_authority_and_observer(
-        &self,
-        certificate_authority: LocalCertificateAuthority,
-        observer: Arc<dyn BrowserProxyStatusObserver>,
-    ) -> Result<BrowserProxy, BrowserProxyError> {
-        self.start_browser_proxy_with_options(
-            BrowserProxyAdmission::HnsOnly,
-            Some(certificate_authority),
-            observer,
-        )
-    }
-
     /// Starts a Chromium generation which sends every canonical DNS host
     /// through one authenticated Rust boundary. ICANN TLSA discovery and the
     /// WebPKI/fail-closed decision therefore apply uniformly to main frames,
@@ -2682,35 +2128,11 @@ impl BrowserRuntime {
         certificate_authority: LocalCertificateAuthority,
         observer: Arc<dyn BrowserProxyStatusObserver>,
     ) -> Result<BrowserProxy, BrowserProxyError> {
-        self.start_browser_proxy_with_options(
-            BrowserProxyAdmission::DaneBrowser,
-            Some(certificate_authority),
-            observer,
-        )
-    }
-
-    pub fn start_hns_only_proxy_with_observer(
-        &self,
-        observer: Arc<dyn BrowserProxyStatusObserver>,
-    ) -> Result<BrowserProxy, BrowserProxyError> {
-        self.start_browser_proxy_with_options(BrowserProxyAdmission::HnsOnly, None, observer)
-    }
-
-    fn start_hns_only_proxy_with_options(
-        &self,
-        certificate_authority: Option<LocalCertificateAuthority>,
-        observer: Arc<dyn BrowserProxyStatusObserver>,
-    ) -> Result<BrowserProxy, BrowserProxyError> {
-        self.start_browser_proxy_with_options(
-            BrowserProxyAdmission::HnsOnly,
-            certificate_authority,
-            observer,
-        )
+        self.start_browser_proxy_with_options(Some(certificate_authority), observer)
     }
 
     fn start_browser_proxy_with_options(
         &self,
-        admission: BrowserProxyAdmission,
         certificate_authority: Option<LocalCertificateAuthority>,
         observer: Arc<dyn BrowserProxyStatusObserver>,
     ) -> Result<BrowserProxy, BrowserProxyError> {
@@ -2734,10 +2156,7 @@ impl BrowserRuntime {
             authority_generation: generation,
             statuses: Arc::clone(&self.inner.canonical_statuses),
         };
-        let mut config = match admission {
-            BrowserProxyAdmission::HnsOnly => ProxyConfig::hns_only(instance),
-            BrowserProxyAdmission::DaneBrowser => ProxyConfig::dane_browser(instance),
-        };
+        let mut config = ProxyConfig::dane_browser(instance);
         if let Some(certificate_authority) = certificate_authority {
             config = config.with_local_certificate_authority(certificate_authority);
         }
@@ -2767,92 +2186,6 @@ impl BrowserRuntime {
             authority: Arc::clone(&self.inner.canonical_authority),
             authority_generation: generation,
             statuses: Arc::clone(&self.inner.canonical_statuses),
-        })
-    }
-
-    /// Starts a whole-browser proxy for engines whose proxy match rules cannot
-    /// safely express the HNS namespace. `None` explicitly denies all HNS
-    /// targets while still routing ICANN traffic; `Some` admits exactly that
-    /// immutable HNS root and its subdomains.
-    pub fn start_whole_browser_proxy(
-        &self,
-        hns_scope_root: Option<&str>,
-    ) -> Result<BrowserProxy, BrowserProxyError> {
-        self.start_whole_browser_proxy_with_observer(
-            hns_scope_root,
-            Arc::new(NoopBrowserProxyStatusObserver),
-        )
-    }
-
-    /// Starts a whole-browser generation with typed HNS status observation.
-    /// ICANN HTTPS remains an opaque CONNECT tunnel and therefore retains the
-    /// browser engine's WebPKI verification.
-    pub fn start_whole_browser_proxy_with_observer(
-        &self,
-        hns_scope_root: Option<&str>,
-        observer: Arc<dyn BrowserProxyStatusObserver>,
-    ) -> Result<BrowserProxy, BrowserProxyError> {
-        let hns_scope = hns_scope_root.map(HostScope::new).transpose()?;
-        let generation = self
-            .inner
-            .proxy_generation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| BrowserProxyError::GenerationExhausted)?
-            + 1;
-        self.inner
-            .canonical_authority
-            .prepare_proxy(generation)
-            .map_err(|error| BrowserProxyError::Authority(error.to_string()))?;
-        let session = self.inner.proxy_session.clone();
-        let instance = ProxyInstanceId::new(session, generation);
-        let metadata_observer = RuntimeProxyStatusMetadataObserver {
-            observer,
-            authority: Arc::clone(&self.inner.canonical_authority),
-            authority_generation: generation,
-            statuses: Arc::clone(&self.inner.canonical_statuses),
-        };
-        let running = match RunningProxy::start_with_metadata_observer_and_icann_network(
-            ProxyConfig::whole_browser(instance, hns_scope),
-            Arc::new(self.proxy_backend_for_generation(generation)),
-            Arc::new(NoopProxyObserver),
-            Arc::new(metadata_observer),
-            Arc::new(WholeBrowserIcannNetwork),
-        ) {
-            Ok(running) => running,
-            Err(error) => {
-                self.inner
-                    .canonical_authority
-                    .cancel_prepared_proxy(generation);
-                return Err(error.into());
-            }
-        };
-        if let Err(error) = self.inner.canonical_authority.activate_proxy(generation) {
-            running.stop();
-            self.inner
-                .canonical_authority
-                .cancel_prepared_proxy(generation);
-            return Err(BrowserProxyError::Authority(error.to_string()));
-        }
-        Ok(BrowserProxy {
-            running,
-            authority: Arc::clone(&self.inner.canonical_authority),
-            authority_generation: generation,
-            statuses: Arc::clone(&self.inner.canonical_statuses),
-        })
-    }
-
-    pub fn start_whole_browser_proxy_with_policy_and_observer(
-        &self,
-        hns_scope_root: Option<&str>,
-        policy: RuntimePolicy,
-        observer: Arc<dyn BrowserProxyStatusObserver>,
-    ) -> Result<BrowserProxy, RuntimeError> {
-        self.with_policy_operation(policy, |runtime| {
-            runtime
-                .start_whole_browser_proxy_with_observer(hns_scope_root, observer)
-                .map_err(|error| RuntimeError::Operation(error.to_string()))
         })
     }
 
@@ -7870,25 +7203,6 @@ fn fetch_icann_doh_message(
     }))
 }
 
-fn fetch_doh_message_at_with_control<F>(
-    http: &TcpHttpTransport,
-    endpoint: &HnsDohEndpoint,
-    connect_address: IpAddr,
-    body: Vec<u8>,
-    deadline: Instant,
-    is_cancelled: F,
-) -> Result<OriginResponse, TransportError>
-where
-    F: Fn() -> bool + Sync,
-{
-    http.fetch_http11_with_control(
-        &doh_origin_request(endpoint, Some(connect_address.to_string()), body),
-        deadline,
-        WHOLE_BROWSER_DOH_IO_POLL,
-        is_cancelled,
-    )
-}
-
 fn doh_origin_request(
     endpoint: &HnsDohEndpoint,
     connect_host: Option<String>,
@@ -8043,6 +7357,7 @@ fn build_doh_query(id: u16, qname: &DnsName, qtype: RecordType) -> Result<Vec<u8
         .map_err(|_| ResolverError::InvalidDnsResponse)
 }
 
+#[cfg(test)]
 fn doh_answer_from_body(
     id: u16,
     qname: &DnsName,
@@ -8247,7 +7562,7 @@ pub fn core_version() -> &'static str {
 }
 
 pub fn diagnostics_json() -> String {
-    r#"{"core":"hns-dane-browser-rust-core","version":"__VERSION__","features":["header-hash","header-pow-validation","header-mainnet-difficulty-retarget","header-mainnet-checkpoints","header-canonical-height-index","hns-name-hash","hns-dotted-root-label","urkel-proof-verification","urkel-proof-value-handoff","hns-name-state-resource-extraction","hns-resource-decoder","hns-authoritative-doh-rfc8484","hns-resource-provider-adapter","hns-memory-resource-provider","hns-sqlite-resource-provider","hns-negative-cache","hns-ttl-cache-lru","hns-resource-cache-stats","hns-resource-cache-eviction","hns-resource-cache-cap-enforcement","hns-resource-cache-chain-anchors","hns-resource-cache-reorg-invalidation","hns-resource-cache-current-tip","hns-proof-backed-resolver-boundary","hns-delegating-resolver-boundary","hns-proof-backed-ns-address-hydration","hns-authoritative-dnssec-delegated-resolver","android-hns-doh-compat-resolver","dns-wire","dns-svcb-https","dnssec-ds-dnskey-link","dnssec-ds-sha1","dnssec-ds-sha384","dnssec-rrsig-signed-data","dnssec-canonical-name-rdata","dnssec-ecdsa-p256-verify","dnssec-ecdsa-p384-verify","dnssec-rsa-sha1-verify","dnssec-rsa-sha256-sha512-verify","dnssec-ed25519-verify","dnssec-signed-rrset-validation","dnssec-delegated-chain-validation","dnssec-delegated-no-data-validation","dnssec-delegated-name-error-validation","dnssec-delegated-cname-chain","dnssec-child-referral-validation","dnssec-child-cname-chain","dnssec-child-no-data-validation","dnssec-child-name-error-validation","dnssec-nsec-denial-validation","dnssec-nsec3-denial-validation","dnssec-nxdomain-name-error-validation","dane-policy","dane-certificate-chain-policy","x509-spki-extraction","x509-stateless-dane-evidence","hip17-experimental-urkel-extension","rfc9102-authentication-chain-parser","p2p-codec","p2p-tcp-peer-connection","p2p-static-peer-source","p2p-dns-seed-source","p2p-getaddr-peer-discovery","p2p-discovery-rotation","p2p-peer-diversity","p2p-sqlite-peer-store","sync-coordinator","sync-header-runner","sync-multi-batch-header-runner","sync-parallel-peer-probing","sync-ranged-peer-rotation","sync-checkpoint-prefetch","sync-proof-scheduler","android-native-sync-once","android-sync-status","android-sync-outcome-status","android-sync-progress-heights","android-sync-high-batch-catchup","android-clear-resolver-cache","android-persistent-gateway-resolver","android-gateway-live-proof-fetch","android-gateway-header-forwarding","android-gateway-range-forwarding","android-gateway-body-forwarding","android-gateway-file-body-stream","android-webview-hns-intercept","android-service-worker-hns-intercept","android-hns-redirect-follow","android-actionable-hns-errors","hns-name-not-found-error","gateway-policy","gateway-hns-address-required","gateway-tlsa-service-scope","gateway-delegated-origin-address-lookup","gateway-origin-address-query","gateway-https-service-query","gateway-svcb-alpn-policy","gateway-actionable-nameserver-errors","gateway-cname-address-routing","android-proxy-gateway-hook","android-random-loopback-proxy-port","rust-loopback-local-hns-connect-certs","hns-websocket-native-tunnel","http-origin-transport","http-origin-connection-pooling","http2-origin-transport","http3-origin-transport","http-origin-response-framing","https-rustls-transport","https-tls-session-resumption","https-alt-svc-promotion","dane-tls-policy"],"securityDefault":"fail-closed"}"#
+    r#"{"core":"hns-dane-browser-rust-core","version":"__VERSION__","features":["header-hash","header-pow-validation","header-mainnet-difficulty-retarget","header-mainnet-checkpoints","header-canonical-height-index","hns-name-hash","hns-dotted-root-label","urkel-proof-verification","urkel-proof-value-handoff","hns-name-state-resource-extraction","hns-resource-decoder","hns-authoritative-doh-rfc8484","hns-resource-provider-adapter","hns-memory-resource-provider","hns-sqlite-resource-provider","hns-negative-cache","hns-ttl-cache-lru","hns-resource-cache-stats","hns-resource-cache-eviction","hns-resource-cache-cap-enforcement","hns-resource-cache-chain-anchors","hns-resource-cache-reorg-invalidation","hns-resource-cache-current-tip","hns-proof-backed-resolver-boundary","hns-delegating-resolver-boundary","hns-proof-backed-ns-address-hydration","hns-authoritative-dnssec-delegated-resolver","hns-doh-compat-resolver","dns-wire","dns-svcb-https","dnssec-ds-dnskey-link","dnssec-ds-sha1","dnssec-ds-sha384","dnssec-rrsig-signed-data","dnssec-canonical-name-rdata","dnssec-ecdsa-p256-verify","dnssec-ecdsa-p384-verify","dnssec-rsa-sha1-verify","dnssec-rsa-sha256-sha512-verify","dnssec-ed25519-verify","dnssec-signed-rrset-validation","dnssec-delegated-chain-validation","dnssec-delegated-no-data-validation","dnssec-delegated-name-error-validation","dnssec-delegated-cname-chain","dnssec-child-referral-validation","dnssec-child-cname-chain","dnssec-child-no-data-validation","dnssec-child-name-error-validation","dnssec-nsec-denial-validation","dnssec-nsec3-denial-validation","dnssec-nxdomain-name-error-validation","dane-policy","dane-certificate-chain-policy","x509-spki-extraction","x509-stateless-dane-evidence","hip17-experimental-urkel-extension","rfc9102-authentication-chain-parser","p2p-codec","p2p-tcp-peer-connection","p2p-static-peer-source","p2p-dns-seed-source","p2p-getaddr-peer-discovery","p2p-discovery-rotation","p2p-peer-diversity","p2p-sqlite-peer-store","sync-coordinator","sync-header-runner","sync-multi-batch-header-runner","sync-parallel-peer-probing","sync-ranged-peer-rotation","sync-checkpoint-prefetch","sync-proof-scheduler","native-sync-once","sync-status","sync-outcome-status","sync-progress-heights","sync-high-batch-catchup","clear-resolver-cache","persistent-gateway-resolver","gateway-live-proof-fetch","gateway-header-forwarding","gateway-range-forwarding","gateway-body-forwarding","gateway-file-body-stream","chromium-browser-request-gateway","chromium-service-worker-gateway","chromium-redirect-gateway","actionable-hns-errors","hns-name-not-found-error","gateway-policy","gateway-hns-address-required","gateway-tlsa-service-scope","gateway-delegated-origin-address-lookup","gateway-origin-address-query","gateway-https-service-query","gateway-svcb-alpn-policy","gateway-actionable-nameserver-errors","gateway-cname-address-routing","chromium-proxy-gateway-hook","random-loopback-proxy-port","rust-loopback-local-hns-connect-certs","hns-websocket-native-tunnel","http-origin-transport","http-origin-connection-pooling","http2-origin-transport","http3-origin-transport","http-origin-response-framing","https-rustls-transport","https-tls-session-resumption","https-alt-svc-promotion","dane-tls-policy"],"securityDefault":"fail-closed"}"#
         .replace("__VERSION__", env!("CARGO_PKG_VERSION"))
 }
 
@@ -11828,65 +11143,6 @@ mod tests {
     }
 
     #[test]
-    fn browser_name_policy_wraps_shared_classification_and_hns_root() {
-        assert_eq!(classify_browser_name("welcome"), BrowserNameClass::Hns);
-        assert_eq!(classify_browser_name("sub.welcome"), BrowserNameClass::Hns);
-        assert_eq!(
-            classify_browser_name("example.com"),
-            BrowserNameClass::Icann
-        );
-        assert_eq!(classify_browser_name("  "), BrowserNameClass::Search);
-        assert_eq!(
-            classify_browser_host("DANE-TEST.DENUOWEB.COM."),
-            BrowserHostClass::Icann
-        );
-        assert_eq!(
-            classify_browser_host("example.com"),
-            BrowserHostClass::Icann
-        );
-        assert_eq!(classify_browser_host("localhost"), BrowserHostClass::Icann);
-        assert_eq!(classify_browser_host("127.0.0.1"), BrowserHostClass::Icann);
-        assert_eq!(
-            browser_hns_root_label("sub.welcome"),
-            Some("welcome".to_owned())
-        );
-        assert_eq!(browser_hns_root_label("example.com"), None);
-    }
-
-    #[test]
-    fn embedded_android_websocket_scope_keeps_legacy_cross_root_guard() {
-        let script = browser_websocket_scope_policy_script();
-
-        assert!(script.contains("window.__hnsRustNamespacePolicyVersion = 1"));
-        assert!(script.contains("icannTlds"));
-        assert!(script.contains("specialUseSuffixes"));
-        assert!(script.contains("requiresHnsResolution"));
-        assert!(script.contains("window.WebSocket = ProxyScopedWebSocket"));
-        assert!(!script.contains("hnsWebSocketBridge"));
-        assert!(!script.contains("postMessage"));
-    }
-
-    #[test]
-    fn chromium_pac_is_hns_only_and_uses_shared_namespace_snapshots() {
-        assert_eq!(
-            chromium_hns_only_pac_script(0),
-            Err(ChromiumPacError::ZeroProxyPort)
-        );
-        let script = chromium_hns_only_pac_script(43123).unwrap();
-
-        assert!(script.contains("schema 3"));
-        assert!(script.contains(r#""aaa":1"#));
-        assert!(script.contains(r#""com":1"#));
-        assert!(script.contains(r#""alt":1"#));
-        assert!(script.contains(r#""localhost":1"#));
-        assert!(script.contains(r#""onion":1"#));
-        assert!(script.contains(r#""PROXY 127.0.0.1:43123""#));
-        assert!(script.contains(r#": "DIRECT""#));
-        assert!(!script.contains("dnsResolve"));
-        assert!(!script.contains("SOCKS"));
-    }
-
-    #[test]
     fn chromium_dane_pac_routes_secure_dns_origins_without_local_targets() {
         assert_eq!(
             chromium_dane_pac_script(0),
@@ -11903,262 +11159,6 @@ mod tests {
         assert!(script.contains(r#""PROXY 127.0.0.1:43123""#));
         assert!(!script.contains("dnsResolve"));
         assert!(!script.contains("SOCKS"));
-    }
-
-    #[test]
-    fn canonical_browser_host_uses_proxy_trust_boundary_normalization() {
-        assert_eq!(
-            canonical_browser_host("BÜCHER.Example."),
-            Some("xn--bcher-kva.example".to_owned())
-        );
-        assert_eq!(
-            canonical_browser_host("127.0.0.1"),
-            Some("127.0.0.1".to_owned())
-        );
-        assert_eq!(
-            canonical_browser_host("[2001:0db8::1]"),
-            Some("2001:db8::1".to_owned())
-        );
-        assert_eq!(canonical_browser_host("127.1"), None);
-        assert_eq!(canonical_browser_host("2130706433"), None);
-        assert_eq!(canonical_browser_host("[fe80::1%en0]"), None);
-        assert_eq!(canonical_browser_host("example.com:443"), None);
-    }
-
-    #[test]
-    fn whole_browser_doh_bootstrap_separates_webpki_identity_from_connect_address() {
-        let endpoint = default_icann_doh_endpoint();
-        assert!(!ICANN_DOH_BOOTSTRAP_ADDRESSES.is_empty());
-        for bootstrap in ICANN_DOH_BOOTSTRAP_ADDRESSES {
-            let connect_host = bootstrap.to_string();
-            let request = doh_origin_request(&endpoint, Some(connect_host.clone()), vec![1, 2, 3]);
-            assert_eq!(request.host, ICANN_DOH_HOST);
-            assert_eq!(request.connect_host.as_deref(), Some(connect_host.as_str()));
-            assert_eq!(request.tls.mode, hns_dane::DomainTrustMode::IcannWebPki);
-            assert_eq!(request.scheme, "https");
-            assert_eq!(request.path_and_query, ICANN_DOH_PATH);
-        }
-    }
-
-    #[test]
-    fn whole_browser_address_extraction_rejects_unrelated_and_invalid_cname_chains() {
-        fn record(owner: &str, record_type: RecordType, rdata: Vec<u8>) -> ResourceRecord {
-            ResourceRecord {
-                name: DnsName::from_ascii(owner).unwrap(),
-                record_type,
-                class: DNS_CLASS_IN,
-                ttl: 30,
-                rdata,
-            }
-        }
-        fn cname(owner: &str, target: &str) -> ResourceRecord {
-            let mut rdata = Vec::new();
-            DnsName::from_ascii(target)
-                .unwrap()
-                .encode_wire(&mut rdata)
-                .unwrap();
-            record(owner, RecordType::Cname, rdata)
-        }
-
-        let query = DnsName::from_ascii("www.example.com").unwrap();
-        let unrelated = vec![record("attacker.example", RecordType::A, vec![1, 1, 1, 1])];
-        assert_eq!(
-            addresses_for_dns_owner(&unrelated, &query, &RecordType::A),
-            Ok(Vec::new())
-        );
-
-        let valid = vec![
-            cname("www.example.com", "edge.example.net"),
-            record("edge.example.net", RecordType::A, vec![1, 1, 1, 1]),
-            record("unrelated.example", RecordType::A, vec![8, 8, 8, 8]),
-        ];
-        assert_eq!(
-            addresses_for_dns_owner(&valid, &query, &RecordType::A),
-            Ok(vec!["1.1.1.1".parse().unwrap()])
-        );
-
-        let duplicate = vec![
-            cname("www.example.com", "a.example"),
-            cname("www.example.com", "b.example"),
-        ];
-        assert_eq!(
-            addresses_for_dns_owner(&duplicate, &query, &RecordType::A),
-            Err(())
-        );
-        let looped = vec![
-            cname("www.example.com", "a.example"),
-            cname("a.example", "www.example.com"),
-        ];
-        assert_eq!(
-            addresses_for_dns_owner(&looped, &query, &RecordType::A),
-            Err(())
-        );
-
-        let mut overlong = Vec::new();
-        let mut owner = "www.example.com".to_owned();
-        for index in 0..=MAX_WHOLE_BROWSER_CNAME_CHAIN {
-            let target = format!("c{index}.example");
-            overlong.push(cname(&owner, &target));
-            owner = target;
-        }
-        overlong.push(record(&owner, RecordType::A, vec![1, 1, 1, 1]));
-        assert_eq!(
-            addresses_for_dns_owner(&overlong, &query, &RecordType::A),
-            Err(())
-        );
-        assert_eq!(
-            addresses_for_dns_owner(&[], &query, &RecordType::A),
-            Ok(Vec::new())
-        );
-        let mut wrong_class = record("www.example.com", RecordType::A, vec![1, 1, 1, 1]);
-        wrong_class.class = 3;
-        assert_eq!(
-            addresses_for_dns_owner(&[wrong_class], &query, &RecordType::A),
-            Err(())
-        );
-    }
-
-    #[test]
-    fn whole_browser_doh_rejects_nxdomain_truncated_and_contradictory_addresses() {
-        fn encoded_response(flags: u16) -> Vec<u8> {
-            let qname = DnsName::from_ascii("example.com").unwrap();
-            DnsMessage {
-                header: DnsHeader {
-                    id: DOH_DNS_ID,
-                    flags: DnsFlags::new(flags),
-                    question_count: 1,
-                    answer_count: 1,
-                    authority_count: 0,
-                    additional_count: 0,
-                },
-                questions: vec![DnsQuestion {
-                    name: qname.clone(),
-                    record_type: RecordType::A,
-                    class: DNS_CLASS_IN,
-                }],
-                answers: vec![ResourceRecord {
-                    name: qname,
-                    record_type: RecordType::A,
-                    class: DNS_CLASS_IN,
-                    ttl: 30,
-                    rdata: vec![1, 1, 1, 1],
-                }],
-                authorities: Vec::new(),
-                additionals: Vec::new(),
-            }
-            .encode(&DnsEncodeConfig {
-                max_message_len: DEFAULT_DNS_UDP_PAYLOAD,
-            })
-            .unwrap()
-        }
-
-        let qname = DnsName::from_ascii("example.com").unwrap();
-        let valid = encoded_response(0x8180);
-        assert!(whole_browser_doh_answer_from_body(&qname, RecordType::A, &valid).is_ok());
-        let nxdomain_with_address = encoded_response(0x8183);
-        assert_eq!(
-            whole_browser_doh_answer_from_body(&qname, RecordType::A, &nxdomain_with_address),
-            Err(ResolverError::InvalidDnsResponse)
-        );
-        let truncated_with_address = encoded_response(0x8380);
-        assert_eq!(
-            whole_browser_doh_answer_from_body(&qname, RecordType::A, &truncated_with_address),
-            Err(ResolverError::InvalidDnsResponse)
-        );
-    }
-
-    #[test]
-    fn whole_browser_doh_follows_compressed_cname_target() {
-        let qname = DnsName::from_ascii("example.com").unwrap();
-        let body = b"\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x05\x00\x01\x00\x00\x00\x3c\x00\x07\x04edge\xc0\x0c\xc0\x29\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04\x01\x01\x01\x01";
-
-        let answer = whole_browser_doh_answer_from_body(&qname, RecordType::A, body).unwrap();
-
-        assert_eq!(
-            addresses_for_dns_owner(&answer.records, &qname, &RecordType::A),
-            Ok(vec!["1.1.1.1".parse().unwrap()])
-        );
-    }
-
-    #[test]
-    fn whole_browser_resolution_deadline_fails_before_network_work() {
-        let qname = DnsName::from_ascii("example.com").unwrap();
-        assert_eq!(
-            resolve_whole_browser_icann_family(
-                &qname,
-                RecordType::A,
-                &ProxyCancellationToken::new(),
-                Instant::now(),
-            ),
-            Err(IcannNetworkError::ResolutionFailed)
-        );
-    }
-
-    #[test]
-    fn whole_browser_resolution_rechecks_the_absolute_deadline_after_fetch() {
-        let qname = DnsName::from_ascii("example.com").unwrap();
-        let attempts = AtomicU64::new(0);
-        let deadline = Instant::now() + Duration::from_millis(20);
-
-        let result = resolve_whole_browser_icann_family_with_fetch(
-            &qname,
-            RecordType::A,
-            &[
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            ],
-            &|| false,
-            deadline,
-            |_bootstrap, _query| {
-                attempts.fetch_add(1, Ordering::Relaxed);
-                thread::sleep(Duration::from_millis(50));
-                Ok(OriginResponse {
-                    status: 200,
-                    headers: Vec::new(),
-                    body: Vec::new(),
-                    dane_decision: DaneDecision::NoTlsa,
-                    tls_inspection: None,
-                })
-            },
-        );
-
-        assert_eq!(result, Err(IcannNetworkError::ResolutionFailed));
-        assert_eq!(attempts.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn whole_browser_resolution_observes_cancellation_after_fetch() {
-        let qname = DnsName::from_ascii("example.com").unwrap();
-        let cancelled = AtomicBool::new(false);
-        let is_cancelled = || cancelled.load(Ordering::Acquire);
-
-        let result = resolve_whole_browser_icann_family_with_fetch(
-            &qname,
-            RecordType::A,
-            &[IpAddr::V4(Ipv4Addr::LOCALHOST)],
-            &is_cancelled,
-            Instant::now() + Duration::from_secs(1),
-            |_bootstrap, _query| {
-                cancelled.store(true, Ordering::Release);
-                Err(TransportError::Io("cancelled test fetch".to_owned()))
-            },
-        );
-
-        assert_eq!(result, Err(IcannNetworkError::Cancelled));
-    }
-
-    #[test]
-    fn whole_browser_doh_uses_dns_specific_transport_limits() {
-        let limits = whole_browser_doh_transport_limits();
-
-        assert_eq!(limits.max_request_body_bytes, DEFAULT_DNS_UDP_PAYLOAD);
-        assert_eq!(limits.max_response_header_bytes, 16 * 1024);
-        assert_eq!(limits.max_response_body_bytes, u16::MAX as usize);
-        assert!(limits.max_request_body_bytes >= 1232);
-        assert!(limits.max_response_body_bytes < 64 * 1024);
-        assert!(
-            limits.max_response_body_bytes < TransportLimits::default().max_response_body_bytes
-        );
     }
 
     #[test]
@@ -12818,38 +11818,6 @@ mod tests {
 
         assert!(matches!(
             runtime.start_proxy("example.com"),
-            Err(BrowserProxyError::Scope(HostScopeError::NotHns))
-        ));
-        cleanup_dir(&data_dir);
-    }
-
-    #[test]
-    fn browser_runtime_starts_explicit_whole_browser_scope_and_deny_all_generations() {
-        let data_dir = temp_dir_path("browser-runtime-whole-browser");
-        let runtime =
-            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
-                .unwrap();
-        let icann_only = runtime.start_whole_browser_proxy(None).unwrap();
-        let scoped = runtime.start_whole_browser_proxy(Some("welcome")).unwrap();
-        assert_eq!(icann_only.generation(), 1);
-        assert_eq!(scoped.generation(), 2);
-        assert_eq!(icann_only.session_id(), scoped.session_id());
-        assert!(icann_only.matches_authentication_challenge(
-            "127.0.0.1",
-            icann_only.port(),
-            icann_only.authorization_realm(),
-        ));
-        icann_only.request_stop();
-        assert!(icann_only.is_stop_requested());
-        assert!(!icann_only.matches_authentication_challenge(
-            "127.0.0.1",
-            icann_only.port(),
-            icann_only.authorization_realm(),
-        ));
-        icann_only.stop();
-        scoped.stop();
-        assert!(matches!(
-            runtime.start_whole_browser_proxy(Some("example.com")),
             Err(BrowserProxyError::Scope(HostScopeError::NotHns))
         ));
         cleanup_dir(&data_dir);
@@ -13669,7 +12637,7 @@ mod tests {
         };
         let generated_ca = LocalCertificateAuthority::generate().unwrap();
         let proxy = runtime
-            .start_hns_only_proxy_with_certificate_authority_and_observer(
+            .start_dane_browser_proxy_with_certificate_authority_and_observer(
                 generated_ca.authority().clone(),
                 Arc::new(observer),
             )
@@ -14273,7 +13241,7 @@ mod tests {
         assert!(diagnostics_json().contains(r#""dnssec-child-cname-chain""#));
         assert!(diagnostics_json().contains(r#""dnssec-child-no-data-validation""#));
         assert!(diagnostics_json().contains(r#""gateway-cname-address-routing""#));
-        assert!(diagnostics_json().contains(r#""android-actionable-hns-errors""#));
+        assert!(diagnostics_json().contains(r#""actionable-hns-errors""#));
         assert!(diagnostics_json().contains(r#""hns-name-not-found-error""#));
         assert!(diagnostics_json().contains(r#""gateway-hns-address-required""#));
         assert!(diagnostics_json().contains(r#""gateway-tlsa-service-scope""#));
@@ -14384,23 +13352,23 @@ mod tests {
         assert!(diagnostics_json().contains(r#""sync-ranged-peer-rotation""#));
         assert!(diagnostics_json().contains(r#""sync-checkpoint-prefetch""#));
         assert!(diagnostics_json().contains(r#""sync-proof-scheduler""#));
-        assert!(diagnostics_json().contains(r#""android-native-sync-once""#));
-        assert!(diagnostics_json().contains(r#""android-sync-status""#));
-        assert!(diagnostics_json().contains(r#""android-sync-outcome-status""#));
-        assert!(diagnostics_json().contains(r#""android-sync-progress-heights""#));
-        assert!(diagnostics_json().contains(r#""android-sync-high-batch-catchup""#));
-        assert!(diagnostics_json().contains(r#""android-clear-resolver-cache""#));
-        assert!(diagnostics_json().contains(r#""android-persistent-gateway-resolver""#));
-        assert!(diagnostics_json().contains(r#""android-gateway-live-proof-fetch""#));
-        assert!(diagnostics_json().contains(r#""android-gateway-header-forwarding""#));
-        assert!(diagnostics_json().contains(r#""android-gateway-range-forwarding""#));
-        assert!(diagnostics_json().contains(r#""android-gateway-body-forwarding""#));
-        assert!(diagnostics_json().contains(r#""android-gateway-file-body-stream""#));
-        assert!(diagnostics_json().contains(r#""android-webview-hns-intercept""#));
-        assert!(diagnostics_json().contains(r#""android-service-worker-hns-intercept""#));
-        assert!(diagnostics_json().contains(r#""android-hns-redirect-follow""#));
-        assert!(diagnostics_json().contains(r#""android-hns-doh-compat-resolver""#));
-        assert!(diagnostics_json().contains(r#""android-random-loopback-proxy-port""#));
+        assert!(diagnostics_json().contains(r#""native-sync-once""#));
+        assert!(diagnostics_json().contains(r#""sync-status""#));
+        assert!(diagnostics_json().contains(r#""sync-outcome-status""#));
+        assert!(diagnostics_json().contains(r#""sync-progress-heights""#));
+        assert!(diagnostics_json().contains(r#""sync-high-batch-catchup""#));
+        assert!(diagnostics_json().contains(r#""clear-resolver-cache""#));
+        assert!(diagnostics_json().contains(r#""persistent-gateway-resolver""#));
+        assert!(diagnostics_json().contains(r#""gateway-live-proof-fetch""#));
+        assert!(diagnostics_json().contains(r#""gateway-header-forwarding""#));
+        assert!(diagnostics_json().contains(r#""gateway-range-forwarding""#));
+        assert!(diagnostics_json().contains(r#""gateway-body-forwarding""#));
+        assert!(diagnostics_json().contains(r#""gateway-file-body-stream""#));
+        assert!(diagnostics_json().contains(r#""chromium-browser-request-gateway""#));
+        assert!(diagnostics_json().contains(r#""chromium-service-worker-gateway""#));
+        assert!(diagnostics_json().contains(r#""chromium-redirect-gateway""#));
+        assert!(diagnostics_json().contains(r#""hns-doh-compat-resolver""#));
+        assert!(diagnostics_json().contains(r#""random-loopback-proxy-port""#));
     }
 
     #[test]
@@ -19777,7 +18745,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("android-ffi-{label}-{}-{now}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "chromium-runtime-{label}-{}-{now}",
+            std::process::id()
+        ))
     }
 
     fn cleanup_dir(path: &std::path::Path) {

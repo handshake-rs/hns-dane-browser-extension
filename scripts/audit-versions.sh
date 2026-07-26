@@ -3,12 +3,11 @@ set -euo pipefail
 
 cat <<'EOF'
 Review these moving version sources before dependency upgrades:
-- AndroidX WebKit: https://developer.android.com/jetpack/androidx/releases/webkit
-- Android Gradle Plugin: https://developer.android.com/build/releases
-- Gradle: https://gradle.org/releases/
-- Kotlin: https://kotlinlang.org/docs/releases.html
-- UniFFI: https://crates.io/crates/uniffi
-- cargo-ndk: https://crates.io/crates/cargo-ndk
+- Chrome extensions platform: https://developer.chrome.com/docs/extensions
+- Chrome release notes: https://developer.chrome.com/release-notes
+- Node.js release schedule: https://github.com/nodejs/Release
+- Rust releases: https://releases.rs/
+- cargo-deny: https://github.com/EmbarkStudios/cargo-deny/releases
 - rustls: https://crates.io/crates/rustls
 - ring: https://crates.io/crates/ring
 - webpki-roots: https://crates.io/crates/webpki-roots

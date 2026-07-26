@@ -4,39 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-EXPECTED_WRAPPER_JAR_SHA256="497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7"
-EXPECTED_DISTRIBUTION_SHA256="9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14"
-EXPECTED_DISTRIBUTION_URL='https\://services.gradle.org/distributions/gradle-9.6.1-bin.zip'
 RUST_TOOLCHAIN="1.92.0"
 CARGO=(cargo "+$RUST_TOOLCHAIN")
-WRAPPER_JAR="android/gradle/wrapper/gradle-wrapper.jar"
-WRAPPER_PROPERTIES="android/gradle/wrapper/gradle-wrapper.properties"
-
-actual_wrapper_jar_sha256="$(sha256sum "$WRAPPER_JAR" | awk '{print $1}')"
-if [[ "$actual_wrapper_jar_sha256" != "$EXPECTED_WRAPPER_JAR_SHA256" ]]; then
-  echo "Unexpected Gradle wrapper JAR SHA-256: $actual_wrapper_jar_sha256" >&2
-  exit 1
-fi
-
-actual_distribution_sha256="$(sed -n 's/^distributionSha256Sum=//p' "$WRAPPER_PROPERTIES")"
-if [[ "$actual_distribution_sha256" != "$EXPECTED_DISTRIBUTION_SHA256" ]]; then
-  echo "Unexpected or missing Gradle distribution SHA-256: ${actual_distribution_sha256:-missing}" >&2
-  exit 1
-fi
-
-actual_distribution_url="$(sed -n 's/^distributionUrl=//p' "$WRAPPER_PROPERTIES")"
-if [[ "$actual_distribution_url" != "$EXPECTED_DISTRIBUTION_URL" ]]; then
-  echo "Unexpected Gradle distribution URL: ${actual_distribution_url:-missing}" >&2
-  exit 1
-fi
 
 required_supply_chain_files=(
-  "android/app/gradle.lockfile"
-  "android/settings-gradle.lockfile"
-  "android/gradle/verification-metadata.xml"
   "rust/Cargo.lock"
   "rust/fuzz/Cargo.lock"
   "tools/hns-header-snapshot-exporter/Cargo.lock"
+  "extension/manifest.json"
+  "package.json"
 )
 for file in "${required_supply_chain_files[@]}"; do
   if [[ ! -s "$file" ]]; then

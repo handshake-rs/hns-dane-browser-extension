@@ -94,6 +94,12 @@ jobs:
             check \
             --config rust/deny.toml
 
+      - name: Verify Chromium-only release boundaries
+        run: |
+          bash scripts/verify-supply-chain.sh
+          bash scripts/check-version-consistency.sh
+          bash scripts/check-runtime-boundaries.sh
+
   rust:
     name: Rust workspace and native host
     runs-on: ubuntu-24.04

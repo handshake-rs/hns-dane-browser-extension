@@ -12,7 +12,6 @@ python3 "$ROOT_DIR/scripts/generate-third-party-notices.py" --check
 "$ROOT_DIR/scripts/check-runtime-boundaries.sh"
 "${CARGO[@]}" fmt --manifest-path "$ROOT_DIR/rust/Cargo.toml" --all -- --check
 "${CARGO[@]}" clippy --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" --workspace --all-targets -- -D warnings
-"$ROOT_DIR/scripts/check-ios-abi.sh"
 if ! "${CARGO[@]}" deny --version >/dev/null 2>&1; then
   echo "ERROR: cargo-deny is required. Install with: cargo install cargo-deny --version $EXPECTED_CARGO_DENY_VERSION --locked" >&2
   exit 2
@@ -24,6 +23,7 @@ if [[ "$installed_cargo_deny_version" != "$EXPECTED_CARGO_DENY_VERSION" ]]; then
 fi
 "${CARGO[@]}" deny --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" check --config "$ROOT_DIR/rust/deny.toml"
 "${CARGO[@]}" test --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" --workspace
+"${CARGO[@]}" build --locked --release --manifest-path "$ROOT_DIR/rust/Cargo.toml" -p hns-chromium-native-host
 "$ROOT_DIR/scripts/fuzz-smoke.sh"
 "${CARGO[@]}" deny --locked --manifest-path "$ROOT_DIR/rust/fuzz/Cargo.toml" check --config "$ROOT_DIR/rust/deny.toml"
 
@@ -32,3 +32,8 @@ TOOL_MANIFEST="$ROOT_DIR/tools/hns-header-snapshot-exporter/Cargo.toml"
 "${CARGO[@]}" clippy --locked --manifest-path "$TOOL_MANIFEST" --all-targets -- -D warnings
 "${CARGO[@]}" test --locked --manifest-path "$TOOL_MANIFEST"
 "${CARGO[@]}" deny --locked --manifest-path "$TOOL_MANIFEST" check --config "$ROOT_DIR/rust/deny.toml"
+
+(
+  cd "$ROOT_DIR"
+  npm run check:extension
+)

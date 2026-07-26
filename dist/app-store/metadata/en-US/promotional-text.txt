@@ -1,1 +1,0 @@
-Browse Handshake names with locally verified proofs, DNSSEC and DANE status, and clear resolver-path diagnostics.

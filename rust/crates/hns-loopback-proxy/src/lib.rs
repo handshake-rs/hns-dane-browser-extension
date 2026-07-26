@@ -12,7 +12,6 @@ pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod http1;
-pub mod icann;
 pub mod metadata;
 pub mod rate_limit;
 pub mod response;
@@ -52,7 +51,6 @@ pub use http1::{
     read_chunked_body, read_request_body, read_request_head, sanitize_forward_headers,
     sanitize_upgrade_forward_headers,
 };
-pub use icann::{FailClosedIcannNetwork, IcannNetwork, IcannNetworkError};
 pub use metadata::{
     NoopProxyResponseMetadataObserver, ProxyResponseMetadataObservation,
     ProxyResponseMetadataObserver,

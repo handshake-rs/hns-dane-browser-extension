@@ -1,1 +1,0 @@
-TLSA,DoH,decentralized domains,name resolution,proof verification,domain security,resolver

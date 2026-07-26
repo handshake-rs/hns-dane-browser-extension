@@ -6,17 +6,46 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Made the iOS settings menu mirror Android's canonical seven-section hierarchy, row order, summaries, defaults, conditional current-page action, and native equivalents for homepage, privacy data, history, downloads, themes, language, Handshake networks, relay peers, diagnostics, legal information, resolver traces, and header resync.
-- Added versioned Chromium main-frame security results sourced from the Rust proxy metadata boundary, including chain currentness, actual DNS transport, local HNS/DNSSEC/TLSA/DANE state, intermediary identities, policy, registry profile, and monotonic runtime identity.
+- Added full-host dual-root resolution for every ordinary DNS HTTP(S)/WS(S)
+  request routed by syntax-only PAC, with HNS-only, ICANN-only, convergent,
+  divergent, neither, and indeterminate outcomes.
+- Added generic ICANN DANE through validating ICANN DoH. TLSA owners are
+  derived from the effective host, port, and transport; secure TLSA is
+  enforced, authenticated denial or an unsigned delegation uses WebPKI, and
+  bogus DNSSEC fails closed.
+- Added checked, versioned Chromium security results sourced from the Rust
+  response-publication boundary, including namespace choice, chain
+  currentness, actual DNS transport, HNS proof, DNSSEC, TLSA/DANE,
+  intermediary identity, policy, and monotonic runtime authority.
 
-### Fixed
+### Changed
 
-- Replaced the iOS placeholder icon with the production HNS DANE Browser artwork used by Android and Google Play, and added release checks for the canonical icon and archived app identity.
-- Made Chromium health checks preserve a healthy proxy generation instead of rotating credentials and reinstalling the PAC on every alarm.
+- Split current Android and iOS development into
+  `handshake-rs/hns-dane-browser-mobile`; this repository now contains only
+  the Chromium extension, native host, and their Rust support.
+- Pinned the canonical browser-runtime, observability, ICANN-DANE,
+  namespace-resolution, and resolution-policy contracts to
+  `handshake-rs/hns-dane-engine` revision
+  `a03648ec85a115362ebc2ab24bb9ea0f1be127fc`.
+- Kept the browser's P2P DNS-relay requester behind explicit consent:
+  unchecked maps to `Disabled` and checked maps to direct-authority-first
+  `Auto`. The browser advertises no provider service.
+- Made Chromium health checks preserve a healthy proxy generation instead of
+  rotating credentials and reinstalling the PAC on every alarm.
 
 ### Security
 
-- Reject stale Chromium security results across runtime-session, runtime-generation, or policy-generation changes; retain only a bounded in-memory window and discard raw traces containing URLs or certificate material before native messaging.
+- Bound each request and every output boundary to one canonical runtime
+  session, runtime generation, policy generation, and monotonic admission
+  event. Stale response heads, bodies, downloads, tunnels, and status are
+  rejected after authority changes.
+- Partitioned connection pools, TLS/resumption state, and Alt-Svc state by the
+  exact namespace-decision fingerprint.
+- Removed IANA suffix membership as an authoritative namespace classifier.
+  The list is a performance hint only and cannot bypass full-host HNS/ICANN
+  resolution.
+- Kept HNSR, P2P ODoH, unsupported privacy downgrades, and provider roles
+  unimplemented and fail-closed.
 
 ## 0.5.0 - 2026-07-16
 

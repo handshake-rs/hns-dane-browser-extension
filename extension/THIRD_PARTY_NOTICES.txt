@@ -4,7 +4,7 @@ This Chromium extension and native host include open-source components. The inve
 below is generated from the locked non-development Cargo dependency closures reachable
 from hns-chromium-native-host on every supported desktop target. Cargo build-time
 dependencies are retained conservatively. Workspace-owned HNS DANE Browser crates and
-test-only, lint, mobile, fuzz, and snapshot-exporter dependencies are excluded.
+test-only, lint, fuzz, and snapshot-exporter dependencies are excluded.
 The extension JavaScript has no third-party runtime package dependency.
 
 Supported desktop Rust target closure counts:
@@ -16,11 +16,11 @@ License expressions are the declarations in the verified package metadata. The r
 texts come from checksum-verified registry packages or immutable Cargo Git checkouts.
 Inclusion here does not imply endorsement by the component authors.
 
-Generator schema: 3
+Generator schema: 4
 Generated input SHA-256:
-  scripts/generate-third-party-notices.py = b19f8b0304c4a6df4be3e7701e543d547aef91db2bab5017d3e724f897a8c53a
+  scripts/generate-third-party-notices.py = 47321291ac9254867a5f9deedca4967a497a9d6983571d9dbe6148ee5f02bc16
   scripts/verify_cargo_git_policy.py = cfde378b2a145ccda8fbc1f8c09a5bf464597498d51f2e1cb948ea985d24cb4b
-  rust/Cargo.toml = 7c3e13dffc697102b65286baaef3702f3ce4ecce54042190e2b6da21bef41e3a
+  rust/Cargo.toml = da6d82f2a04ae1c8327eae5cc85f00758b68765b5919dc350c366770a128dc0a
   rust/Cargo.lock = d1b57344b83f1859a827a5a0cd4e0e64ebe610b3c35346da310c7b32afe1e0cb
   extension/manifest.json = ce63799e4ea7e340469fc9cddf888fab9f0628d02e18bc2d84180ef0d632bbcd
   package.json = 7929e8f469474ecfcb747e7e31cc9a72f443e49f0ce2dfb9bf096eab14f86599

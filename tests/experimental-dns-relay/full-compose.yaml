@@ -70,7 +70,7 @@ services:
       ORIGIN_PORT: "18443"
     cap_add: [NET_BIND_SERVICE]
     ports:
-      - "127.0.0.1:${FULL_TIER_ANDROID_ORIGIN_PORT:-18443}:18443"
+      - "127.0.0.1:${FULL_TIER_HOST_ORIGIN_PORT:-18443}:18443"
     networks:
       full-device-net:
         ipv4_address: 172.31.30.10
@@ -114,7 +114,7 @@ services:
       - ${HOST_ELF_INTERPRETER:?HOST_ELF_INTERPRETER must be absolute}:${HOST_ELF_INTERPRETER}:ro
       - full-owner-data:/data
     ports:
-      - "127.0.0.1:${FULL_TIER_ANDROID_P2P_PORT:-14038}:14038"
+      - "127.0.0.1:${FULL_TIER_HOST_P2P_PORT:-14038}:14038"
     networks:
       full-p2p-net:
         ipv4_address: 172.31.10.11

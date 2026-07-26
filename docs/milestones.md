@@ -1,91 +1,71 @@
 # Milestones
 
-## Milestone 1: Rust Proof Kernel
+## Completed source milestones
 
-- Header parsing and serialization.
-- Header PoW hash parity with HSD genesis fixtures.
-- HSD-compatible mainnet difficulty retarget validation.
-- Header store abstraction, SQLite persistence, canonical hash-by-height indexing, and best-tip selection.
-- Handshake `getheaders`, `headers`, `getproof`, and `proof` payload codec.
-- HSD-compatible 9-byte P2P frame encoder/decoder.
-- Blocking TCP peer connection for version/verack, getaddr, getheaders, and getproof flows.
-- Header sync session state machine for version/verack and request/response sequencing.
-- Peer scoring and outbound selection policy.
-- Static peer seeding, HSD-compatible DNS seed discovery, bounded getaddr peer discovery, address-group-aware peer diversity, and SQLite peer-state persistence.
-- HSD-compatible Handshake name validation and SHA3-256 name-hash derivation.
-- Urkel proof parser and verifier boundary.
-- HSD resource decoder for DS, NS, GLUE4/GLUE6, SYNTH4/SYNTH6, and TXT records.
-- Verified Urkel proof-value handoff.
-- Proof scheduler from TCP getproof responses into the resolver resource-value store.
-- Gateway cache-miss proof fetching into the verified resource-value store.
-- Parser fuzz smoke targets.
+### Chromium product split
 
-## Milestone 2: Live HNS Sync
+- Current Android and iOS work moved to
+  [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
+- This repository's active product boundary is the Manifest V3 extension,
+  native messaging host, authenticated loopback proxy, and Chromium Rust
+  adapter.
+- Cargo, CI, notices, version policy, and documentation are scoped to that
+  boundary.
 
-- Peer manager, TCP peer connection, and sync coordinator scaffolding.
-- Version/verack and getheaders/headers session flow.
-- Persistent header store.
-- Persistent peer-state store.
-- Bounded multi-batch header sync runner with selected peers, scoring, and persistence.
-- Proof request lifecycle scaffolding with Urkel proof verification.
-- Proof-provider-backed HNS resolver boundary with verified resource-value extraction and proven-record filtering.
-- Verified HNS non-inclusion surfaced separately from existing names with no origin address.
-- In-memory and SQLite verified resource-value providers for sync-to-resolver handoff.
-- Resource-cache byte accounting, chain-root/height anchoring, current-tip invalidation, clear, oldest-entry eviction, and active sync-time cap enforcement.
-- TCP proof scheduler and gateway cache-miss proof fetcher that store verified resource values for resolver use.
-- Gateway fail-closed guard when HNS resolution has no origin A/AAAA connect address.
+### Canonical browser contracts
 
-## Milestone 3: DANE Core
+The Chromium adapter consumes these contracts from
+`handshake-rs/hns-dane-engine` at immutable revision
+`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`:
 
-- DNSSEC DNSKEY/DS delegation-link primitives with SHA-1, SHA-256, and SHA-384 DS validation digests.
-- DNS SVCB/HTTPS RDATA parsing and DNSSEC canonicalization.
-- DNSSEC RRSIG canonical signed-data construction.
-- DNSSEC canonical RDATA name handling for CNAME, NS, SOA, SRV, SVCB/HTTPS, and RRSIG signer names.
-- DNSSEC ECDSA P-256/SHA-256 RRset signature validation.
-- DNSSEC ECDSA P-384/SHA-384 RRset signature validation.
-- DNSSEC RSA/SHA-1 compatibility, RSA/SHA-256, and RSA/SHA-512 RRset signature validation.
-- DNSSEC Ed25519 RRset signature validation.
-- DNSSEC signed-RRset validator composed from DS, DNSKEY, and RRSIG checks.
-- DNSSEC delegated-chain validator composed from authenticated DS and DNSKEY RRsets.
-- DNSSEC NSEC no-data, name-range, and name-error denial validation.
-- DNSSEC RFC 5155 NSEC3 no-data, name-error, DS opt-out, wildcard, and referral denial validation.
-- DNSSEC remaining algorithm and NSEC3 hash-transition support.
-- TLSA validation matrix.
-- DANE policy engine.
-- Certificate/SPKI extraction.
+- runtime request authority;
+- checked browser observability;
+- generic ICANN DANE policy;
+- dual-root namespace resolution; and
+- requester/provider resolution policy.
 
-## Milestone 4: Origin Transport
+Each request is stamped before DNS and retains the exact authority through
+response-head, body/download, and tunnel publication. Stale work and stale
+status are rejected after a generation, policy, readiness, or lifecycle
+change.
 
-- Bounded HTTP/1.1 TCP fetch.
-- TCP TLS fetch with rustls.
-- DNSSEC-gated TLSA/DANE validation during TLS handshake.
-- HTTP/2 fetch.
-- QUIC/HTTP/3 fetch.
+### Generic ICANN DANE and dual-root classification
 
-## Milestone 5: Android Browser
+- The syntax-only PAC routes every ordinary DNS HTTP(S)/WS(S) hostname to
+  Rust.
+- Rust resolves the complete hostname through HNS and ICANN and retains
+  HNS-only, ICANN-only, convergent, divergent, neither, or indeterminate.
+- The IANA list is a non-authoritative hint only.
+- ICANN TLSA owner derivation uses the effective port and transport for every
+  selected HTTPS/WSS host.
+- Secure TLSA is enforced; authenticated denial or an unsigned zone uses
+  WebPKI; bogus/indeterminate DNSSEC fails closed.
+- Redirects, subresources, Service Workers, downloads, and WebSockets share
+  the same proxy/admission boundary.
 
-- WebView shell.
-- ProxyController integration.
-- Randomized-port loopback HTTP/CONNECT proxy with native persistent-cache HNS HTTP routing, WebView and Service Worker bodyless HNS HTTP/HTTPS request interception with file-backed decoded response bodies, bounded HNS redirect following, bounded header/body forwarding, reserved-name filtering, local HTTPS termination for HNS CONNECT using exact generated-certificate fingerprint pins, fail-closed rejection of all non-HNS proxy traffic, and native HNS WebSocket/HTTP Upgrade stream tunneling with fail-closed fallback when validation or the native bridge is unavailable.
-- Packaged Rust JNI library.
-- Application-foreground native sync scheduler with in-process status snapshots, live-polled first-page sync progress bar with target fallback, separate WebView loading bar, hamburger back/forward/refresh/settings menu, Settings dashboard for diagnostics, cookie options, resolver cache, legal/user agreement, and donations, automatic active first-run catch-up while the app is open and peer height or estimated tip is ahead, sync/cache diagnostics status with manual sync triggering, explicit syncing/up-to-date vs peer-failed outcomes, and per-peer sync failure stages.
-- HNS omnibox rules.
-- Security and diagnostics UI.
+### Consent boundary
 
-## Milestone 6: Hardening
+- The browser DNS-relay requester is explicit opt-in:
+  `false → Disabled`, `true → Auto`.
+- The Chromium product opts out of opaque relay serving and enables no output
+  or provider role.
+- HNSR and P2P ODoH remain unimplemented and fail closed.
 
-- Enforced cache caps, current-tip cache invalidation, clear-cache action, and cache-size diagnostics.
-- Device matrix.
-- Fuzzing expansion.
-- Battery and network optimization.
-- Security review.
+## Release qualification still required
 
-## Milestone 7: Shared Runtime and Apple Shell
+- exact-current-main hosted CI;
+- native install, browsing, restart, upgrade, and complete removal on supported
+  Windows and macOS versions;
+- current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;
+- store signing, review, and published extension IDs; and
+- release artifact provenance tied to the reviewed commit/tag.
 
-- Moved persistent runtime ownership, policy, synchronization, cache, diagnostics, gateway, proxy, HTTP parsing, CONNECT termination, certificate generation, and Upgrade tunneling behind JNI-free Rust APIs.
-- Replaced the Android Kotlin proxy/TLS/WebSocket stack with the shared Rust proxy while preserving the Android behavior and release-validation baseline.
-- Added scoped-HNS and whole-browser proxy modes. Whole-browser ICANN forwarding uses authenticated admission, explicit public addresses, bounded WebPKI DoH, opaque CONNECT, streamed HTTP/1.1, Upgrade tunneling, and fail-closed special-address/unsafe-port policy without system target resolution.
-- Added the stable versioned `ios-ffi` C ABI, C/C++ header checks, Apple Rust slices, and XCFramework build scripts.
-- Added the iOS 17.0-or-later UIKit/WKWebView shell with persistent profile data, authenticated no-failover whole-data-store proxying, generation-safe scope rotation, exact Rust-authorized HNS certificate handling, lifecycle revocation, downloads, and shared snapshot bootstrap.
-- Added the macOS ABI, XCFramework, application, and simulator test gate against the stable iOS 26.5 SDK, accepting Xcode 26.5 or 26.6. The iOS 17.0 deployment floor, including support for the iOS 18 generation, remains independent of that build SDK.
-- Optional additional gate: run and document the signed physical-device WebKit matrix for main frames, subresources, Service Workers, WebSockets, downloads, background/resume, and renderer/network-process restart. No physical-device result is claimed; Linux and simulator checks do not provide that hardware-specific evidence.
+Passing portable source gates is not a substitute for those release gates.
+
+## Next engineering milestone
+
+Move the remaining platform-neutral loopback admission and publication
+mechanics into the canonical engine while retaining browser-specific listener,
+native-messaging, CA/TLS integration, lifecycle, and installer code here.
+Preserve the current request stamp, full-host namespace plan, typed DANE
+failure, and checked status invariants during that extraction.
