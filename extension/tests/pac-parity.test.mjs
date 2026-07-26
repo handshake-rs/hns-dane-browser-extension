@@ -9,26 +9,27 @@ const port = 43123;
 const pac = runNative(["--print-pac", String(port)]);
 
 const cases = [
-  ["welcome", "hns", "https://welcome/", true],
-  ["sub.welcome", "hns", "wss://sub.welcome/socket", true],
-  ["sub.unregistered-hns-root", "hns", "http://sub.unregistered-hns-root/", true],
-  ["example.com", "icann", "https://example.com/", true],
-  ["example.com", "icann", "http://example.com/", false],
-  ["xn--bcher-kva.com", "icann", "wss://xn--bcher-kva.com/socket", true],
-  ["localhost", "icann", "https://localhost/", false],
-  ["sub.localhost", "icann", "https://sub.localhost/", false],
-  ["example.onion", "icann", "https://example.onion/", false],
-  ["127.0.0.1", "icann", "https://127.0.0.1/", false],
-  ["2001:db8::1", "icann", "https://[2001:db8::1]/", false],
-  ["", "search", "https:///", false],
-  ["contains space", "search", "https://contains space/", false],
-  ["dane-test.denuoweb.com", "icann", "https://dane-test.denuoweb.com/", true]
+  ["welcome", "https://welcome/", true],
+  ["sub.welcome", "wss://sub.welcome/socket", true],
+  ["sub.unregistered-hns-root", "http://sub.unregistered-hns-root/", true],
+  ["example.com", "https://example.com/", true],
+  ["example.com", "http://example.com/", true],
+  ["example.com", "ws://example.com/socket", true],
+  ["xn--bcher-kva.com", "wss://xn--bcher-kva.com/socket", true],
+  ["localhost", "https://localhost/", false],
+  ["sub.localhost", "https://sub.localhost/", false],
+  ["example.onion", "https://example.onion/", false],
+  ["127.0.0.1", "https://127.0.0.1/", false],
+  ["2001:db8::1", "https://[2001:db8::1]/", false],
+  ["", "https:///", false],
+  ["contains space", "https://contains space/", false],
+  ["dane-test.denuoweb.com", "https://dane-test.denuoweb.com/", true],
+  ["example.com", "ftp://example.com/file", false]
 ];
 
-test("Rust-generated PAC applies scheme-aware native DANE admission", () => {
-  for (const [host, expectedClass, url, shouldProxy] of cases) {
-    const nativeClass = runNative(["--classify", host]).trim();
-    assert.equal(nativeClass, expectedClass, host);
+test("Rust-generated PAC sends every web DNS name to dual-root resolution", () => {
+  assert.doesNotMatch(pac, /HNS_ICANN_TLDS|dnsResolve\s*\(/);
+  for (const [host, url, shouldProxy] of cases) {
     const decision = vm.runInNewContext(
       `${pac}\nFindProxyForURL(${JSON.stringify(url)}, ${JSON.stringify(host)});`
     );

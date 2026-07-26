@@ -19,7 +19,8 @@ The resolution order is:
 2. locally verified current Handshake root state and name proof;
 3. proof-declared authoritative DoH;
 4. direct authoritative UDP/TCP DNS;
-5. the HNS P2P recursive relay (enabled by default for Android new installs);
+5. the HNS P2P recursive relay (used only after explicit browser requester
+   opt-in);
 6. the independently controlled legacy third-party HNS recursive DoH path.
 
 A successful authoritative DoH exchange suppresses direct DNS, P2P relay, and
@@ -155,7 +156,8 @@ never used to set `secure`.
 
 ## Server bounds and privacy
 
-The opt-in `hsd` server uses a 20-attempt/second per-peer token bucket with a
+An `hsd` output-node service, which is separately opt-in from default-on,
+opt-out opaque P2P relaying, uses a 20-attempt/second per-peer token bucket with a
 40-query burst, a 16-request per-peer in-flight limit, a 64-request global
 in-flight limit, and a three-second recursive deadline. Disconnect and timeout
 remove logical request state and suppress late replies. Admission or resolver
@@ -222,16 +224,18 @@ invalid DNSSEC, invalid negative proof, invalid TLSA, or a failed DANE match.
 
 ## Controls and diagnostics
 
-Android new installs enable `Experimental HNS peer DNS relay` and the
-independent `Legacy third-party HNS DoH compatibility` fallback by default;
-explicit preferences from existing installations are preserved. The isolated
-proof-of-concept acceptance configuration enables the relay while disabling
-legacy DoH so a successful test cannot silently use the later fallback. Relay
-provenance is `p2p_dns_relay`; authoritative DoH, direct authoritative DNS, and
-legacy DoH retain distinct provenance. A relayed result may be displayed as
-`DANE via HNS P2P`, never as third-party DoH. Serving remains separate: the
-companion `hsd` responder starts only when its operator explicitly enables the
-experimental relay service.
+Browser requester/consumer use is disabled until the user explicitly opts in;
+historical public-HNS-DoH settings never count as that consent. The isolated
+proof-of-concept acceptance configuration enables the requester while
+disabling legacy DoH so a successful test cannot silently use the later
+fallback. Relay provenance is `p2p_dns_relay`; authoritative DoH, direct
+authoritative DNS, and legacy DoH retain distinct provenance. A relayed result
+may be displayed as `DANE via HNS P2P`, never as third-party DoH.
+
+Serving is split into two independent controls. Opaque P2P relayer capacity is
+default-on with an explicit operator opt-out. Serving as an output node is
+default-off and requires a separate explicit opt-in; neither role is implied
+by browser requester consent.
 
 Settings can add a known relay peer by numeric `IPv4:port` or `[IPv6]:port`.
 The runtime applies the selected network's endpoint policy, completes a live
@@ -295,11 +299,11 @@ canary starts with two or three explicitly enabled patched nodes in different
 networks/administrative domains, aggregate-only logging, project-controlled
 synthetic names, and development builds. It then progresses through ordinary
 fallback and tester builds with legacy DoH disabled only after diversity,
-reliability, privacy, and resource bounds are demonstrated. The Android client
-default does not opt any `hsd` operator into serving relay queries.
+reliability, privacy, and resource bounds are demonstrated. Browser requester
+consent never changes either operator-side serving control.
 
-Rollback is immediate: disable the browser relay setting and the operator's
-`hsd` relay flag.
+Rollback is immediate: disable the browser requester setting, opt out of
+opaque relaying, and/or disable the independently controlled output-node role.
 Legacy DoH remains separately available. Removing legacy DoH from defaults
 requires measured independent relay diversity, availability and failure rate,
 median/tail latency, reliable alternate failover, authoritative-DoH adoption,

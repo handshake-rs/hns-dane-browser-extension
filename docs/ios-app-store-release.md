@@ -1,5 +1,10 @@
 # iOS App Store release
 
+> Historical mobile release notes. The iOS application and its release
+> workflow are not part of this Chromium-only repository checkpoint; the
+> workflow was removed here and mobile releases belong to the canonical
+> `hns-dane-browser-mobile` repository.
+
 The release path uses the standard `macos-26` GitHub-hosted runner in this public repository. Standard GitHub-hosted runners are free for public repositories, so MacInCloud is not part of the normal release path.
 
 The committed application identity is:

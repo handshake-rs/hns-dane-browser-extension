@@ -14,45 +14,85 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  scope:
-    name: Change scope and repository policy
+  policy:
+    name: Repository and supply-chain policy
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    outputs:
-      rust: ${{ steps.targets.outputs.rust }}
-      android: ${{ steps.targets.outputs.android }}
-      ios: ${{ steps.targets.outputs.ios }}
+    timeout-minutes: 30
     steps:
-      - name: Check out repository and comparison history
+      - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
-      - name: Select affected CI targets
-        id: targets
-        env:
-          CI_EVENT_NAME: ${{ github.event_name }}
-          CI_BEFORE_SHA: ${{ github.event.before }}
-          CI_CURRENT_SHA: ${{ github.sha }}
-          CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: ./scripts/ci-changed-targets.sh
-
-      - name: Install pinned Rust toolchain for metadata policy
+      - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.92.0 --profile minimal
 
-      - name: Verify repository policy and release metadata
+      - name: Install pinned cargo-deny
+        run: cargo +1.92.0 install cargo-deny --version 0.19.9 --locked
+
+      - name: Verify repository policy
         run: |
-          python3 -m unittest -v tests/test_ci_changed_targets.py
-          ./scripts/verify-supply-chain.sh
-          python3 ./scripts/generate-third-party-notices.py --check
-          ./scripts/check-version-consistency.sh
+          set -euo pipefail
+
+          while IFS= read -r -d '' tracked_file; do
+            base_name="${tracked_file##*/}"
+            case "$base_name" in
+              .env|.env.*|.envrc|local.properties|keystore.properties|signing.properties|release.properties|google-services.json|*.keystore|*.jks|*.p12|*.pfx|*.pkcs12|*.kdbx|*.pem|*.key|*.asc|service-account*.json|credentials*.json|firebase-adminsdk*.json)
+                echo "::error::Potential secret-bearing file must not be tracked: $tracked_file"
+                exit 1
+                ;;
+            esac
+          done < <(git ls-files -z)
+
+          if git grep -IEn \
+            '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-(proj-)?[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16})' \
+            -- . ':!scripts/verify-supply-chain.sh'; then
+            echo "::error::Potential high-confidence secret found in a tracked file."
+            exit 1
+          fi
+
+          shopt -s nullglob
+          workflow_files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          shopt -u nullglob
+          if [[ ${#workflow_files[@]} -eq 0 ]]; then
+            echo "::error::No GitHub Actions workflows were found."
+            exit 1
+          fi
+
+          while IFS= read -r action_reference; do
+            action_reference="${action_reference#\"}"
+            action_reference="${action_reference%\"}"
+            action_reference="${action_reference#\'}"
+            action_reference="${action_reference%\'}"
+            if [[ "$action_reference" == ./* ]]; then
+              continue
+            fi
+            if [[ ! "$action_reference" =~ ^[-A-Za-z0-9_.]+/[-A-Za-z0-9_.]+(/[-A-Za-z0-9_.]+)*@[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::GitHub Action is not pinned to a full commit SHA: $action_reference"
+              exit 1
+            fi
+          done < <(sed -nE 's/^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*([^[:space:]#]+).*/\2/p' "${workflow_files[@]}")
+
+      - name: Verify the locked Rust supply chain
+        run: |
+          set -euo pipefail
+          if [[ ! -s rust/Cargo.lock ]]; then
+            echo "::error::Required dependency lock is missing: rust/Cargo.lock"
+            exit 1
+          fi
+          cargo +1.92.0 metadata \
+            --locked \
+            --manifest-path rust/Cargo.toml \
+            --no-deps \
+            --format-version 1 >/dev/null
+          cargo +1.92.0 deny \
+            --locked \
+            --manifest-path rust/Cargo.toml \
+            check \
+            --config rust/deny.toml
 
   rust:
-    name: Rust and supply chain
-    needs: scope
-    if: ${{ needs.scope.outputs.rust == 'true' }}
+    name: Rust workspace and native host
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -64,117 +104,72 @@ jobs:
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.92.0 --profile minimal --component rustfmt --component clippy
-          rustup default 1.92.0
 
-      - name: Install pinned cargo-deny
-        run: cargo +1.92.0 install cargo-deny --version 0.19.9 --locked
+      - name: Check Rust formatting
+        run: cargo +1.92.0 fmt --manifest-path rust/Cargo.toml --all -- --check
 
-      - name: Run Rust, fuzz, tool, and supply-chain checks
-        run: ./scripts/check.sh
+      - name: Lint the Rust workspace
+        run: cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
 
-  android:
-    name: Android build and unit tests
-    needs: scope
-    if: ${{ needs.scope.outputs.android == 'true' }}
+      - name: Test the Rust workspace
+        run: cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
+
+      - name: Build the Chromium native host
+        run: cargo +1.92.0 build --locked --release --manifest-path rust/Cargo.toml -p hns-chromium-native-host
+
+  extension:
+    name: Chromium extension
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.92.0 --profile minimal
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          distribution: temurin
-          java-version: "21"
+          node-version: "22"
 
-      - name: Install pinned Rust Android tools
-        run: |
-          rustup toolchain install 1.92.0 --profile minimal
-          rustup default 1.92.0
-          rustup target add --toolchain 1.92.0 aarch64-linux-android x86_64-linux-android
-          cargo +1.92.0 install cargo-ndk --version 4.1.2 --locked
+      - name: Lint the Chromium extension
+        run: npm run lint:extension
 
-      - name: Install pinned Android SDK components
-        run: |
-          "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-37.0" \
-            "build-tools;36.0.0" \
-            "ndk;28.2.13676358"
+      - name: Test the Chromium extension and native host
+        run: npm run test:extension
 
-      - name: Verify pinned build inputs
-        run: ./scripts/verify-supply-chain.sh
-
-      - name: Verify shared runtime boundaries
-        run: ./scripts/check-runtime-boundaries.sh
-
-      - name: Build and test Android variants
-        working-directory: android
-        env:
-          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/28.2.13676358
-          ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/28.2.13676358
-          HNS_ANDROID_NDK_VERSION: 28.2.13676358
-        run: ./gradlew assembleDebug testDebugUnitTest lintDebug verifyReleaseBundleStructure --no-daemon --stacktrace
-
-  ios:
-    name: Apple ABI, XCFramework, and iOS shell
-    needs: scope
-    if: ${{ needs.scope.outputs.ios == 'true' }}
-    runs-on: macos-26
-    # Three release-mode Rust slices plus simulator XCTest and a device-slice
-    # Release link routinely exceed the old one-hour budget on the standard
-    # 3-core hosted runner even when every command is making progress.
-    timeout-minutes: 90
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          persist-credentials: false
-
-      - name: Run the complete iOS gate
-        run: ./scripts/run-ios-gate.sh
+      - name: Build the Chromium extension
+        run: npm run build:extension
 
   required:
     name: Required CI
-    needs: [scope, rust, android, ios]
+    needs: [policy, rust, extension]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Verify every selected target passed
+      - name: Verify every required gate passed
         env:
-          SCOPE_RESULT: ${{ needs.scope.result }}
-          RUST_REQUIRED: ${{ needs.scope.outputs.rust }}
+          POLICY_RESULT: ${{ needs.policy.result }}
           RUST_RESULT: ${{ needs.rust.result }}
-          ANDROID_REQUIRED: ${{ needs.scope.outputs.android }}
-          ANDROID_RESULT: ${{ needs.android.result }}
-          IOS_REQUIRED: ${{ needs.scope.outputs.ios }}
-          IOS_RESULT: ${{ needs.ios.result }}
+          EXTENSION_RESULT: ${{ needs.extension.result }}
         run: |
           set -euo pipefail
           failed=0
 
-          if [[ "$SCOPE_RESULT" != "success" ]]; then
-            echo "::error::Change scope and repository policy finished with $SCOPE_RESULT."
-            failed=1
-          fi
-
-          check_target() {
+          check_gate() {
             local name="$1"
-            local required="$2"
-            local result="$3"
-            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
-              echo "::error::$name finished with $result."
-              failed=1
-            elif [[ "$required" == "true" && "$result" != "success" ]]; then
-              echo "::error::$name was required but finished with $result."
+            local result="$2"
+            if [[ "$result" != "success" ]]; then
+              echo "::error::$name gate finished with $result."
               failed=1
             fi
           }
 
-          check_target "Rust" "$RUST_REQUIRED" "$RUST_RESULT"
-          check_target "Android" "$ANDROID_REQUIRED" "$ANDROID_RESULT"
-          check_target "iOS" "$IOS_REQUIRED" "$IOS_RESULT"
+          check_gate "Repository and supply-chain policy" "$POLICY_RESULT"
+          check_gate "Rust workspace and native host" "$RUST_RESULT"
+          check_gate "Chromium extension" "$EXTENSION_RESULT"
           exit "$failed"

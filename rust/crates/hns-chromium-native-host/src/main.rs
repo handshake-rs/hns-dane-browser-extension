@@ -1,6 +1,4 @@
-use hns_browser_runtime::{
-    BrowserHostClass, NetworkKind, chromium_dane_pac_script, classify_browser_host,
-};
+use hns_browser_runtime::{NetworkKind, chromium_dane_pac_script};
 use hns_chromium_native_host::{
     LocalCaStore, NativeHostController, native_messaging_host_manifest_json, serve_native_messaging,
 };
@@ -24,10 +22,6 @@ fn run() -> Result<(), String> {
                 "{}",
                 chromium_dane_pac_script(port).map_err(|error| error.to_string())?
             );
-            return Ok(());
-        }
-        UtilityCommand::Classify(host) => {
-            println!("{}", class_name(classify_browser_host(&host)));
             return Ok(());
         }
         UtilityCommand::CaInfo => {
@@ -86,7 +80,6 @@ struct Options {
 enum UtilityCommand {
     Serve,
     PrintPac(u16),
-    Classify(String),
     CaInfo,
     MarkCaInstalled,
     ClearCaInstalled,
@@ -131,13 +124,6 @@ impl Options {
                             .parse()
                             .map_err(|_| "--print-pac port is invalid".to_owned())?,
                     ))?;
-                }
-                "--classify" => {
-                    index += 1;
-                    let value = arguments
-                        .get(index)
-                        .ok_or_else(|| "--classify requires a host".to_owned())?;
-                    options.set_command(UtilityCommand::Classify(value.clone()))?;
                 }
                 "--ca-info" => options.set_command(UtilityCommand::CaInfo)?,
                 "--mark-ca-installed" => {
@@ -233,13 +219,4 @@ fn default_data_dir() -> PathBuf {
         .unwrap_or_else(env::temp_dir)
         .join("hns-dane-browser")
         .join("chromium")
-}
-
-fn class_name(class: BrowserHostClass) -> &'static str {
-    match class {
-        BrowserHostClass::Hns => "hns",
-        BrowserHostClass::Icann => "icann",
-        BrowserHostClass::Search => "search",
-        BrowserHostClass::NativeGateway => "nativeGateway",
-    }
 }

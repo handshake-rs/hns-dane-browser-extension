@@ -18,6 +18,10 @@ use hns_dnssec::{
     validate_nsec_name_error, validate_nsec_no_data, validate_nsec3_name_error,
     validate_nsec3_no_data, validate_rrset_signature, validate_signed_rrset,
 };
+use hns_namespace_resolution::{
+    ClassificationError as NamespaceClassificationError, NamespaceDecision, OriginQuery,
+    ValidationError as NamespaceValidationError,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BTreeSet, HashMap};
 use std::io::{Read, Write};
@@ -70,6 +74,15 @@ pub struct ResolutionAnswer {
     pub name: DnsName,
     pub records: Vec<ResourceRecord>,
     pub secure: bool,
+}
+
+/// Atomic dual-root decision and the selected root's retained raw DNS
+/// material. Consumers use the complete selected plan for connection state;
+/// this answer exists only for diagnostics and compatibility.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedNamespaceResolution {
+    pub decision: NamespaceDecision,
+    pub selected_answer: ResolutionAnswer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -134,10 +147,25 @@ pub enum ResolverError {
     CachePoisoned,
     #[error("resolver storage error: {0}")]
     Storage(String),
+    #[error("dual-root namespace input is invalid: {0}")]
+    NamespaceValidation(#[from] NamespaceValidationError),
+    #[error("dual-root namespace classification failed: {0}")]
+    NamespaceClassification(#[from] NamespaceClassificationError),
+    #[error("neither namespace has a usable origin plan")]
+    NamespaceUnavailable,
 }
 
 pub trait Resolver {
     fn resolve(&self, request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError>;
+
+    /// Builds one complete dual-root browser decision when the resolver owns
+    /// that adapter. Legacy record-oriented resolvers return `None`.
+    fn prepare_namespace_resolution(
+        &self,
+        _query: &OriginQuery,
+    ) -> Result<Option<PreparedNamespaceResolution>, ResolverError> {
+        Ok(None)
+    }
 }
 
 pub trait DelegatedResolver {
@@ -1244,9 +1272,16 @@ where
 
         let has_secure_delegation =
             has_owner_record(&delegation_records, &root_owner, RecordType::Ds);
-        let mut delegated = self
+        let mut delegated = match self
             .delegated_resolver
-            .resolve_delegated(request, &delegation)?;
+            .resolve_delegated(request, &delegation)
+        {
+            Ok(answer) => answer,
+            Err(ResolverError::NameNotFound) if !has_secure_delegation => {
+                return Err(ResolverError::DnssecFailed);
+            }
+            Err(error) => return Err(error),
+        };
         if !has_secure_delegation {
             delegated.secure = false;
             return Ok(delegated);
@@ -5690,6 +5725,43 @@ mod tests {
 
         assert!(!answer.secure);
         assert_eq!(answer.records.len(), 1);
+    }
+
+    #[test]
+    fn delegated_name_error_requires_a_ds_secured_child() {
+        let resolver_for = |secure_child: bool| {
+            let mut records = vec![ns_record("welcome", "ns1.welcome")];
+            if secure_child {
+                records.push(ds_record("welcome"));
+            }
+            DelegatingResolver::new(
+                StaticProofProvider {
+                    proven: ProvenNameRecords {
+                        root_name: "welcome".to_owned(),
+                        name_hash: NameHash::from_name("welcome").unwrap(),
+                        records,
+                        secure: true,
+                        exists: true,
+                    },
+                },
+                CountingNameNotFoundResolver {
+                    count: AtomicUsize::new(0),
+                },
+            )
+        };
+        let request = ResolutionRequest {
+            qname: "welcome".to_owned(),
+            qtype: RecordType::A.code(),
+        };
+
+        assert_eq!(
+            resolver_for(true).resolve(&request).unwrap_err(),
+            ResolverError::NameNotFound,
+        );
+        assert_eq!(
+            resolver_for(false).resolve(&request).unwrap_err(),
+            ResolverError::DnssecFailed,
+        );
     }
 
     #[test]

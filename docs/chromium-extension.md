@@ -2,28 +2,50 @@
 
 ## Scope
 
-The Manifest V3 extension routes every HNS request and every ICANN HTTPS/WSS
-request through an authenticated IPv4-loopback HTTP/CONNECT proxy. Rust
-generates PAC schema 2 from the same vendored IANA and special-use snapshots
-used at the proxy admission boundary. Ordinary ICANN HTTP, special-use,
-search, and IP-literal targets remain `DIRECT`; the Rust DANE-browser
-admission mode independently rejects special-use, search, and IP-literal
-targets if they reach it.
+The Manifest V3 extension routes every ordinary DNS hostname used by
+HTTP/HTTPS/WS/WSS through an authenticated IPv4-loopback HTTP/CONNECT proxy.
+Rust generates syntax-only PAC schema 3. It uses no IANA suffix list and does
+no resolver work; special-use names, malformed names, non-web schemes, and IP
+literals remain `DIRECT` and are independently rejected if they reach the
+native DANE-browser admission mode.
 
-Routing all ICANN HTTPS/WSS is intentional. A PAC cannot know whether a host
-publishes TLSA without performing forbidden resolver work, so discovery must
-happen after authenticated native admission. This newer browser-wide DANE
-requirement supersedes the earlier HNS-only PAC scope.
+The native request boundary resolves the complete hostname independently
+through HNS and ICANN. It retains one complete plan per root, including
+A/AAAA/CNAME, HTTPS/SVCB, the effective service port and transport, and TLSA:
+
+- HNS only selects HNS;
+- ICANN only selects ICANN;
+- matching plans are convergent;
+- different plans apply a persistent sticky binding when one exists, otherwise
+  the first-use ICANN default;
+- authenticated absence in both roots is a resolution failure;
+- any timeout, bogus or indeterminate DNSSEC result, malformed response, or
+  other root failure makes classification indeterminate and fails closed.
+
+The IANA snapshot may remain an internal scheduling hint, but it is not an
+authority boundary and cannot select or bypass a namespace.
+
+Each root plan queries and validates both A and AAAA, requires their
+alias/terminal-owner paths to agree, and retains the complete deterministic
+endpoint set. A whole-name NXDOMAIN can terminate that root; NODATA for one
+family cannot hide the other. The Gateway dials only the selected plan and
+performs no later resolver lookup that could introduce an omitted address.
+Consequently, roots with matching A but different AAAA results are divergent.
+
+Persistent namespace selection treats HTTPS/WSS and HTTP/WS as paired security
+origins for the same host and effective port, so a page and its WebSocket
+cannot select different roots merely because their wire schemes differ. The
+actual scheme remains in each plan and decision fingerprint.
 
 The native host owns sync, HNS proof validation, delegated DNSSEC, TLSA/DANE,
-origin transport, proxy credentials, certificate issuance, policy revisions,
-and monotonic runtime status. JavaScript owns only browser APIs, native-message
-transport, bounded settings, and UI.
+origin transport, namespace bindings, proxy credentials, certificate issuance,
+policy revisions, and monotonic runtime status. JavaScript owns only browser
+APIs, native-message transport, bounded settings, and UI.
 
-No production path sends an HNS name to a public recursive resolver or accepts
-WebPKI for HNS HTTPS. For ICANN HTTPS/WSS, Rust derives the TLSA owner from the
-effective origin port and transport, queries through validating ICANN DoH, and
-applies one closed decision:
+No production path sends an HNS lookup to a public recursive resolver or
+accepts WebPKI for a selected HNS HTTPS plan. For a selected ICANN HTTPS/WSS
+plan, Rust derives the TLSA owner from the effective origin port and transport,
+queries through validating ICANN DoH, and applies one closed decision:
 
 - a securely present supported TLSA RRset is enforced;
 - authenticated TLSA absence uses WebPKI;
@@ -35,21 +57,36 @@ applies one closed decision:
 HTTP/1.1, HTTP/2, and WSS use `_port._tcp.host`; HTTPS/SVCB-selected HTTP/3
 uses `_port._udp.host`. Status calls this path `DANE via ICANN DoH`.
 
+ICANN plan freshness is bounded by the earliest expiry across every retained
+address, alias, HTTPS/SVCB, denial, and TLSA observation, including RRSIG
+expiration. Because the legacy HNS delegated resolver does not yet expose
+exact RR/RRSIG expiry, a plan that uses delegated HNS DNS is conservatively
+reusable for at most one second; direct Urkel-only evidence retains its
+anchor-bounded lifetime.
+
+The old stateless-DANE parser/transport capability is not an active Chromium
+feature in this checkpoint. The atomic dual-root plan requires live
+DNSSEC-secure TLSA for selected HNS HTTPS and fails closed before certificate
+evidence can authorize a TLS connection. Re-enabling stateless DANE requires a
+typed trust policy in the shared plan contract and remains a release blocker
+for that feature claim.
+
 ## Rust-owned security results
 
 The loopback proxy observes typed internal response metadata before removing
 the private `X-HNS-*` fields from the browser-visible response. The native
-host converts that observation into security-result schema 1. Each result is
+host converts that observation into security-result schema 2. Each result is
 bound to the exact runtime session, runtime generation, policy generation, and
 one monotonic event sequence. A proxy stop or policy restart clears all
 retained results before revoking the old proxy generation.
 
-The result reports the network and chain-currentness anchor, actual selected
-DNS transport, local HNS-proof state, local DNSSEC state, TLSA state, DANE
-state, peer/proxy/target identities where applicable, privacy policy, registry
-profile, and fallback/separation outcomes. A relayed result continues to name
-the delegated nameserver as the authority and identifies the relay only as an
-intermediary.
+The result reports the five-way namespace outcome, selected root and reason,
+each root's state, network and chain-currentness anchor, actual selected DNS
+transport, local HNS-proof state, local DNSSEC state, TLSA state, DANE state,
+peer/proxy/target identities where applicable, privacy policy, registry
+profile, and fallback/separation outcomes. Divergence is visible in the popup.
+A relayed result continues to name the delegated nameserver as the authority
+and identifies the relay only as an intermediary.
 
 Only a bounded 32-result in-memory diagnostic window and the latest main-frame
 result are retained. The native host deliberately discards the raw resolution
@@ -147,10 +184,14 @@ the service worker also clears it during orderly suspension.
 - Windows switches inherited standard streams to binary mode before reading a
   frame.
 - The generated PAC contains no `dnsResolve`, socket, DoH, or fallback path.
-- PAC schema 2 sends HNS plus ICANN HTTPS/WSS to the native gateway, so main
-  frames, redirects, subresources, Service Workers, downloads, and WebSockets
-  share one request-boundary decision instead of relying on initial-page
-  classification.
+- PAC schema 3 sends every ordinary HTTP/HTTPS/WS/WSS DNS hostname to the
+  native gateway, so main frames, redirects, subresources, Service Workers,
+  downloads, and WebSockets share the same dual-root request-boundary policy.
+- Namespace decision fingerprints partition connection pools, TLS verifier and
+  resumption state, and Alt-Svc state. Records from different roots are never
+  mixed into one plan.
+- HTTPS/WSS and HTTP/WS share their persistent namespace binding at equal host
+  and effective port, while retaining distinct request-plan fingerprints.
 - Proxy authentication is accepted only for the active `127.0.0.1` generation.
 - CA-not-installed, host disconnect, malformed response, unsupported policy,
   PAC installation failure, and proxy restart all clear browser proxy state.
@@ -163,7 +204,10 @@ the service worker also clears it during orderly suspension.
   state from browser-visible headers.
 - Historical public-HNS-DoH settings are removed without granting P2P relay
   consent.
-- P2P DNS relay is opt-in. P2P ODoH, HNSR, and draft wire profiles are exposed
+- The P2P DNS relay requester remains an independent opt-in. Opaque
+  relay-serving capacity is default-on with an explicit operator opt-out,
+  while output-node serving is a separate explicit opt-in and is never implied
+  by requester settings. P2P ODoH, HNSR, and draft wire profiles are exposed
   as policy vocabulary but currently fail closed in Rust rather than silently
   downgrading.
 
@@ -186,22 +230,19 @@ cargo +1.92.0 clippy --locked --offline \
 npm run check:extension
 ```
 
-The automatic ICANN DANE checkpoint passed all 47 gateway tests. The existing
-151-test loopback-proxy gate remained compile/clippy clean, and the added
-named-ICANN unsafe-port regression passed in isolation. The preceding
-checkpoint also passed 129 browser-runtime and 11 native-host tests. The
+The final Chromium checkpoint passed 48 gateway, 152 loopback-proxy, 154
+browser-runtime, 12 native-host, 64 resolver, and 51 transport tests. The
 extension gate passed all 6 Node suites, including isolated Linux
 install/uninstall, Windows registration/removal coverage, PAC parity, native
 messaging, stale-generation rejection, health-generation preservation, and
 the unpacked MV3 build. Socket-backed Rust tests require permission to bind
-loopback in a restricted sandbox; they passed when run with that local access.
-The focused strict-clippy gate above also passed.
+loopback in a restricted sandbox; they passed with that local access. The full
+Chromium workspace also passed warning-denied Clippy and rustfmt.
 
-The `./scripts/check.sh` wrapper currently stops at its pre-existing
-third-party-notice preflight: Cargo fingerprints are stale and the locked
-Android `androidx.activity:activity-ktx:1.13.0` POM is not present in the local
-Gradle cache, so the notice generator cannot refresh the checked-in asset
-offline. No notice freshness success is claimed by this checkpoint.
+The historical cross-platform `./scripts/check.sh` wrapper is not a release
+gate for this extraction because it still contains mobile packaging and notice
+workflows. The Chromium-specific commands above are the authoritative local
+checkpoint.
 
 ## Remaining integration boundary
 
@@ -218,6 +259,11 @@ generation, policy generation, and event-sequence invariants, but does not
 claim that the duplicate runtime has been replaced or that the canonical
 contract is a published dependency. That consolidation, P2P ODoH, HNSR, and
 non-stable experimental wire profiles remain fail-closed work.
+
+The retained Android/iOS source and FFI directories are historical and excluded
+from the Cargo workspace/release graph. Mobile dual-root and ICANN-DANE
+qualification belongs to the separate canonical mobile repository; this
+Chromium checkpoint makes no all-browser coverage claim.
 
 ## Release gates still requiring target hardware
 

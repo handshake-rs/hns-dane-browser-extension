@@ -2,9 +2,15 @@
 
 Last audited: 2026-07-16
 
+> Most mobile evidence below is historical. The active workflow in this
+> extraction is Chromium-only: it always runs repository/supply-chain policy,
+> the Rust workspace and release native-host build, the Node extension
+> lint/tests/build, and a required aggregate gate. Android, Apple, TestFlight,
+> and screenshot jobs were removed from this repository's workflow graph.
+
 ## Configured and Local Gates
 
-- The checked-in GitHub Actions workflow always runs a lightweight repository-policy and path-classification job, then selects the Rust, Android, and Apple gates affected by the complete change set. Shared Rust changes run all three gates; platform-only changes skip the opposing application shell; unknown paths and manual dispatches fail safe by selecting everything. Its permissions are read-only, release secrets are not provided, every non-local `uses:` reference is pinned to a full commit SHA, checkout credentials are not persisted, and concurrent runs on the same ref are cancelled. Historical evidence: the `0.4.1` code and build-policy tree passed every selected job in [run 29477163745](https://github.com/Denuo-Web/hns-dane-browser/actions/runs/29477163745). Actions was then restored to the repository's prior disabled state, so that pass does not validate `0.5.0` and CI is not an enforced merge gate.
+- The checked-in GitHub Actions workflow always runs the Chromium policy, Rust/native-host, and extension gates. Its permissions are read-only, release secrets are not provided, every non-local `uses:` reference is pinned to a full commit SHA, checkout credentials are not persisted, and concurrent runs on the same ref are cancelled. Historical evidence: the earlier `0.4.1` cross-platform tree passed every selected job in [run 29477163745](https://github.com/Denuo-Web/hns-dane-browser/actions/runs/29477163745); that run does not validate this checkpoint.
 - Dependabot watches GitHub Actions, Gradle, and all three Cargo lockfile roots weekly.
 - Rust uses toolchain `1.92.0`; build, clippy, test, metadata, Android cross-compile, and cargo-deny commands use committed lockfiles with `--locked`. No Cargo lockfile contains a Git dependency, and registry packages carry Cargo checksums.
 - cargo-deny covers all three manifests. The fuzz and exporter packages now declare the repository license. `NCSA` is allowed specifically because `libfuzzer-sys` combines its MIT/Apache-2.0 code with LLVM libFuzzer code under the University of Illinois/NCSA license.

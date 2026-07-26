@@ -1,5 +1,9 @@
 # Security Model
 
+This checkpoint's release boundary is the Chromium extension/native host. The
+mobile platform sections are retained historical design notes; the embedded
+mobile sources are outside the workspace and do not provide release evidence.
+
 ## Trust
 
 The app verifies header chainwork, checkpoint ancestry, proof-of-work difficulty, Urkel proofs against header tree roots, DNSSEC chains below HNS delegations, TLSA records, DANE certificate or SPKI matches, and transport downgrade policy.
@@ -16,7 +20,7 @@ The default proof-backed path does not trust a single peer, external HNS resolve
   insecure/unsigned delegation (discard unsigned TLSA and use WebPKI), or
   bogus/indeterminate (fail closed). A resolver error is never cached or
   represented as no TLSA.
-- Experimental stateless DANE certificate evidence is off by default. When enabled, certificate evidence can only supply HNS TLSA policy after its Urkel proof matches a recent locally synced tree root and its direct-zone DNSSEC chain validates from the HNS-proven DS RRset. Missing certificate evidence falls back to the normal live proof/resolver path; malformed or invalid supported certificate evidence fails closed when it is used.
+- Experimental stateless DANE parsers remain, but the atomic dual-root browser plan currently requires live DNSSEC-secure HNS TLSA. A selected HNS HTTPS plan without live TLSA fails closed before certificate evidence can authorize transport, even if the old setting is enabled. No stateless-DANE release claim is made until the shared plan contract carries a typed trust policy.
 - Sync stale: block HNS secure state and show a sync-specific browser error.
 - Sync attempts that make no progress must distinguish up-to-date peers from all-peer failure.
 - Sync catch-up must continue while persisted `bestPeerHeight` or the estimated mainnet tip is greater than local `bestHeight`, regardless of whether the latest native tick accepted headers.
@@ -29,14 +33,31 @@ The default proof-backed path does not trust a single peer, external HNS resolve
 - Verified HNS non-inclusion must surface as name-not-found instead of origin-address-missing.
 - Proof-anchored `hnsdns=1` metadata and RFC 9461 `_dns.<nameserver>` SVCB records may add only RFC 8484 authoritative DoH transport endpoints for HNS-proven nameservers. They do not synthesize origin A/AAAA, HTTPS, or TLSA answers; malformed matching declarations fail closed, and all resulting DNS answers still validate against the HNS-proven DS.
 - A whole-browser proxy target must authenticate before host classification, DNS, or dialing. ICANN forwarding accepts only canonical public IP literals or public A/AAAA addresses returned by the runtime's bounded, explicit-bootstrap, WebPKI-authenticated DoH client. NXDOMAIN, truncated, wrong-class, unrelated-owner, ambiguous CNAME, private/special address, and unsafe-port results fail before an origin socket is opened.
-- Chromium PAC schema 2 routes every ICANN HTTPS/WSS DNS origin and every HNS
-  origin through the authenticated native gateway. The gateway derives TLSA
-  from the effective port and transport after HTTPS/SVCB selection, so
-  navigations, redirects, subresources, Service Workers, downloads, and
-  WebSockets use the same decision. Special-use names and IP literals remain
-  outside PAC admission and are rejected by the native DANE-browser mode.
+- Chromium PAC schema 3 routes every ordinary HTTP/HTTPS/WS/WSS DNS hostname
+  through the authenticated native gateway without using an IANA list as
+  authority. The gateway resolves the complete hostname independently through
+  HNS and ICANN, retains both complete plans, selects one root before consuming
+  A/AAAA/CNAME, HTTPS/SVCB, or TLSA, and binds that decision fingerprint to
+  transport reuse. Navigations, redirects, subresources, Service Workers,
+  downloads, and WebSockets therefore use the same boundary. Special-use names
+  and IP literals remain outside PAC admission and are rejected by the native
+  DANE-browser mode.
+- A retained root plan queries and validates both A and AAAA, requires their
+  alias/terminal-owner paths to agree, and retains the complete deterministic
+  endpoint set. A whole-name NXDOMAIN can terminate a root lookup; family
+  NODATA cannot hide the other family. The Gateway consumes only the selected
+  plan and cannot perform a later address lookup.
+- ICANN plan freshness is the earliest expiry across all A/AAAA,
+  HTTPS/SVCB, alias, denial, and TLSA observations, including RRSIG expiry.
+  The legacy HNS delegated resolver does not yet expose exact RR/RRSIG expiry,
+  so plans that use delegated HNS DNS and delegated negative answers are
+  conservatively reusable for at most one second. Direct Urkel-only evidence
+  keeps its anchor-bounded freshness.
+- HTTPS and WSS share one persistent namespace pin for the same host and
+  effective port; HTTP and WS do likewise. The actual wire scheme remains in
+  each plan and its decision fingerprint.
 
-## Hardened WebView Profile
+## Historical Hardened WebView Profile
 
 The Android WebView shell follows a hardened browser profile derived from Android WebView platform security guidance, OWASP MASVS/MASTG WebView controls, RFC 6454 origin semantics, and the applicable W3C web-platform security standards.
 
@@ -96,15 +117,15 @@ The iOS shell uses one persistent identified `WKWebsiteDataStore` with one authe
 ## Experimental P2P DNS relay trust boundary
 
 The P2P DNS relay is an untrusted transport beneath the existing proof-backed
-delegated resolver. Android new installs enable it by default, while preserving
-an explicit preference already chosen by an existing installation. It is
-considered only after current locally validated headers and a matching Urkel
-proof have produced an acceptable HNS NS/DS delegation, proof-declared
-authoritative DoH has not succeeded, and direct authoritative UDP/TCP 53 has
-failed or has been classified as intercepted. The legacy third-party HNS DoH
-path remains a later, independently controlled compatibility mechanism and is
-also enabled by default for Android new installs. The `hsd` relay responder is
-never enabled implicitly; an operator must opt in to serving queries.
+delegated resolver. Browser requester/consumer use is an explicit opt-in and
+is considered only after current locally validated headers and a matching
+Urkel proof have produced an acceptable HNS NS/DS delegation,
+proof-declared authoritative DoH has not succeeded, and direct authoritative
+UDP/TCP 53 has failed or has been classified as intercepted. Opaque
+relay-serving capacity is default-on with an explicit operator opt-out.
+Serving as an output node is a separate explicit opt-in and is never implied
+by either requester consent or opaque relaying. The legacy third-party HNS DoH
+path remains a later, independently controlled compatibility mechanism.
 
 The peer necessarily learns the qname, qtype, client P2P connection, and source
 network address. The ordinary Handshake TCP listener is plaintext; no query
@@ -216,7 +237,15 @@ does not by itself change peer score or start a cooldown. See
 - No unbounded or panic-prone X.509 parsing for DANE SPKI selector matching.
 - No QUIC downgrade without an explicit policy event.
 - No local gateway listener beyond loopback and no fixed browser proxy port in normal app startup. Android must not apply a broad proxy when WebView cannot scope it to the active HNS host; iOS intentionally proxies the whole data store and therefore must not enable failover or any direct WebKit route. Neither platform keeps a browser proxy listener after its owning foreground browser lifecycle is revoked.
-- No dotted host under the vendored IANA root-zone TLD snapshot should be routed into HNS resolution; normal ICANN destinations such as `discord.gg` must stay on the WebView/ICANN path.
+- In the Chromium release target, no IANA suffix snapshot may decide namespace
+  authority. Every ordinary DNS hostname must be classified from full-host HNS
+  and ICANN results; a snapshot may only schedule or cache lookup work. The
+  historical embedded mobile source is expressly excluded from this claim.
+- No failure in either root may be converted to absence. Bogus or indeterminate
+  DNSSEC, stale/erased HNS proof provenance, malformed data, and transport
+  failure make the dual-root decision indeterminate and fail closed.
+- No selected-root plan may consume an address, alias, HTTPS/SVCB parameter,
+  service port/transport, or TLSA record from the other root.
 - No origin fetch unless the gateway resolution name matches the requested origin host.
 - No intercepted HNS redirect should be followed unless the target has the same scheme, host, and effective port and the redirect chain stays under the configured bound.
 - No main-frame HNS gateway 4xx/5xx response should leave the toolbar in verified state.

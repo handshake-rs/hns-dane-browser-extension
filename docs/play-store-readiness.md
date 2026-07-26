@@ -4,6 +4,12 @@ Last audited: 2026-07-16
 
 This checklist maps HNS DANE Browser to current Google Play update requirements and identifies the Play Console fields that must be reconciled outside the repository. The app is already public: the live production listing observed during the prior audit served `0.3.1` (`versionCode 22`). The current repository release candidate declares Android `0.5.0` (`versionCode 40`) with shared Rust engine `0.5.0`. Local and signed-artifact gates pass; hosted CI and release-device gates remain pending. The retained `0.4.1` results below are historical evidence only.
 
+> Historical mobile checklist only. Android is excluded from this extraction's
+> workspace and release graph. References below to requester-default-on behavior
+> are superseded: browser requester use is opt-in, opaque P2P relaying is
+> default-on with opt-out, and output-node service is separately opt-in. Use the
+> canonical mobile repository for current Play readiness.
+
 ## Current Repo Status
 
 | Area | Status | Evidence / Action |
@@ -13,7 +19,7 @@ This checklist maps HNS DANE Browser to current Google Play update requirements 
 | 64-bit / 16 KiB native code | Ready locally for `0.5.0` | The `arm64-v8a` and `x86_64` libraries pass 16 KiB alignment, ELF hardening, Build ID, matching symbol, stripping, and path-sanitization gates; the signed APK passes 16 KiB ZIP alignment. |
 | Restricted permissions | Ready | Manifest does not request location, contacts, SMS, call logs, camera, microphone, all-files, package visibility, or account permissions. |
 | Foreground service | Not used | Sync is owned by the application while at least one app screen is started and stops when the whole app backgrounds. The manifest declares no service and requests none of `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE`, or `FOREGROUND_SERVICE_DATA_SYNC`; mark foreground-service use as not applicable and remove stale `dataSync` drafts. |
-| Privacy policy | Repository updated; hosted reconciliation required | Keep `https://denuoweb.com/work/hns-dane-browser/privacy` as the canonical URL, but publish the revised policy that discloses the default P2P DNS relay, its observable query/network metadata, manual peer endpoints, and independent legacy DoH fallback before submitting `0.5.0`. |
+| Privacy policy | Historical evidence; superseded | The former checklist described requester-default-on behavior. The current policy requires explicit requester opt-in and separately describes opaque relaying and output-node controls. |
 | Data safety form | Live reconciliation required | The current `No data collected / No data shared` posture is consistent with Google's open-web, on-device, and user-initiated-transfer exclusions. Confirm current WebView-provider Safe Browsing guidance before resubmission. |
 | Ads declaration | Ready | Declare “No ads.” Donations do not unlock features. |
 | Account deletion | Not applicable | The app does not create developer-operated accounts. |
@@ -108,7 +114,7 @@ Use an active, publicly accessible, non-PDF URL. Current hosted URL:
 
 <https://denuoweb.com/work/hns-dane-browser/privacy>
 
-On 2026-07-14 the route rendered the policy accepted for the historical `0.4.1` audit after the site application loaded. That copy predates the `0.5.0` default P2P DNS relay behavior and must be replaced with the revised 2026-07-16 repository policy before submission. Change the existing Play listing from its older `/hns-dane-browser/privacy/` URL to this canonical route, and keep the live Data safety answers consistent with the updated policy and actual app behavior.
+On 2026-07-14 the route rendered the policy accepted for the historical `0.4.1` audit after the site application loaded. That copy and the later requester-default-on draft are historical. Any future mobile submission must publish the current opt-in requester policy from the canonical mobile repository and keep the live Data safety answers consistent with actual behavior.
 
 ### Content Rating
 
@@ -128,7 +134,7 @@ The app is already public at `0.3.1` (`versionCode 22`), so closed-testing eligi
 
 1. Regenerate the third-party notices and release notes after any version or dependency change.
 2. Retain the verified `dist/play-store/hns-dane-browser-v0.5.0-play-upload-signed.aab` with the exact release toolchain evidence; the automated gate covers 16 KiB alignment, required ABIs, native hardening/symbols, R8 mapping, notices, and upload signing.
-3. Compare the configured upload-certificate fingerprint with Play Console. Install the exact signed `0.5.0` APK on the connected device, verify the code 40 upgrade and cold launch, and exercise default relay, manual-peer validation, and legacy fallback behavior. The corresponding signed update smoke for `0.4.1` is historical evidence only.
+3. Historical gate only: repeat current mobile qualification in the canonical repository with requester opt-in, opaque-relayer opt-out, separate output-node opt-in, manual-peer validation, and fallback behavior.
 4. Upload to an internal/closed track for validation if desired. For API upload, use the Console's actual track ID; `alpha` is the standard closed-testing API track.
 5. Reconcile the live privacy policy, Data safety answers, listing copy, screenshots, and release notes, then submit the update to production.
 
@@ -148,8 +154,9 @@ Full description draft:
 > - HNS-aware omnibar for names such as `example/` and `name.tld/`
 > - Local Handshake proof verification and resolver cache
 > - DNSSEC and TLSA/DANE diagnostics for HTTPS HNS sites
-> - P2P DNS relay enabled on new Android installs, with all answers validated locally
+> - Optional P2P DNS requester, with all answers validated locally
 > - Optional manual relay peers accepted only as verified IP-literal endpoints
+> - Opaque relay capacity defaults on with opt-out; output-node service requires separate opt-in
 > - Independent legacy HNS DoH compatibility fallback, also enabled on new installs
 > - Strict HNS mode to disable third-party HNS DoH fallback
 > - Resolver trace, HNS proof viewer, and TLSA inspector

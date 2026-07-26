@@ -576,7 +576,7 @@ fn handle_client(
     );
 
     match (admitted_host, target) {
-        (AdmittedHost::Hns(canonical_host), RequestTarget::Absolute(absolute)) => {
+        (AdmittedHost::NativeGateway(canonical_host), RequestTarget::Absolute(absolute)) => {
             handle_direct_http(
                 &mut stream,
                 &head,
@@ -587,15 +587,17 @@ fn handle_client(
                 context,
             )
         }
-        (AdmittedHost::Hns(canonical_host), RequestTarget::Connect(authority)) => handle_connect(
-            stream,
-            &head,
-            authority,
-            canonical_host,
-            method,
-            &cancellation,
-            context,
-        ),
+        (AdmittedHost::NativeGateway(canonical_host), RequestTarget::Connect(authority)) => {
+            handle_connect(
+                stream,
+                &head,
+                authority,
+                canonical_host,
+                method,
+                &cancellation,
+                context,
+            )
+        }
         (AdmittedHost::Icann(icann_host), RequestTarget::Absolute(absolute)) => handle_icann_http(
             &mut stream,
             &head,
@@ -630,14 +632,14 @@ fn handle_client(
 }
 
 enum AdmittedHost {
-    Hns(crate::NormalizedHost),
+    NativeGateway(crate::NormalizedHost),
     Icann(IcannHost),
 }
 
 impl AdmittedHost {
     fn as_str(&self) -> &str {
         match self {
-            Self::Hns(host) => host.as_str(),
+            Self::NativeGateway(host) => host.as_str(),
             Self::Icann(host) => host.as_str(),
         }
     }
@@ -676,7 +678,7 @@ fn admit_target_host(
         context.routing_mode,
         ProxyRoutingMode::ScopedHns | ProxyRoutingMode::HnsOnly | ProxyRoutingMode::DaneBrowser
     ) {
-        return authorize_native_gateway_host(context, raw_host).map(AdmittedHost::Hns);
+        return authorize_native_gateway_host(context, raw_host).map(AdmittedHost::NativeGateway);
     }
 
     if let Ok(address) = raw_host.parse::<std::net::IpAddr>() {
@@ -696,7 +698,7 @@ fn admit_target_host(
             .as_ref()
             .ok_or(RouteRejection::Scope(HostScopeError::OutOfScope))?
             .authorize(host.as_str())
-            .map(AdmittedHost::Hns)
+            .map(AdmittedHost::NativeGateway)
             .map_err(RouteRejection::Scope),
         NameClass::Icann if is_browser_special_use_host(host.as_str()) => {
             Err(RouteRejection::SpecialUse)
@@ -710,23 +712,23 @@ fn authorize_native_gateway_host(
     context: &ServerContext,
     raw_host: &str,
 ) -> Result<crate::NormalizedHost, RouteRejection> {
-    if matches!(
-        context.routing_mode,
-        ProxyRoutingMode::HnsOnly | ProxyRoutingMode::DaneBrowser
-    ) {
+    if context.routing_mode == ProxyRoutingMode::DaneBrowser {
+        let host = crate::NormalizedHost::parse(raw_host)
+            .map_err(|error| RouteRejection::Scope(HostScopeError::InvalidHost(error)))?;
+        if is_browser_special_use_host(host.as_str()) {
+            return Err(RouteRejection::SpecialUse);
+        }
+        // Namespace selection is intentionally absent here. Every ordinary
+        // DNS name reaches the native gateway, which resolves the complete
+        // host through both HNS and ICANN before selecting a root.
+        return Ok(host);
+    }
+
+    if context.routing_mode == ProxyRoutingMode::HnsOnly {
         let host = crate::NormalizedHost::parse(raw_host)
             .map_err(|error| RouteRejection::Scope(HostScopeError::InvalidHost(error)))?;
         return match classify_name(host.as_str()) {
             NameClass::Hns => Ok(host),
-            NameClass::Icann
-                if context.routing_mode == ProxyRoutingMode::DaneBrowser
-                    && !is_browser_special_use_host(host.as_str()) =>
-            {
-                Ok(host)
-            }
-            NameClass::Icann if context.routing_mode == ProxyRoutingMode::DaneBrowser => {
-                Err(RouteRejection::SpecialUse)
-            }
             NameClass::Icann | NameClass::Search => Err(RouteRejection::InvalidClass),
         };
     }

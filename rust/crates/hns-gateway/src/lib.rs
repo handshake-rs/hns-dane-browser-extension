@@ -10,8 +10,13 @@ use hns_icann_dane::{
     IcannDnssecStatus, ResolverAuthentication, TlsaDenial, TlsaOwner, ValidatingDohEvidence,
     decide_browser_tls,
 };
+use hns_namespace_resolution::{
+    ApplicationProtocol, CanonicalHost, CanonicalTlsa, Namespace, NamespaceDecision, OriginQuery,
+    OriginScheme, ProtocolCapabilities, ServiceTransport, TlsTrustPolicy, decision_fingerprint,
+};
 use hns_resolver::{
-    NameClass, ResolutionAnswer, ResolutionRequest, Resolver, ResolverError, classify_name,
+    NameClass, PreparedNamespaceResolution, ResolutionAnswer, ResolutionRequest, Resolver,
+    ResolverError, classify_name,
 };
 use hns_transport::{
     OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead, OriginTransport,
@@ -19,6 +24,7 @@ use hns_transport::{
 };
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::num::{NonZeroU16, NonZeroUsize};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 
@@ -62,6 +68,7 @@ pub struct GatewayRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GatewayResponse {
     pub resolution: ResolutionAnswer,
+    pub namespace_decision: Option<NamespaceDecision>,
     pub origin_request: OriginRequest,
     pub origin: OriginResponse,
 }
@@ -69,12 +76,14 @@ pub struct GatewayResponse {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GatewayResponseHead {
     pub resolution: ResolutionAnswer,
+    pub namespace_decision: Option<NamespaceDecision>,
     pub origin_request: OriginRequest,
     pub origin: OriginResponseHead,
 }
 
 pub struct GatewayTunnel {
     pub resolution: ResolutionAnswer,
+    pub namespace_decision: Option<NamespaceDecision>,
     pub origin_request: OriginRequest,
     pub origin: OriginTunnel,
 }
@@ -210,11 +219,12 @@ where
 
     pub fn handle(&self, request: &GatewayRequest) -> Result<GatewayResponse, GatewayError> {
         self.authorize(request)?;
-        let (resolution, origin_request) =
+        let (resolution, origin_request, namespace_decision) =
             self.resolve_origin_request(request, &self.config.supported_origin_protocols)?;
         let origin = self.transport.fetch(&origin_request)?;
         Ok(GatewayResponse {
             resolution,
+            namespace_decision,
             origin_request,
             origin,
         })
@@ -226,11 +236,12 @@ where
         body: &mut dyn Write,
     ) -> Result<GatewayResponseHead, GatewayError> {
         self.authorize(request)?;
-        let (resolution, origin_request) =
+        let (resolution, origin_request, namespace_decision) =
             self.resolve_origin_request(request, &self.config.supported_origin_protocols)?;
         let origin = self.transport.fetch_to_writer(&origin_request, body)?;
         Ok(GatewayResponseHead {
             resolution,
+            namespace_decision,
             origin_request,
             origin,
         })
@@ -238,11 +249,12 @@ where
 
     pub fn handle_tunnel(&self, request: &GatewayRequest) -> Result<GatewayTunnel, GatewayError> {
         self.authorize(request)?;
-        let (resolution, origin_request) =
+        let (resolution, origin_request, namespace_decision) =
             self.resolve_origin_request(request, &[OriginProtocol::Http11])?;
         let origin = self.transport.open_tunnel(&origin_request)?;
         Ok(GatewayTunnel {
             resolution,
+            namespace_decision,
             origin_request,
             origin,
         })
@@ -274,11 +286,19 @@ where
         &self,
         request: &GatewayRequest,
         supported_origin_protocols: &[OriginProtocol],
-    ) -> Result<(ResolutionAnswer, OriginRequest), GatewayError> {
+    ) -> Result<(ResolutionAnswer, OriginRequest, Option<NamespaceDecision>), GatewayError> {
         if !hosts_match(&request.origin.host, &request.resolution.qname) {
             return Err(GatewayError::HostResolutionMismatch);
         }
         self.validate_origin_port(request.origin.port)?;
+
+        let namespace_query = namespace_origin_query(&request.origin, supported_origin_protocols)?;
+        if let Some(prepared) = self
+            .resolver
+            .prepare_namespace_resolution(&namespace_query)?
+        {
+            return self.apply_prepared_namespace_resolution(request, namespace_query, prepared);
+        }
 
         let resolution = self.resolver.resolve(&request.resolution)?;
         let name_class = classify_name(&request.origin.host);
@@ -337,7 +357,61 @@ where
         }
         self.validate_origin_port(origin_request.port)?;
 
-        Ok((resolution, origin_request))
+        Ok((resolution, origin_request, None))
+    }
+
+    fn apply_prepared_namespace_resolution(
+        &self,
+        request: &GatewayRequest,
+        namespace_query: OriginQuery,
+        prepared: PreparedNamespaceResolution,
+    ) -> Result<(ResolutionAnswer, OriginRequest, Option<NamespaceDecision>), GatewayError> {
+        if prepared.decision.query() != &namespace_query {
+            return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+        }
+        let plan = prepared
+            .decision
+            .selected_plan()
+            .ok_or(ResolverError::NamespaceUnavailable)?;
+        let endpoint = *plan
+            .endpoints()
+            .first()
+            .ok_or(GatewayError::NoResolvedAddress)?;
+
+        let mut origin_request = request.origin.clone();
+        origin_request.connect_host = Some(endpoint.ip().to_string());
+        origin_request.port = plan.service().effective_port().get();
+        origin_request.protocol = origin_protocol(plan.service().selected_protocol());
+        origin_request.tls.namespace_fingerprint =
+            Some(decision_fingerprint(&prepared.decision).to_hex());
+        self.validate_origin_address(
+            origin_request
+                .connect_host
+                .as_deref()
+                .ok_or(GatewayError::NoResolvedAddress)?,
+        )?;
+        self.validate_origin_port(origin_request.port)?;
+
+        if is_tls_origin_scheme(&origin_request.scheme) {
+            apply_selected_tls_plan(
+                &mut origin_request,
+                plan.namespace(),
+                plan.tls_policy(),
+                plan.tlsa_records(),
+                self.config.hns_https_mode,
+                &self.config.stateless_dane,
+            )?;
+        } else if plan.tls_policy() != TlsTrustPolicy::Cleartext {
+            return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+        }
+        origin_request.tls.service_port = origin_request.port;
+        origin_request.tls.service_transport = tlsa_transport(plan.service().transport());
+
+        Ok((
+            prepared.selected_answer,
+            origin_request,
+            Some(prepared.decision),
+        ))
     }
 
     fn validate_origin_address(&self, address: &str) -> Result<(), GatewayError> {
@@ -476,6 +550,112 @@ fn normalize_host(host: &str) -> String {
 
 fn is_tls_origin_scheme(scheme: &str) -> bool {
     scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("wss")
+}
+
+fn namespace_origin_query(
+    origin: &OriginRequest,
+    supported_origin_protocols: &[OriginProtocol],
+) -> Result<OriginQuery, GatewayError> {
+    let scheme = match origin.scheme.to_ascii_lowercase().as_str() {
+        "http" => OriginScheme::Http,
+        "https" => OriginScheme::Https,
+        "ws" => OriginScheme::Ws,
+        "wss" => OriginScheme::Wss,
+        _ => return Err(GatewayError::Resolver(ResolverError::UnsupportedBackend)),
+    };
+    let host = CanonicalHost::parse(&normalize_host(&origin.host)).map_err(ResolverError::from)?;
+    let explicit_port = NonZeroU16::new(origin.port)
+        .ok_or(GatewayError::UnsafeOriginPort(origin.port))
+        .map(Some)?;
+    let protocols = ProtocolCapabilities::new(
+        supported_origin_protocols.contains(&OriginProtocol::Http11),
+        supported_origin_protocols.contains(&OriginProtocol::Http2),
+        supported_origin_protocols.contains(&OriginProtocol::Http3),
+    )
+    .map_err(ResolverError::from)?;
+    Ok(OriginQuery::new(host, scheme, explicit_port, protocols))
+}
+
+const fn origin_protocol(protocol: ApplicationProtocol) -> OriginProtocol {
+    match protocol {
+        ApplicationProtocol::Http11 => OriginProtocol::Http11,
+        ApplicationProtocol::Http2 => OriginProtocol::Http2,
+        ApplicationProtocol::Http3 => OriginProtocol::Http3,
+    }
+}
+
+const fn tlsa_transport(transport: ServiceTransport) -> TlsaTransport {
+    match transport {
+        ServiceTransport::Tcp => TlsaTransport::Tcp,
+        ServiceTransport::Udp => TlsaTransport::Udp,
+    }
+}
+
+fn apply_selected_tls_plan(
+    request: &mut OriginRequest,
+    namespace: Namespace,
+    tls_policy: TlsTrustPolicy,
+    canonical_tlsa: &[CanonicalTlsa],
+    hns_https_mode: HnsHttpsMode,
+    stateless_dane: &StatelessDaneConfig,
+) -> Result<(), GatewayError> {
+    let records = canonical_tlsa
+        .iter()
+        .map(|record| TlsaRecord::parse_rdata(record.rdata()).map_err(GatewayError::from))
+        .collect::<Result<Vec<_>, _>>()?;
+    match (namespace, tls_policy) {
+        (Namespace::Hns, TlsTrustPolicy::Dane) => {
+            if records.is_empty() {
+                return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+            }
+            request.tls.mode = hns_https_mode.domain_trust_mode();
+            request.tls.stateless_dane = stateless_dane.clone();
+            request.tls.dnssec_secure = true;
+            request.tls.tlsa_records = records;
+            request.tls.tlsa_source = Some(TlsaRecordSource::NativeTlsa);
+            request.tls.browser_tls_decision = None;
+        }
+        (Namespace::Icann, TlsTrustPolicy::Dane) => {
+            let record_count = NonZeroUsize::new(records.len())
+                .ok_or(GatewayError::Resolver(ResolverError::InvalidDnsResponse))?;
+            request.tls.mode = DomainTrustMode::IcannWebPki;
+            request.tls.dnssec_secure = true;
+            request.tls.tlsa_records = records;
+            request.tls.tlsa_source = Some(TlsaRecordSource::NativeTlsa);
+            request.tls.browser_tls_decision =
+                Some(BrowserTlsDecision::EnforceDane { record_count });
+        }
+        (Namespace::Icann, TlsTrustPolicy::WebPkiAuthenticatedAbsence) => {
+            if !records.is_empty() {
+                return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+            }
+            request.tls.mode = DomainTrustMode::IcannWebPki;
+            request.tls.dnssec_secure = true;
+            request.tls.tlsa_records.clear();
+            request.tls.tlsa_source = None;
+            request.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+        }
+        (Namespace::Icann, TlsTrustPolicy::WebPkiInsecureDelegation) => {
+            if !records.is_empty() {
+                return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+            }
+            request.tls.mode = DomainTrustMode::IcannWebPki;
+            request.tls.dnssec_secure = false;
+            request.tls.tlsa_records.clear();
+            request.tls.tlsa_source = None;
+            request.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiInsecureDelegation);
+        }
+        (
+            Namespace::Hns,
+            TlsTrustPolicy::Cleartext
+            | TlsTrustPolicy::WebPkiAuthenticatedAbsence
+            | TlsTrustPolicy::WebPkiInsecureDelegation,
+        )
+        | (Namespace::Icann, TlsTrustPolicy::Cleartext) => {
+            return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
+        }
+    }
+    Ok(())
 }
 
 fn first_resolved_address(records: &[ResourceRecord], host: &str) -> Option<String> {
@@ -780,11 +960,17 @@ mod tests {
     use super::*;
     use hns_core::dns::{DnsMessage, DnsName, RecordType, ResourceRecord};
     use hns_dane::{DaneDecision, DaneError, TlsaMatching, TlsaSelector, TlsaUsage};
-    use hns_resolver::{ResolutionAnswer, Resolver};
+    use hns_namespace_resolution::{
+        AbsenceKind, EvidenceProvenance, Freshness, HnsNetwork, IcannChainState, OriginPlanInput,
+        RootLookup, SelectionPolicy, ServiceBinding, ServiceBindingInput, ValidatedAbsence,
+        ValidatedOriginPlan, decide_namespace,
+    };
+    use hns_resolver::{PreparedNamespaceResolution, ResolutionAnswer, Resolver};
     use hns_transport::{
         OriginProtocol, OriginResponse, OriginTransport, OriginTunnel, TlsValidation,
     };
     use std::io::Cursor;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     struct StaticResolver {
@@ -795,6 +981,11 @@ mod tests {
     struct ScriptedResolver {
         responses: Vec<(ResolutionRequest, ResolutionAnswer)>,
         requests: Arc<Mutex<Vec<ResolutionRequest>>>,
+    }
+
+    struct PreparedResolver {
+        prepared: PreparedNamespaceResolution,
+        record_calls: Arc<AtomicUsize>,
     }
 
     impl Resolver for StaticResolver {
@@ -815,6 +1006,20 @@ mod tests {
                 .find(|(candidate, _)| candidate == request)
                 .map(|(_, answer)| answer.clone())
                 .ok_or(ResolverError::ProofUnavailable)
+        }
+    }
+
+    impl Resolver for PreparedResolver {
+        fn resolve(&self, _request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
+            self.record_calls.fetch_add(1, Ordering::SeqCst);
+            Err(ResolverError::UnsupportedBackend)
+        }
+
+        fn prepare_namespace_resolution(
+            &self,
+            _query: &OriginQuery,
+        ) -> Result<Option<PreparedNamespaceResolution>, ResolverError> {
+            Ok(Some(self.prepared.clone()))
         }
     }
 
@@ -859,6 +1064,127 @@ mod tests {
                 tls_inspection: None,
             })
         }
+    }
+
+    fn prepared_icann_only(host: &str) -> PreparedNamespaceResolution {
+        let host = CanonicalHost::parse(host).unwrap();
+        let query = OriginQuery::new(
+            host.clone(),
+            OriginScheme::Https,
+            NonZeroU16::new(443),
+            ProtocolCapabilities::all(),
+        );
+        let freshness = Freshness::new(1, u64::MAX).unwrap();
+        let service = ServiceBinding::new(ServiceBindingInput {
+            priority: None,
+            service_target: host.clone(),
+            mandatory_keys: Vec::new(),
+            advertised_alpn: Vec::new(),
+            selected_protocol: ApplicationProtocol::Http11,
+            effective_port: NonZeroU16::new(443).unwrap(),
+            transport: ServiceTransport::Tcp,
+            connection_hints: Vec::new(),
+            ech_config: None,
+            parameters: Vec::new(),
+        })
+        .unwrap();
+        let plan = ValidatedOriginPlan::new(OriginPlanInput {
+            namespace: Namespace::Icann,
+            query: query.clone(),
+            alias_path: Vec::new(),
+            terminal_target: host.clone(),
+            endpoint_alias_path: Vec::new(),
+            endpoint_target: host,
+            endpoints: vec!["1.1.1.1:443".parse().unwrap()],
+            service,
+            tls_policy: TlsTrustPolicy::Dane,
+            tlsa_records: vec![
+                CanonicalTlsa::new(
+                    [vec![3, 1, 1], vec![0xaa; 32]]
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                )
+                .unwrap(),
+            ],
+            provenance: EvidenceProvenance::IcannDoh {
+                chain_state: IcannChainState::Secure,
+            },
+            freshness,
+        })
+        .unwrap();
+        let hns_absence = ValidatedAbsence::new(
+            Namespace::Hns,
+            query.clone(),
+            AbsenceKind::HnsCurrentUrkelNonInclusion,
+            EvidenceProvenance::Hns {
+                network: HnsNetwork::Mainnet,
+                tree_root: [7; 32],
+                height: 42,
+            },
+            freshness,
+        )
+        .unwrap();
+        let decision = decide_namespace(
+            &query,
+            RootLookup::Absent(hns_absence),
+            RootLookup::Present(plan),
+            SelectionPolicy::default(),
+            2,
+        )
+        .unwrap();
+        PreparedNamespaceResolution {
+            decision,
+            selected_answer: ResolutionAnswer {
+                name: DnsName::from_ascii("example.com").unwrap(),
+                records: Vec::new(),
+                secure: true,
+            },
+        }
+    }
+
+    #[test]
+    fn prepared_dual_root_plan_is_atomic_and_sets_live_fingerprint() {
+        let prepared = prepared_icann_only("example.com");
+        let expected_fingerprint = decision_fingerprint(&prepared.decision).to_hex();
+        let record_calls = Arc::new(AtomicUsize::new(0));
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            PreparedResolver {
+                prepared,
+                record_calls: Arc::clone(&record_calls),
+            },
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        let response = gateway
+            .handle(&request("example.com", "example.com"))
+            .unwrap();
+
+        assert_eq!(record_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            response
+                .namespace_decision
+                .as_ref()
+                .and_then(NamespaceDecision::selected_namespace),
+            Some(Namespace::Icann)
+        );
+        assert_eq!(
+            response.origin_request.connect_host.as_deref(),
+            Some("1.1.1.1")
+        );
+        assert_eq!(response.origin_request.port, 443);
+        assert_eq!(
+            response.origin_request.tls.namespace_fingerprint.as_deref(),
+            Some(expected_fingerprint.as_str())
+        );
+        assert_eq!(
+            response.origin_request.tls.browser_tls_decision,
+            Some(BrowserTlsDecision::EnforceDane {
+                record_count: NonZeroUsize::new(1).unwrap(),
+            })
+        );
     }
 
     #[test]

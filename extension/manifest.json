@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HNS DANE Browser",
-  "description": "Routes only Handshake names through a local Rust DNSSEC and DANE runtime.",
+  "description": "Routes web DNS names through a local Rust dual-root DNSSEC and DANE runtime.",
   "version": "0.5.0",
   "minimum_chrome_version": "121",
   "permissions": [

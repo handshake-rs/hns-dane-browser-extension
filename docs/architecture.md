@@ -1,11 +1,22 @@
 # Architecture
 
-The validated shipping product is currently Android, not a system-wide resolver. Its security engine is a platform-neutral Rust runtime so Android WebView and iOS WKWebView shells share URL classification, HNS and DANE policy, transport policy, persistent state, proxy parsing, and validation results while retaining platform-native UI and lifecycle integration. The iOS shell is implemented; its signed-device WebKit matrix remains optional and unverified.
+The release target in this extraction is the Chromium extension and native
+host. The `android/`, `ios/`, `android-ffi`, and `ios-ffi` trees below are
+historical source only: their FFI crates are not Cargo workspace members, they
+are not part of this checkpoint's build graph, and they do not establish
+mobile dual-root or ICANN-DANE coverage. Current mobile work lives in the
+separate canonical `hns-dane-browser-mobile` repository.
 
 ## Layers
 
 ```text
-Android UI / Browser Shell                         [shipping]
+Chromium Extension + Native Messaging Host         [release target]
+  -> syntax-only all-DNS-name PAC
+  -> authenticated hns-loopback-proxy
+  -> full-host HNS + ICANN resolution plans
+  -> selected-root DNSSEC, TLSA/DANE or defined WebPKI policy
+
+Android UI / Browser Shell                         [historical/non-release]
   -> MainActivity + BrowserProxyCoordinator navigation admission
   -> process-global AndroidX ProxyController ownership
   -> RustBrowserProxy + thin android-ffi JNI adapter
@@ -13,7 +24,7 @@ Android UI / Browser Shell                         [shipping]
   -> persistent hns-browser-runtime handle
   -> HNS resolver, DNSSEC, DANE, transport, cache
   -> HNS peers, ICANN DNS, TCP TLS, QUIC/HTTP3
-iOS UI / Browser Shell                             [device gate open]
+iOS UI / Browser Shell                             [historical/non-release]
   -> BrowserProxyCoordinator + persistent WKWebsiteDataStore
   -> authenticated, no-failover whole-browser proxy configuration
   -> thin versioned ios-ffi C ABI / XCFramework
@@ -30,16 +41,19 @@ iOS UI / Browser Shell                             [device gate open]
 - `hns-resolver`: URL/name classification, final-label HNS root extraction for single-label and dotted HNS hosts, verified HSD resource-value extraction, verified non-inclusion state, local-chain-currentness errors, resource-value providers and cache controls, proof-backed answer filtering and nameserver address hydration, proof-anchored `hnsdns=1` bootstrap plus RFC 9461 `_dns.<nameserver>` SVCB discovery for RFC 8484 authoritative DoH, DNSSEC-gated delegation for HNS roots with NS/DS records, authoritative DoH or UDP DNS with TCP fallback, optional raw recursive relay transport after direct port 53, signed positive and denial validation, bounded CNAME and child-referral validation, TTL cache wrapping, and resolver-facing answer types. Every transport converges on the same local DNSSEC validation code.
 - `hns-dnssec`: DNSSEC validation boundary with DNSKEY/DS/RRSIG/NSEC/NSEC3 parsing, RFC 4034 key-tag computation, SHA-1, SHA-256, and SHA-384 delegation-link verification, canonical signed-data construction including canonical RDATA names for CNAME, NS, SOA, SRV, SVCB/HTTPS, RRSIG signer names, RSA/SHA-1 compatibility, RSA/SHA-256, RSA/SHA-512, ECDSA P-256/SHA-256, ECDSA P-384/SHA-384, and Ed25519 RRset signature verification, signed DNSKEY RRset checks, composed delegated-chain validation, NSEC no-data/name-range/name-error denial validation, and RFC 5155 NSEC3 no-data/name-error/DS/wildcard/referral denial validation. Unsupported algorithms and unknown NSEC3 hash algorithms remain fail-closed.
 - `hns-dane`: TLSA record parsing, bounded X.509 SPKI extraction, experimental HIP-0017-style x509 Urkel-proof and RFC 9102 DNSSEC-chain extension parsing under project-local OIDs while the HIP remains draft, direct-zone stateless DANE evidence validation from recent HNS tree roots, chain-aware DANE EE/TA certificate/SPKI matching, PKIX-usage WebPKI gating, and HNS/WebPKI TLS policy decisions.
-- `hns-transport`: bounded HTTP/1.1 origin transport over TCP or rustls TLS with same-origin keep-alive pooling, HTTPS rustls session resumption scoped to the active certificate policy, optional stateless DANE certificate evidence fallback when enabled and resolver TLSA records are absent, safe same-port Alt-Svc promotion to HTTP/2 or HTTP/3, HTTPS HTTP/2 origin transport over Tokio/Rustls, HTTPS HTTP/3 origin transport over Quinn/h3 with QUIC TLS bound to the same DNSSEC-gated TLSA/DANE certificate policy, WebPKI fallback, fail-closed response framing for unsupported transfer codings or ambiguous lengths, decoded response body streaming to caller-provided writers, and native HTTP/1.1 Upgrade tunnel opening for WebSocket/Upgrade streams after request validation.
+- `hns-transport`: bounded HTTP/1.1 origin transport over TCP or rustls TLS with same-origin keep-alive pooling, HTTPS rustls session resumption scoped to the active certificate policy, parser/transport support for experimental stateless DANE evidence, safe same-port Alt-Svc promotion to HTTP/2 or HTTP/3, HTTPS HTTP/2 origin transport over Tokio/Rustls, HTTPS HTTP/3 origin transport over Quinn/h3 with QUIC TLS bound to the same DNSSEC-gated TLSA/DANE certificate policy, WebPKI fallback, fail-closed response framing for unsupported transfer codings or ambiguous lengths, decoded response body streaming to caller-provided writers, and native HTTP/1.1 Upgrade tunnel opening for WebSocket/Upgrade streams after request validation. The atomic dual-root plan currently rejects selected HNS HTTPS without live secure TLSA before the certificate-evidence fallback can run; stateless DANE is therefore not a supported Chromium feature until the shared contract gains a typed trust policy.
 - `hns-gateway`: loopback gateway interfaces, secure-resolution checks, owner-scoped resolved A/AAAA connect-address routing with validated CNAME-chain terminal address support, delegated origin A/AAAA lookup for all-record Android gateway starts and origin-focused A/AAAA requests, separate HTTPS/SVCB service lookup for address-only answers, HTTPS/SVCB ALPN and service-port policy selection constrained to configured origin protocol support, HTTP/1.1 default fallback when SVCB does not disable default ALPN, tunnel-specific HTTPS/SVCB policy that requires HTTP/1.1 support for WebSocket/Upgrade streams, fail-closed HNS no-address/nameserver handling, exact service-owner DNSSEC-secure TLSA lookup, strict and compatibility HNS HTTPS policy modes, and validation error mapping.
 - `hns-cache`: bounded TTL cache primitives.
 - `hns-browser-runtime`: platform-neutral, JNI-free ownership boundary for immutable network and storage configuration, revisioned runtime policy, independent experimental-relay and legacy-DoH controls, per-handle HTTP transport, synchronization and maintenance coordination, peer-state serialization, header sync and snapshots, resolver cache controls, proof diagnostics, gateway requests, and a typed `RuntimeProxyBackend` that shares the runtime's resolver/storage/transport state with ordinary and Upgrade proxy traffic. It composes proof-declared authoritative DoH, direct UDP/TCP 53, the private P2P relay, and optional legacy DoH in that order. It exposes both immutable exact-HNS-scope startup for Android and optional-scope whole-browser startup for Apple. Whole-browser ICANN address discovery uses bounded WebPKI-authenticated DoH to explicit bootstrap addresses and returns only validated public A/AAAA endpoints; it does not resolve browser targets through the host operating system. The runtime also converts trusted internal response metadata into a bounded, typed, trace-redacted `BrowserProxyStatus` surface for native security UI.
 - `hns-loopback-proxy`: platform-neutral, JNI-free loopback proxy with a fresh authenticated endpoint on an ephemeral IPv4 `127.0.0.1` port. Its Android mode has an immutable exact HNS root/subdomain scope and rejects everything else. Its Apple mode covers the whole WebKit data store: the admitted HNS scope uses the shared HNS backend and Rust-owned exact-host P-256 TLS identities, while ICANN HTTP, CONNECT, and WebSocket traffic is forwarded only to explicit public addresses supplied by the runtime. Both modes share strict bounded HTTP/1 parsing/framing, unsafe-port and special-address policy, request/response header sanitization, active-client limits, streamed response bodies, live instance/host/certificate authorization, typed status, and owned cancellation-and-join lifecycle.
-- `android-ffi`: thin Android JNI adapter for string/byte conversion, error mapping, opaque `BrowserRuntime` handles, and a count-bounded non-pointer registry of Rust proxy handles with atomic policy-before-start, immutable scope, immediate revocation, worker-join destruction, live generation-bound certificate-DER matching, and an aggregate-bounded per-host main-frame status mailbox consumed through an exact instance/host/sequence acknowledgement and versioned bounded bundle. Ordinary and file-backed gateway calls use the same persistent runtime handle, transport, peer state, and maintenance boundary as the proxy. Platform-neutral resolution, synchronization, storage, transport, proxy, and TLS policy belongs in Rust, not this crate.
-- `ios-ffi`: stable versioned C ABI over the same `BrowserRuntime`, with bounded versioned option/policy structs, monotonic opaque runtime/proxy handles, one live proxy per runtime, Rust-owned buffer allocation/free, thread-local errors, panic containment, exact latest-host status consumption, and immediate request-stop plus joined destruction. It contains no resolver, gateway, transport, or proxy reimplementation.
+- `android-ffi`: historical Android JNI adapter, excluded from workspace membership and this release graph.
+- `ios-ffi`: historical Apple C ABI adapter, excluded from workspace membership and this release graph.
 - `rust/fuzz`: parser fuzz smoke targets for DNS messages/names/SVCB, HNS resource values, P2P frames/payloads, Urkel proofs, TLSA records, and X.509 SPKI extraction.
 
-## Cross-Platform Migration Status
+## Historical Mobile Source
+
+Everything in this section describes retained source, not the Chromium release
+target or current mobile qualification.
 
 - The shared `hns-browser-runtime` crate and its persistent `BrowserRuntime` API are in place and have no JNI dependency or exported Java symbols.
 - Runtime identity, configuration, policy, transport reuse, storage coordination, ordinary gateway requests, and file-backed gateway requests are handle-backed. The Rust proxy adapter uses typed requests, responses, internal security metadata, typed security status, and Upgrade tunnels; the Android bridge preserves the existing encoded-HTTP schema while executing those requests on the persistent runtime.
@@ -73,14 +87,17 @@ iOS UI / Browser Shell                             [device gate open]
 - `SettingsActivity`: settings dashboard linking to diagnostics, cookie options, legal/user-agreement content, native resolver-cache clearing, and donation links.
 - `CookieSettingsActivity`: cookie preferences with persisted third-party cookie blocking and deletion of cookies plus WebView origin storage.
 - `LegalActivity`: license, user agreement, build label, publisher-in-license language, and source-code link.
-- `BrowserUrlClassifier`: classifies searches, normal web URLs, and HNS names. Bare HNS names default to `https://`, and dotted hosts whose final label is not in the vendored IANA root-zone TLD snapshot route through native HNS interception instead of Chromium DNS resolution.
+- `BrowserUrlClassifier`: retains the legacy static-IANA classification
+  shortcut. Together with the exact HNS-only proxy scope, this means ordinary
+  ICANN hosts bypass the dual-root/ICANN-DANE boundary in this embedded tree.
 - `BrowserSecurityPolicy`: maps target kind, proxy availability, native sync outcome status, main-frame HNS gateway response status, DANE/WebPKI policy, and resolver policy into the toolbar security state so HNS names do not stay verified after a native gateway failure and DoH compatibility loads are visibly labeled.
 - `HnsProxyController`: runtime-gated AndroidX WebKit proxy configuration pointed at the currently bound randomized loopback port. Its process-wide operation queue arbitrates `ProxyController` ownership so stale Activity instances cannot republish or clear a newer owner's override.
 - `HnsSyncScheduler`: single-threaded scheduler owned by `HnsDaneApplication` while at least one app activity is started. It calls the native sync tick and publishes snapshots in-process, using active catch-up intervals while the target is ahead, retry intervals after peer/seed failures, and 10-minute idle intervals after catch-up. It survives navigation between in-app screens, is not a foreground service, and stops when the whole app leaves the foreground.
 - `HnsWebViewGatewayInterceptor`: compatibility page-request interception when neither scoped proxy can start, plus bodyless Service Worker HNS HTTP/HTTPS execution for every admitted proxy route because Android WebView cannot authorize a worker's local CONNECT certificate. It routes through the persistent shared runtime without Chromium CONNECT, with file-backed decoded response bodies, bounded same-origin redirect following, URL-bound main-frame status reporting, family-wide internal-header stripping, and fail-closed handling for body-bearing requests.
 - `HnsServiceWorkerGatewayClient`: Service Worker fetch routing that follows the same immutable proxy/compatibility/block snapshot as WebView requests so worker fetches cannot bypass native HNS validation. Android WebView does not surface a Service Worker TLS failure to the page's `WebViewClient`, so even when the Rust proxy route is active, admitted worker requests use the shared Rust runtime gateway rather than a CONNECT path whose live local certificate the worker cannot authorize. Transition, background/suspended, destroyed-client, and out-of-scope HNS requests fail closed instead of falling through to Chromium DNS; ordinary ICANN worker requests remain direct. A process-generation gate prevents an older Activity from replacing or disabling the newer Activity's singleton Service Worker client.
 - `GatewayEventLog`: App-private, bounded, sanitized gateway failure event store used by diagnostics so support can inspect recent HNS gateway failures after process restarts without retaining paths, query strings, headers, or bodies.
-- `HnsProxyWebSocketPolicy`: document-start wrapper that leaves allowed sockets on Chromium's native `WebSocket` implementation, while rejecting a cross-scope HNS target before it can escape the reverse-bypass proxy scope.
+- `HnsProxyWebSocketPolicy`: retains the legacy suffix-based cross-scope guard
+  while WebSockets remain native browser requests through the exact HNS scope.
 - `NativeBridge`: JNI load boundary for the Rust shared library. It owns process-lifetime opaque runtime handles, executes ordinary and file-backed gateway requests on those handles, atomically configures and starts Rust proxy generations, owns versioned authenticated endpoint/status bundles, performs live generation-bound certificate-DER matching, and exposes stop/destroy operations.
 
 Android builds are compiled through APK Workbench on this ARM64 host so Gradle receives the managed SDK/NDK, page-size profile, and ARM64 `aapt2` override. Gradle also invokes `scripts/build-rust-android.sh` to cross-compile and package `libhns_dane_browser_ffi.so` for `arm64-v8a` and `x86_64`.
@@ -105,5 +122,9 @@ advertised version height into sync state.
 - Android accepts a local HNS TLS certificate only when its full DER bytes match the exact host and currently published proxy generation; suspension, scope rotation, and ownership revocation withdraw that trust immediately.
 - iOS applies the same exact live host/generation/DER rule to HNS server-trust challenges, disables proxy failover, and revokes the WebView before stopping or rotating its proxy.
 - Android WebView proxy use is gated by `WebViewFeature.PROXY_OVERRIDE`.
-- Dotted names under IANA root-zone TLDs remain normal WebView/ICANN destinations and must not be routed into HNS resolution.
+- In the Chromium release target, no IANA root-zone snapshot selects a
+  namespace. Every admitted ordinary DNS hostname is resolved independently
+  through HNS and ICANN; the full result is HNS-only, ICANN-only, convergent,
+  divergent, neither, or indeterminate. This statement does not apply to the
+  historical embedded mobile source.
 - URL classification never sends single-label HNS names to a search provider before local HNS resolution is attempted, and reserved non-HNS single-label names are not shown as HNS state.

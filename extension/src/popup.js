@@ -1,5 +1,8 @@
 import {
   currentSecurityResult,
+  namespaceLabel,
+  namespaceOutcomeLabel,
+  namespaceReasonLabel,
   stateLabel,
   transportLabel
 } from "./security-result.js";
@@ -22,9 +25,9 @@ async function refresh() {
     ? "Rust security path active"
     : "Handshake browsing blocked";
   document.querySelector("#state-detail").textContent = security
-    ? `Rust recorded the latest HNS main-frame result for ${security.host}.`
+    ? namespaceSummary(security)
     : active
-      ? "No HNS main-frame security result has been recorded in this proxy generation."
+      ? "No browser main-frame security result has been recorded in this proxy generation."
       : `Fail-closed reason: ${status.reason ?? status.state ?? "runtime unavailable"}`;
   document.querySelector("#runtime-generation").textContent =
     status.runtimeGeneration ?? "—";
@@ -32,6 +35,21 @@ async function refresh() {
     status.policyGeneration ?? "—";
   document.querySelector("#ca-state").textContent = status.caReady ? "Installed" : "Not ready";
   document.querySelector("#security-origin").textContent = security?.host ?? "—";
+  document.querySelector("#security-namespace-outcome").textContent = security
+    ? namespaceOutcomeLabel(security.namespaceOutcome)
+    : "—";
+  document.querySelector("#security-namespace-selected").textContent = security
+    ? namespaceLabel(security.selectedNamespace)
+    : "—";
+  document.querySelector("#security-namespace-reason").textContent = security
+    ? namespaceReasonLabel(security.namespaceSelectionReason)
+    : "—";
+  document.querySelector("#security-hns-resolution").textContent = security
+    ? stateLabel(security.hnsResolutionState)
+    : "—";
+  document.querySelector("#security-icann-resolution").textContent = security
+    ? stateLabel(security.icannResolutionState)
+    : "—";
   document.querySelector("#security-transport").textContent = security
     ? transportLabel(security.actualSelectedTransport)
     : "—";
@@ -49,4 +67,19 @@ async function refresh() {
     : "—";
   document.querySelector("#security-event").textContent =
     security?.eventSequence ?? "—";
+}
+
+function namespaceSummary(security) {
+  const outcome = namespaceOutcomeLabel(security.namespaceOutcome);
+  if (security.namespaceOutcome === "bothDivergent") {
+    return `${outcome} for ${security.host}; ${namespaceLabel(
+      security.selectedNamespace
+    )} was selected by ${namespaceReasonLabel(security.namespaceSelectionReason)}.`;
+  }
+  if (security.selectedNamespace) {
+    return `${outcome} for ${security.host}; ${namespaceLabel(
+      security.selectedNamespace
+    )} is active.`;
+  }
+  return `${outcome} for ${security.host}; the request failed closed.`;
 }

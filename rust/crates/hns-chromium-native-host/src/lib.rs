@@ -9,9 +9,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use getrandom::fill as fill_random;
 use hns_browser_runtime::{
-    BrowserHostClass, BrowserProxy, BrowserProxySecurityPath, BrowserProxyStatus,
-    BrowserProxyStatusObserver, BrowserRuntime, NetworkKind, ResolutionMode, RuntimeConfiguration,
-    RuntimePolicy, chromium_dane_pac_script, classify_browser_host, diagnostics_json,
+    BrowserProxy, BrowserProxySecurityPath, BrowserProxyStatus, BrowserProxyStatusObserver,
+    BrowserRuntime, NetworkKind, ResolutionMode, RuntimeConfiguration, RuntimePolicy,
+    chromium_dane_pac_script, diagnostics_json,
 };
 use hns_loopback_proxy::LocalCertificateAuthority;
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
 pub const NATIVE_MESSAGING_SCHEMA_VERSION: u32 = 1;
-pub const CHROMIUM_SECURITY_RESULT_SCHEMA_VERSION: u32 = 1;
+pub const CHROMIUM_SECURITY_RESULT_SCHEMA_VERSION: u32 = 2;
 pub const MAX_NATIVE_MESSAGE_BYTES: usize = 256 * 1024;
 pub const NATIVE_MESSAGING_HOST_NAME: &str = "com.denuoweb.hns_dane_browser";
 const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -177,6 +177,11 @@ struct ChromiumSecurityResult {
     host: String,
     status_code: u16,
     main_frame: bool,
+    namespace_outcome: String,
+    selected_namespace: Option<String>,
+    namespace_selection_reason: String,
+    hns_resolution_state: String,
+    icann_resolution_state: String,
     chain_anchor: SecurityChainAnchor,
     transport_policy: SecurityTransportPolicy,
     actual_selected_transport: ChromiumDnsTransport,
@@ -244,13 +249,7 @@ impl SecurityObservations {
             return;
         }
         let result = chromium_security_result(context, status, event_sequence);
-        if result.main_frame {
-            state.latest_main_frame = Some(result.clone());
-        }
-        if state.recent.len() == MAX_RECENT_SECURITY_RESULTS {
-            state.recent.pop_front();
-        }
-        state.recent.push_back(result);
+        retain_security_result(&mut state, result);
     }
 
     fn latest_main_frame(&self) -> Option<ChromiumSecurityResult> {
@@ -266,6 +265,16 @@ impl SecurityObservations {
             .map(|state| state.recent.iter().cloned().collect())
             .unwrap_or_default()
     }
+}
+
+fn retain_security_result(state: &mut SecurityObservationState, result: ChromiumSecurityResult) {
+    if result.main_frame {
+        state.latest_main_frame = Some(result.clone());
+    }
+    if state.recent.len() == MAX_RECENT_SECURITY_RESULTS {
+        state.recent.pop_front();
+    }
+    state.recent.push_back(result);
 }
 
 struct NativeSecurityObserver {
@@ -352,6 +361,26 @@ fn chromium_security_result_from_trace(
         host: host.to_owned(),
         status_code,
         main_frame,
+        namespace_outcome: trace_state(
+            trace.pointer("/namespaceResolution/outcome"),
+            "indeterminate",
+        ),
+        selected_namespace: bounded_trace_string(
+            trace.pointer("/namespaceResolution/selected"),
+            16,
+        ),
+        namespace_selection_reason: trace_state(
+            trace.pointer("/namespaceResolution/reason"),
+            "unavailable",
+        ),
+        hns_resolution_state: trace_state(
+            trace.pointer("/namespaceResolution/hnsState"),
+            "unknown",
+        ),
+        icann_resolution_state: trace_state(
+            trace.pointer("/namespaceResolution/icannState"),
+            "unknown",
+        ),
         chain_anchor: SecurityChainAnchor {
             local_best_height: trace.get("localBestHeight").and_then(Value::as_u64),
             target_height: trace.get("targetHeight").and_then(Value::as_u64),
@@ -531,11 +560,6 @@ pub enum NativeRequest {
         schema_version: u32,
         request_id: String,
     },
-    Classify {
-        schema_version: u32,
-        request_id: String,
-        host: String,
-    },
     Diagnostics {
         schema_version: u32,
         request_id: String,
@@ -558,7 +582,6 @@ impl NativeRequest {
             | Self::SetPolicy { schema_version, .. }
             | Self::Status { schema_version, .. }
             | Self::SyncOnce { schema_version, .. }
-            | Self::Classify { schema_version, .. }
             | Self::Diagnostics { schema_version, .. }
             | Self::Stop { schema_version, .. }
             | Self::Shutdown { schema_version, .. } => *schema_version,
@@ -572,7 +595,6 @@ impl NativeRequest {
             | Self::SetPolicy { request_id, .. }
             | Self::Status { request_id, .. }
             | Self::SyncOnce { request_id, .. }
-            | Self::Classify { request_id, .. }
             | Self::Diagnostics { request_id, .. }
             | Self::Stop { request_id, .. }
             | Self::Shutdown { request_id, .. } => request_id,
@@ -1053,16 +1075,6 @@ impl NativeHostController {
                     .map_err(|error| ("runtimeError", error.to_string()));
                 (self.response_from_result(request_id, result), false)
             }
-            NativeRequest::Classify { host, .. } => (
-                self.success_response(
-                    request_id,
-                    json!({
-                        "host": host,
-                        "class": browser_host_class_name(classify_browser_host(&host))
-                    }),
-                ),
-                false,
-            ),
             NativeRequest::Diagnostics { .. } => {
                 let diagnostics = diagnostics_json();
                 let core = serde_json::from_str(&diagnostics)
@@ -1269,15 +1281,6 @@ fn valid_request_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
-fn browser_host_class_name(class: BrowserHostClass) -> &'static str {
-    match class {
-        BrowserHostClass::Hns => "hns",
-        BrowserHostClass::Icann => "icann",
-        BrowserHostClass::Search => "search",
-        BrowserHostClass::NativeGateway => "nativeGateway",
-    }
-}
-
 fn generate_host_session() -> Result<String, NativeHostError> {
     let mut bytes = [0_u8; HOST_SESSION_RANDOM_BYTES];
     fill_random(&mut bytes).map_err(|_| NativeHostError::SessionGeneration)?;
@@ -1438,6 +1441,13 @@ mod tests {
         };
         let trace = json!({
             "url": "https://welcome/private?token=secret",
+            "namespaceResolution": {
+                "outcome": "hnsOnly",
+                "selected": "hns",
+                "reason": "onlyAvailableRoot",
+                "hnsState": "securePresent",
+                "icannState": "authenticatedAbsent"
+            },
             "hnsProof": "verified",
             "localBestHeight": 42,
             "targetHeight": 42,
@@ -1475,11 +1485,16 @@ mod tests {
         );
         let encoded = serde_json::to_value(result).unwrap();
 
-        assert_eq!(encoded["schemaVersion"], 1);
+        assert_eq!(encoded["schemaVersion"], 2);
         assert_eq!(encoded["eventSequence"], 9);
         assert_eq!(encoded["runtimeSession"], "runtime-session");
         assert_eq!(encoded["runtimeGeneration"], 7);
         assert_eq!(encoded["policyGeneration"], 3);
+        assert_eq!(encoded["namespaceOutcome"], "hnsOnly");
+        assert_eq!(encoded["selectedNamespace"], "hns");
+        assert_eq!(encoded["namespaceSelectionReason"], "onlyAvailableRoot");
+        assert_eq!(encoded["hnsResolutionState"], "securePresent");
+        assert_eq!(encoded["icannResolutionState"], "authenticatedAbsent");
         assert_eq!(encoded["actualSelectedTransport"], "directAuthoritativeTcp");
         assert_eq!(encoded["localHnsProofState"], "verified");
         assert_eq!(encoded["localDnssecState"], "secure");
@@ -1566,6 +1581,13 @@ mod tests {
         };
         let trace = json!({
             "resolutionSource": "trusted_icann_doh",
+            "namespaceResolution": {
+                "outcome": "icannOnly",
+                "selected": "icann",
+                "reason": "onlyAvailableRoot",
+                "hnsState": "authenticatedAbsent",
+                "icannState": "securePresent"
+            },
             "hnsProof": "not_applicable",
             "dnssec": "secure",
             "dnsAttempts": [{
@@ -1591,10 +1613,72 @@ mod tests {
         let encoded = serde_json::to_value(result).unwrap();
 
         assert_eq!(encoded["actualSelectedTransport"], "icannDoh");
+        assert_eq!(encoded["namespaceOutcome"], "icannOnly");
+        assert_eq!(encoded["selectedNamespace"], "icann");
         assert_eq!(encoded["nameserverAuthority"], "validatingIcannResolver");
         assert_eq!(
             encoded["peerIdentity"],
             "https://cloudflare-dns.com/dns-query"
+        );
+    }
+
+    #[test]
+    fn subresource_result_is_recent_without_replacing_latest_main_frame() {
+        let context = ActiveSecurityContext {
+            runtime_session: "runtime-session".to_owned(),
+            runtime_generation: 13,
+            policy_generation: 5,
+            network: "mainnet".to_owned(),
+            policy: ExtensionPolicy::default(),
+        };
+        let trace = json!({
+            "namespaceResolution": {
+                "outcome": "icannOnly",
+                "selected": "icann",
+                "reason": "onlyAvailableRoot",
+                "hnsState": "authenticatedAbsent",
+                "icannState": "securePresent"
+            }
+        });
+        let main_frame = chromium_security_result_from_trace(
+            &context,
+            13,
+            "page.example",
+            200,
+            true,
+            Some(BrowserProxySecurityPath::DaneIcannDoh),
+            &trace,
+            21,
+        );
+        let subresource = chromium_security_result_from_trace(
+            &context,
+            13,
+            "asset.example",
+            200,
+            false,
+            Some(BrowserProxySecurityPath::DaneIcannDoh),
+            &trace,
+            22,
+        );
+        let mut state = SecurityObservationState::default();
+
+        retain_security_result(&mut state, main_frame);
+        retain_security_result(&mut state, subresource);
+
+        assert_eq!(
+            state
+                .latest_main_frame
+                .as_ref()
+                .map(|result| (result.host.as_str(), result.event_sequence)),
+            Some(("page.example", 21))
+        );
+        assert_eq!(
+            state
+                .recent
+                .iter()
+                .map(|result| (result.host.as_str(), result.event_sequence))
+                .collect::<Vec<_>>(),
+            vec![("page.example", 21), ("asset.example", 22)]
         );
     }
 

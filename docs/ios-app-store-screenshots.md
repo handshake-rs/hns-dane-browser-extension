@@ -1,5 +1,9 @@
 # Live iOS App Store screenshots
 
+> Historical mobile capture notes. The named workflow was removed from this
+> Chromium-only repository checkpoint; mobile capture and submission belong
+> to the canonical `hns-dane-browser-mobile` repository.
+
 The `Live iOS App Store Screenshots` workflow produces four truthful iPhone
 screenshots without a physical iPhone. It runs only when manually dispatched
 because it performs real network navigation and is intended to create a
