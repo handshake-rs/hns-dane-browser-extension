@@ -195,28 +195,46 @@ fn default_data_dir() -> PathBuf {
     if let Some(path) = env::var_os("HNS_CHROMIUM_DATA_DIR") {
         return PathBuf::from(path);
     }
+    if let Some(path) = installed_data_dir() {
+        return path;
+    }
     if cfg!(target_os = "windows") {
-        return env::var_os("LOCALAPPDATA")
+        env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(env::temp_dir)
             .join("HnsDaneBrowser")
-            .join("Chromium");
-    }
-    if cfg!(target_os = "macos") {
-        return env::var_os("HOME")
+            .join("Chromium")
+    } else if cfg!(target_os = "macos") {
+        env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(env::temp_dir)
             .join("Library")
             .join("Application Support")
             .join("HnsDaneBrowser")
-            .join("Chromium");
+            .join("Chromium")
+    } else {
+        env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+            })
+            .unwrap_or_else(env::temp_dir)
+            .join("hns-dane-browser")
+            .join("chromium")
     }
-    env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
-        })
-        .unwrap_or_else(env::temp_dir)
-        .join("hns-dane-browser")
-        .join("chromium")
+}
+
+fn installed_data_dir() -> Option<PathBuf> {
+    let executable = env::current_exe().ok()?;
+    let executable_name = executable.file_name()?.to_str()?;
+    if executable_name != "hns-chromium-native-host"
+        && executable_name != "hns-chromium-native-host.exe"
+    {
+        return None;
+    }
+    let binary_directory = executable.parent()?;
+    if binary_directory.file_name()? != "bin" {
+        return None;
+    }
+    Some(binary_directory.parent()?.join("data"))
 }

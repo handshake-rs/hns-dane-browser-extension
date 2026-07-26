@@ -27,6 +27,7 @@ test("Linux installer and complete uninstaller are isolated and symmetric", () =
     const nssDatabase = join(root, "nssdb");
     const fakeBin = join(root, "bin");
     const certutilLog = join(root, "certutil.log");
+    const installRoot = join(root, "custom-install");
     run("mkdir", ["-p", home, configHome, dataHome, nssDatabase, fakeBin]);
     const fakeCertutil = join(fakeBin, "certutil");
     writeFileSync(
@@ -39,10 +40,12 @@ test("Linux installer and complete uninstaller are isolated and symmetric", () =
       HOME: home,
       XDG_CONFIG_HOME: configHome,
       XDG_DATA_HOME: dataHome,
+      HNS_CHROMIUM_INSTALL_ROOT: installRoot,
       HNS_CHROMIUM_NSS_DB_DIR: nssDatabase,
       HNS_CERTUTIL_LOG: certutilLog,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`
     };
+    delete environment.HNS_CHROMIUM_DATA_DIR;
 
     run(
       "bash",
@@ -58,7 +61,6 @@ test("Linux installer and complete uninstaller are isolated and symmetric", () =
       environment
     );
 
-    const installRoot = join(dataHome, "hns-dane-browser/chromium");
     const expectedManifestDirectories = [
       "google-chrome",
       "chromium",
@@ -94,6 +96,24 @@ test("Linux installer and complete uninstaller are isolated and symmetric", () =
       /^HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES\n/
     );
     assert.match(readFileSync(certutilLog, "utf8"), / -A /);
+
+    const installedHost = join(installRoot, "bin/hns-chromium-native-host");
+    const defaultCaStatus = JSON.parse(
+      run(installedHost, ["--ca-info"], environment).stdout
+    );
+    assert.equal(defaultCaStatus.state, "installed");
+    assert.equal(
+      defaultCaStatus.certificatePath,
+      join(
+        installRoot,
+        "data/chromium-ca/hns-dane-browser-local-ca.pem"
+      )
+    );
+    assert.equal(existsSync(join(installRoot, "chromium-ca")), false);
+    assert.equal(
+      existsSync(join(dataHome, "hns-dane-browser/chromium")),
+      false
+    );
 
     run("bash", [uninstallScript, "--browser", "all"], environment);
     assert.equal(existsSync(installRoot), false);
@@ -141,4 +161,5 @@ function run(command, arguments_, environment = process.env) {
     maxBuffer: 4 * 1024 * 1024
   });
   assert.equal(result.status, 0, `${command}: ${result.stderr || result.stdout}`);
+  return result;
 }
