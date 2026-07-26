@@ -11,7 +11,7 @@ build. It does not claim that each entry is the newest upstream release.
 | Rust workspace | `0.5.0` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
-| Canonical browser contracts | `handshake-rs/hns-dane-engine` at `a03648ec85a115362ebc2ab24bb9ea0f1be127fc` |
+| Canonical browser contracts | `handshake-rs/hns-dane-engine` at `fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159` |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
 | rcgen | `0.14.8` |

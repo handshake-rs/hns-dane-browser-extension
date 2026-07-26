@@ -19,11 +19,12 @@ The browser resolves in this order:
 ```text
 1. Verify the HNS proof for crewball.
 2. Extract NS, GLUE4/GLUE6 or SYNTH4/SYNTH6, DS, and any `hnsdns=1` transport declaration from the HNS resource.
-3. If proof-anchored DoH metadata is present, try that owner-operated authoritative DoH (ADoH) endpoint first, using the HNS-proven glue IP as the connect address; no port 53 bootstrap is required. A `tlsa=3,1,1,...` field authenticates a self-signed HNS certificate from the verified proof without ICANN DNS or WebPKI.
-4. If no proof-anchored endpoint is present, the browser may query `_dns.ns1.crewball. SVCB` through authoritative port 53, require `alpn=h2` plus `dohpath`, and try the DNSSEC-validated endpoint it discovers.
-5. If owner ADoH is absent, malformed, unavailable, or fails authentication, query the authoritative nameserver directly over UDP/TCP 53.
-6. If both owner paths fail, Compatibility mode may try the user's configured third-party HNS DoH resolver. Strict HNS mode fails instead of making this final compatibility fallback.
-7. Validate every DNSKEY, A/AAAA, HTTPS, and TLSA answer against the HNS-proven DS regardless of transport.
+3. Query the authoritative nameserver directly over UDP/TCP 53 and validate the response against the HNS-proven DS.
+4. A positive matching reply to the bounded TEST-NET canary classifies port 53 as intercepted, stops futile TCP and remaining direct-server attempts, and continues to proof-pinned owner ADoH. Ordinary direct transport failure can also continue to ADoH. The HNS-proven glue remains the connect address, and `tlsa=3,1,1,...` authenticates the endpoint without ICANN DNS or WebPKI.
+5. A timeout or inconclusive canary is neither proof that port 53 is clean nor authenticated DNS absence and does not classify the path as intercepted.
+6. When direct authority is usable, the browser may query `_dns.ns1.crewball. SVCB`, require `alpn=h2` plus `dohpath`, and validate any discovered endpoint through the delegated DNSSEC chain.
+7. If the allowed owner paths fail, Compatibility mode may try the user's configured third-party HNS DoH resolver. Strict HNS mode fails instead of making this final compatibility fallback.
+8. Validate every DNSKEY, A/AAAA, HTTPS, and TLSA answer against the HNS-proven DS regardless of transport.
 ```
 
 The TXT/SVCB metadata only declares nameserver transport. It cannot contain or synthesize origin A/AAAA, HTTPS, or TLSA data.
@@ -54,8 +55,15 @@ _dns.ns1.crewball. 3600 IN SVCB 1 doh.example. alpn=h2 dohpath=/dns-query{?dns}
 _8443._tcp.crewball. 3600 IN TLSA 3 1 1 <spki-sha256>
 ```
 
-The `_8443._tcp.crewball.` TLSA RR is not used to bootstrap proof-pinned ADoH; the verified HNS `tlsa=` field does that before any authoritative DNS query is possible. Website DANE remains a separate `_443._tcp.crewball.` TLSA RR, or the TLSA owner for whatever web-origin port HTTPS/SVCB selects.
+The `_8443._tcp.crewball.` TLSA RR is not used to bootstrap proof-pinned ADoH; the verified HNS `tlsa=` field does that without an authoritative DNS bootstrap query. Website DANE remains a separate `_443._tcp.crewball.` TLSA RR, or the TLSA owner for whatever web-origin port HTTPS/SVCB selects.
 The `_dns` SVCB line shows the older optional RFC 9461/WebPKI discovery path; it is not required by the HNS-only proof-pinned setup above.
+
+The browser evaluates supported protocols in the effective RFC 9460 HTTPS
+ALPN set as `h3`, `h2`, then `http/1.1`; the HTTP/1.1 scheme default applies
+unless `no-default-alpn` is present. HTTP/3 derives `_443._udp.crewball.`;
+HTTP/2 and HTTP/1.1 derive `_443._tcp.crewball.`. Only securely authenticated
+TLSA absence may advance to the next protocol. Bogus or indeterminate DNSSEC
+never becomes “no TLSA,” while a valid UDP TLSA keeps HTTP/3 selected.
 
 ## Endpoint Checks
 
@@ -106,9 +114,10 @@ Test after the update confirms and the tree interval has passed. Use Compatibili
 - Resolver trace `delegation`: `true`
 - Resolver trace `authoritativeDns.udp53` or `authoritativeDns.tcp53`: `ok` when port 53 is reachable
 - Resolver trace `authoritativeDns.doh`: `ok` when the proof-bootstrapped or RFC 9461-discovered endpoint validated
-- A proof-pinned endpoint is identified as `HNS-proof TLSA`; failure proceeds to authoritative UDP/TCP 53
-- Resolver trace `port53Interception`: `detected` only when a matching reply came from the unroutable TEST-NET sentinel; `not_detected` is not proof that the path is clean
+- Direct authoritative UDP/TCP 53 is attempted first; a proof-pinned endpoint is identified as `HNS-proof TLSA` and follows direct unavailability or failure
+- Resolver trace `port53Interception`: `detected` only when a matching reply came from the unroutable TEST-NET sentinel; detection stops futile TCP and remaining direct-server attempts, while timeout, `not_detected`, or another inconclusive result does not classify interception or authenticated absence
 - Resolver trace `resolutionSource`: `authoritative_dns` for port 53, or `authoritative_doh` for the encrypted path
 - Status: `DANE via ADoH`, `DANE via DNS53`, or `DANE via 3rd DoH` must identify the path that supplied the validated origin TLSA record; certificate-carried proof is reported separately as `Stateless DANE`
 - DNSSEC: `secure`
-- TLS/DANE state: SPKI or certificate match from `_443._tcp.crewball. TLSA`
+- TLS/DANE state: SPKI or certificate match from the exact selected
+  `_443._udp.crewball. TLSA` or `_443._tcp.crewball. TLSA` owner

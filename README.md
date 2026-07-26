@@ -30,7 +30,7 @@ malformed data, and resolver failure fail closed.
 The native host integrates the five canonical browser contracts from
 [`handshake-rs/hns-dane-engine`](https://github.com/handshake-rs/hns-dane-engine)
 at immutable revision
-`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`:
+`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`:
 
 - `hns-browser-runtime`;
 - `hns-browser-observability`;

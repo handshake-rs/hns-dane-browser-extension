@@ -26,12 +26,25 @@ All notable changes to this project will be documented in this file.
 - Pinned the canonical browser-runtime, observability, ICANN-DANE,
   namespace-resolution, and resolution-policy contracts to
   `handshake-rs/hns-dane-engine` revision
-  `a03648ec85a115362ebc2ab24bb9ea0f1be127fc`.
+  `fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`.
 - Kept the browser's P2P DNS-relay requester behind explicit consent:
   unchecked maps to `Disabled` and checked maps to direct-authority-first
   `Auto`. The browser advertises no provider service.
 - Made Chromium health checks preserve a healthy proxy generation instead of
   rotating credentials and reinstalling the PAC on every alarm.
+
+### Fixed
+
+- Kept direct authoritative UDP/TCP 53 first when usable. A positive matching
+  TEST-NET interception canary now stops futile TCP and remaining port-53
+  attempts, classifies that path as unavailable, and continues through
+  independently authenticated proof-pinned authoritative DoH. A timeout or
+  inconclusive probe does not classify interception or authenticated absence.
+- Made HNS HTTPS/SVCB evaluate supported protocols in the effective RFC 9460
+  ALPN set in `h3` → `h2` → `http/1.1` order, including the HTTPS default
+  unless `no-default-alpn` is present, with transport-scoped TLSA owners. Only
+  securely authenticated TLSA absence may advance to the next protocol;
+  bogus DNSSEC remains terminal, and valid UDP TLSA retains HTTP/3.
 
 ### Security
 

@@ -9,7 +9,7 @@ ICANN resolution stack. Current mobile security claims belong to
 
 Five canonical contracts are pinned to
 `handshake-rs/hns-dane-engine` revision
-`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`:
+`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`:
 
 - session-bound browser request authority;
 - checked browser observability;
@@ -36,6 +36,19 @@ The HNS path trusts:
 
 Selected HNS HTTPS never falls back to WebPKI or a public recursive HNS
 resolver.
+
+Direct authoritative UDP/TCP 53 remains first when usable. A positive matching
+TEST-NET canary reply stops futile TCP and remaining direct-server attempts
+and continues through independently authenticated proof-pinned authoritative
+DoH. Ordinary direct transport failure may also continue to that endpoint. A
+timeout or inconclusive probe does not classify interception or authenticated
+absence.
+
+For HTTPS/SVCB, supported protocols in the effective RFC 9460 ALPN set are
+evaluated in `h3` → `h2` → `http/1.1` order; the HTTP/1.1 HTTPS default applies
+unless `no-default-alpn` is present. TLSA owners are transport-scoped. Only
+securely authenticated TLSA absence may advance to the next protocol. Bogus or
+indeterminate DNSSEC remains terminal, and valid UDP TLSA retains HTTP/3.
 
 ### Selected ICANN namespace
 

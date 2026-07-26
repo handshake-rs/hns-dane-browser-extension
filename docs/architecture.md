@@ -6,7 +6,7 @@ Android and iOS work lives in
 
 The Chromium adapter consumes five canonical browser contracts from
 `handshake-rs/hns-dane-engine` at immutable revision
-`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`. The canonical
+`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`. The canonical
 `hns-browser-runtime` owns session-bound request authority;
 `hns-browser-observability` checks typed status;
 `hns-icann-dane` owns ICANN TLSA policy;

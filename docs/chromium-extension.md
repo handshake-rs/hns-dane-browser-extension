@@ -26,7 +26,7 @@ malformed data, and resolver failure fail closed. TCP applications use
 
 The five canonical browser contracts are pinned to
 `handshake-rs/hns-dane-engine` revision
-`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`.
+`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`.
 
 ## Security-result boundary
 

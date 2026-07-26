@@ -37,11 +37,11 @@ hns-core = { path = "crates/hns-core" }
 hns-dane = { path = "crates/hns-dane" }
 hns-dnssec = { path = "crates/hns-dnssec" }
 hns-gateway = { path = "crates/hns-gateway" }
-hns-browser-observability = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "a03648ec85a115362ebc2ab24bb9ea0f1be127fc" }
-hns-browser-runtime = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "a03648ec85a115362ebc2ab24bb9ea0f1be127fc" }
-hns-icann-dane = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "a03648ec85a115362ebc2ab24bb9ea0f1be127fc" }
-hns-namespace-resolution = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "a03648ec85a115362ebc2ab24bb9ea0f1be127fc" }
-hns-resolution-policy = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "a03648ec85a115362ebc2ab24bb9ea0f1be127fc" }
+hns-browser-observability = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159" }
+hns-browser-runtime = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159" }
+hns-icann-dane = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159" }
+hns-namespace-resolution = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159" }
+hns-resolution-policy = { git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159" }
 hns-loopback-proxy = { path = "crates/hns-loopback-proxy" }
 h2 = "0.4"
 h3 = "0.0.8"

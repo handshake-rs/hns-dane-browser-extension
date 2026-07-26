@@ -20,7 +20,7 @@ and release evidence is maintained in
   `hns-browser-runtime`, `hns-browser-observability`, `hns-icann-dane`,
   `hns-namespace-resolution`, and `hns-resolution-policy`.
 - Every canonical package is locked to revision
-  `a03648ec85a115362ebc2ab24bb9ea0f1be127fc`.
+  `fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`.
 - The source-policy verifier and its negative tests reject extra packages,
   alternate URLs, aliases, moving selectors, or a different lock revision.
 - cargo-deny reviews active licenses, advisories, bans, and sources.

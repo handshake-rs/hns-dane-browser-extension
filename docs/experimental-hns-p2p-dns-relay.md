@@ -15,10 +15,16 @@ unreachable.
 The direct-authority-first order is:
 
 1. current local header and verified proof state;
-2. proof-declared authoritative DoH;
-3. direct authoritative UDP with TCP fallback;
+2. direct authoritative UDP with TCP fallback;
+3. proof-declared authoritative DoH after direct authority is unavailable or
+   fails, including when a positive matching TEST-NET canary classifies port
+   53 as intercepted;
 4. experimental HNS P2P DNS relay, when the browser requester is explicitly
    opted in.
+
+A positive canary stops futile TCP and remaining direct-server attempts for
+the intercepted path. A timeout or inconclusive canary does not classify
+interception or authenticated absence.
 
 No production path uses a public recursive HNS resolver. Relayed bytes never
 set `secure` by themselves and cannot replace a missing or stale local proof.
