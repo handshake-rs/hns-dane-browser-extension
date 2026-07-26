@@ -37,6 +37,17 @@ The HNS path trusts:
 Selected HNS HTTPS never falls back to WebPKI or a public recursive HNS
 resolver.
 
+The locally validated canonical tip must also be current. A 144-block window
+is used only to retain proof-cache anchors across conservative
+reorganizations; it does not authorize a day-old chain view. Live browser
+decisions use a two-block maximum lag against a recent corroborated median
+from at least three independent peer address groups. A raw maximum peer claim
+and the ideal ten-minute schedule estimate remain diagnostics. Missing or
+expired corroboration is `Unknown`, not current, and fails closed for HNS
+admission. Header-height evidence has its own persisted observation timestamp;
+proof retrieval, DNS-relay traffic, and unrelated transport success cannot
+refresh it or promote a version-packet height.
+
 Direct authoritative UDP/TCP 53 remains first when usable. A positive matching
 TEST-NET canary reply stops futile TCP and remaining direct-server attempts
 and continues through independently authenticated proof-pinned authoritative
@@ -157,6 +168,8 @@ network observers and must not be described as ODoH.
 | Local process reaches proxy port | Per-generation proxy authentication and bounded framing |
 | Page forges security metadata | Strip internal headers; publish only native checked status |
 | Relay lies or sets AD | Treat response as untrusted and validate locally |
+| One peer advertises an extreme height | Recent multi-address-group corroboration; raw maximum is diagnostic only |
+| No fresh peer target is available | Currentness is unknown and HNS admission fails closed |
 | Requester consent enables serving | Typed policy separation; all provider roles off |
 | Unsupported HNSR/ODoH request | Reject policy; no silent downgrade |
 

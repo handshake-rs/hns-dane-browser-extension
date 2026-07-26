@@ -2234,6 +2234,43 @@ mod tests {
         }
     }
 
+    struct PublicationPermitTunnelBackend {
+        permit: ProxyPublicationPermit,
+    }
+
+    impl ProxyBackend for PublicationPermitTunnelBackend {
+        fn execute(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyResponse, BackendError> {
+            Err(BackendError::Internal)
+        }
+
+        fn open_tunnel(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyTunnelOpen, BackendError> {
+            Ok(ProxyTunnelOpen::Tunnel(ProxyTunnel {
+                head: ProxyResponseHead {
+                    status_code: 101,
+                    reason_phrase: "Switching Protocols".to_owned(),
+                    headers: vec![
+                        ProxyHeader::new("Connection", "Upgrade"),
+                        ProxyHeader::new("Upgrade", "websocket"),
+                        ProxyHeader::new("Sec-WebSocket-Accept", "accepted"),
+                    ],
+                    observation_id: None,
+                },
+                stream: Box::new(EchoTunnelStream {
+                    pending: VecDeque::new(),
+                }),
+                publication_permit: self.permit.clone(),
+            }))
+        }
+    }
+
     struct EchoTunnelBackend {
         requests: Mutex<Vec<ProxyRequest>>,
         head: ProxyResponseHead,
@@ -3335,6 +3372,42 @@ mod tests {
         assert!(
             response.is_empty(),
             "revoked backend result published bytes: {response:?}"
+        );
+        proxy.stop();
+    }
+
+    #[test]
+    fn revocation_at_backend_return_boundary_prevents_tunnel_head_publication() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let authority = Arc::new(GatedPublicationAuthority {
+            revoked: AtomicBool::new(false),
+            entered: Mutex::new(Some(entered_tx)),
+            release: Mutex::new(release_rx),
+        });
+        let backend = Arc::new(PublicationPermitTunnelBackend {
+            permit: ProxyPublicationPermit::new(authority.clone()),
+        });
+        let proxy =
+            RunningProxy::start(test_config(), backend, Arc::new(NoopProxyObserver)).unwrap();
+        let mut client = TcpStream::connect(proxy.endpoint().address()).unwrap();
+        client.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+        let request = format!(
+            "GET ws://welcome/socket HTTP/1.1\r\nHost: welcome\r\n{}Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: key\r\nSec-WebSocket-Version: 13\r\n\r\n",
+            auth_header(&proxy)
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.flush().unwrap();
+
+        entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
+        authority.revoked.store(true, AtomicOrdering::Release);
+        release_tx.send(()).unwrap();
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        assert!(
+            response.is_empty(),
+            "revoked tunnel result published bytes: {response:?}"
         );
         proxy.stop();
     }

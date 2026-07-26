@@ -288,6 +288,15 @@ impl SecurityObservations {
         }
     }
 
+    fn invalidate_results(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.latest_main_frame = None;
+            state.latest_main_frame_unavailable_reason = None;
+            state.latest_main_frame_event_floor = None;
+            state.recent.clear();
+        }
+    }
+
     fn observe(&self, status: &BrowserProxyStatus) {
         let Ok(mut state) = self.state.lock() else {
             return;
@@ -1304,6 +1313,10 @@ impl NativeHostController {
                             .unwrap_or_else(|_| Value::String(status.to_json()))
                     })
                     .map_err(|error| ("runtimeError", error.to_string()));
+                // A sync attempt may persist headers or invalidate cached proofs even
+                // when a later peer/storage step returns an error. Never retain page
+                // observations across that maintenance boundary.
+                self.security_observations.invalidate_results();
                 (self.response_from_result(request_id, result), false)
             }
             NativeRequest::Diagnostics { .. } => {
@@ -1373,6 +1386,7 @@ impl NativeHostController {
         });
         let pac_script = chromium_dane_pac_script(proxy.port())
             .map_err(|error| ("pacGenerationFailed", error.to_string()))?;
+        let (header_sync, header_sync_unavailable_reason) = self.header_sync_status_result();
         let result = json!({
             "state": "active",
             "proxy": {
@@ -1388,6 +1402,8 @@ impl NativeHostController {
             "runtimeGeneration": runtime_generation,
             "policyGeneration": policy_generation,
             "policy": policy,
+            "headerSync": header_sync,
+            "headerSyncUnavailableReason": header_sync_unavailable_reason,
             "latestMainFrameSecurity": Value::Null,
             "latestMainFrameSecurityUnavailableReason": Value::Null
         });
@@ -1399,6 +1415,7 @@ impl NativeHostController {
     fn status_result(&self) -> Value {
         let proxy = self.proxy.as_ref();
         let context = self.security_observations.active_context();
+        let (header_sync, header_sync_unavailable_reason) = self.header_sync_status_result();
         json!({
             "state": if proxy.is_some_and(|proxy| !proxy.is_stop_requested()) {
                 "active"
@@ -1415,11 +1432,29 @@ impl NativeHostController {
             "policy": self.policy,
             "caReady": self.local_ca.is_marked_installed(),
             "ca": self.local_ca.status_json(),
+            "headerSync": header_sync,
+            "headerSyncUnavailableReason": header_sync_unavailable_reason,
             "latestMainFrameSecurity": self.security_observations.latest_main_frame(),
             "latestMainFrameSecurityUnavailableReason": self
                 .security_observations
                 .latest_main_frame_unavailable_reason()
         })
+    }
+
+    fn header_sync_status_result(&self) -> (Value, Value) {
+        match self.runtime.sync_status() {
+            Ok(status) => match serde_json::from_str::<Value>(&status.to_json()) {
+                Ok(value) => (value, Value::Null),
+                Err(_) => (
+                    Value::Null,
+                    Value::String("headerSyncStatusInvalid".to_owned()),
+                ),
+            },
+            Err(_) => (
+                Value::Null,
+                Value::String("headerSyncStatusUnavailable".to_owned()),
+            ),
+        }
     }
 
     fn stop_proxy(&mut self) {
@@ -2114,6 +2149,46 @@ mod tests {
     }
 
     #[test]
+    fn header_maintenance_invalidates_page_results_but_preserves_active_context() {
+        let canonical = CanonicalBrowserStatus::new(hns_only_status_input(canonical_policy(
+            &ExtensionPolicy::default(),
+        )))
+        .unwrap();
+        let result =
+            chromium_security_result_from_canonical("page.example", 200, true, &canonical, None);
+        let observations = SecurityObservations::default();
+        observations.activate(ActiveSecurityContext {
+            runtime_session: result.runtime_session.clone(),
+            runtime_generation: result.runtime_generation,
+            policy_generation: result.policy_generation,
+            proxy_generation: 9,
+            network: result.network.clone(),
+        });
+        {
+            let mut state = observations.state.lock().unwrap();
+            retain_security_observation(
+                &mut state,
+                true,
+                CanonicalSecurityObservation::Available {
+                    tuple: observation_tuple(&canonical, result.event_sequence),
+                    result: Box::new(result),
+                },
+            );
+            assert!(state.latest_main_frame.is_some());
+            assert_eq!(state.recent.len(), 1);
+        }
+
+        observations.invalidate_results();
+
+        let state = observations.state.lock().unwrap();
+        assert!(state.active.is_some());
+        assert!(state.latest_main_frame.is_none());
+        assert!(state.latest_main_frame_unavailable_reason.is_none());
+        assert!(state.latest_main_frame_event_floor.is_none());
+        assert!(state.recent.is_empty());
+    }
+
+    #[test]
     fn subresource_result_is_recent_without_replacing_latest_main_frame() {
         let canonical = CanonicalBrowserStatus::new(hns_only_status_input(canonical_policy(
             &ExtensionPolicy::default(),
@@ -2285,6 +2360,9 @@ mod tests {
         let result = response.result.unwrap();
         assert_eq!(result["state"], "active");
         assert_eq!(result["ca"]["state"], "needsInstallation");
+        assert_eq!(result["headerSync"]["network"], "regtest");
+        assert_eq!(result["headerSync"]["bestHeight"], 0);
+        assert_eq!(result["headerSyncUnavailableReason"], Value::Null);
         assert_eq!(result["latestMainFrameSecurity"], Value::Null);
         assert!(
             result["pacScript"]

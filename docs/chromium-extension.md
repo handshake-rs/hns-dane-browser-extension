@@ -28,6 +28,35 @@ The five canonical browser contracts are pinned to
 `handshake-rs/hns-dane-engine` revision
 `fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`.
 
+## Header currentness and UI
+
+The toolbar popup reports the global Handshake header chain separately from
+the latest page:
+
+- **Validated header tip** is the highest locally proof-of-work-validated
+  canonical header.
+- **Corroborated target** is the outlier-resistant target derived from recent
+  header-sync-owned observations in at least three independent peer address
+  groups. Proof retrieval, relay use, and other transport liveness cannot
+  refresh this evidence.
+- **Highest peer claim** and **Schedule estimate** are diagnostic only. Neither
+  can authorize a browser decision.
+- **Page proof anchor** is the canonical header against which the latest
+  page's HNS name proof was checked. It is not the global sync tip.
+
+`Current` means that the validated tip is no more than two blocks behind the
+corroborated target. The 144-block resource-proof cache window is retained for
+reorganization-safe cache invalidation only; it is not a freshness allowance.
+If fresh corroboration is unavailable, currentness is `Unknown` and HNS
+resolution fails closed.
+
+`Sync headers now` performs one explicit synchronization without rotating the
+proxy generation or changing policy. A failed sync is reported in the header
+section and does not disable an otherwise active proxy. Background sync is
+stale-aware and limited to one attempt per ten-minute target interval; the
+five-minute runtime health check reads local status only, and opening the popup
+does not contact peers.
+
 ## Security-result boundary
 
 The native host owns synchronization, Handshake proof validation, delegated
@@ -155,6 +184,10 @@ extension is disabled or uninstalled; orderly suspension also clears them.
   browser-visible headers.
 - Policy storage is updated only after native acceptance and an active proxy
   generation are returned.
+- Header synchronization takes the runtime maintenance write lock, so a chain
+  advance or reorganization cannot overlap request proof validation or
+  publication. Page observations are cleared after synchronization and must be
+  re-established against the resulting canonical chain.
 
 ## Qualification
 

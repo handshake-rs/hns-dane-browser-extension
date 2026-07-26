@@ -10,7 +10,8 @@ advertising, or browsing-history service.
 The extension and native host keep only data needed to provide the browser
 feature, including:
 
-- extension settings and the explicit P2P DNS-relay requester choice;
+- extension settings, the explicit P2P DNS-relay requester choice, and the
+  local timestamp of the last header-sync attempt used for retry limiting;
 - native-host registration and installation markers;
 - a per-install local CA key and certificate;
 - Handshake headers, peer state, verified proof/resource cache, namespace

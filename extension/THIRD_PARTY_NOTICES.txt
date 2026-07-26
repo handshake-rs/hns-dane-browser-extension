@@ -20,10 +20,10 @@ Generator schema: 4
 Generated input SHA-256:
   scripts/generate-third-party-notices.py = 47321291ac9254867a5f9deedca4967a497a9d6983571d9dbe6148ee5f02bc16
   scripts/verify_cargo_git_policy.py = d46e5d7c0e6bdb9672927a498f86113e651c78721209d0cec37bb4d061625fd6
-  rust/Cargo.toml = a9e6acdd955d55d3c785d5d90ffa2cdfe4e607d2d15954fdc1825319ee2ede15
-  rust/Cargo.lock = b69b9d33fc229ef0c2abb0384cc9d465f2e8848942ed07abf3a510a7841124a1
-  extension/manifest.json = ce63799e4ea7e340469fc9cddf888fab9f0628d02e18bc2d84180ef0d632bbcd
-  package.json = 7929e8f469474ecfcb747e7e31cc9a72f443e49f0ce2dfb9bf096eab14f86599
+  rust/Cargo.toml = 2565070ad485f04791e68c6e7ab95480cf9ead8f56a4c9d3ab8be2efb537901b
+  rust/Cargo.lock = 7227ae9d5be10c53eaf49e0154777467093f0f00ebdef02777e0858593ef9d69
+  extension/manifest.json = f31c58039b0dedf5f69a917e4162bdfbb6bd6c9094f2f5e209afabac9c7eb553
+  package.json = dc8c26f36d52921df466d1f9fde72e05afc143df015bef2d1a33ececf521010a
   rust/crates/hns-cache/Cargo.toml = ecb37feb5e48f51bc3f4e8319aa3e8edca4178f419a3390215640e2e7c2ff058
   rust/crates/hns-chain/Cargo.toml = 0fdd59304d88167acd7cf0a0ceb2c333aa5cc79d45c46a26828d9788df944814
   rust/crates/hns-chromium-native-host/Cargo.toml = fda3eaf22748a07f187a3a6dc755564b7a8d898f87b9602745b13c0d369fcf43

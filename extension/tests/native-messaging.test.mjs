@@ -12,6 +12,7 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
   try {
     const input = Buffer.concat([
       frame({ command: "hello", schemaVersion: 1, requestId: "hello-1" }),
+      frame({ command: "status", schemaVersion: 1, requestId: "status-1" }),
       frame({ command: "shutdown", schemaVersion: 1, requestId: "shutdown-1" })
     ]);
     const result = spawnSync(
@@ -21,15 +22,20 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     );
     assert.equal(result.status, 0, result.stderr.toString());
     const responses = decodeFrames(result.stdout);
-    assert.equal(responses.length, 2);
+    assert.equal(responses.length, 3);
     assert.equal(responses[0].ok, true);
     assert.equal(responses[0].schemaVersion, 1);
     assert.equal(responses[0].requestId, "hello-1");
     assert.equal(responses[0].eventSequence, 1);
     assert.equal(responses[0].result.capabilities.chromiumSecurityResults, true);
-    assert.equal(responses[1].requestId, "shutdown-1");
+    assert.equal(responses[1].requestId, "status-1");
     assert.equal(responses[1].eventSequence, 2);
-    assert.equal(responses[0].runtimeSession, responses[1].runtimeSession);
+    assert.equal(responses[1].result.headerSync.network, "regtest");
+    assert.equal(responses[1].result.headerSync.bestHeight, 0);
+    assert.equal(responses[1].result.headerSyncUnavailableReason, null);
+    assert.equal(responses[2].requestId, "shutdown-1");
+    assert.equal(responses[2].eventSequence, 3);
+    assert.equal(responses[0].runtimeSession, responses[2].runtimeSession);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

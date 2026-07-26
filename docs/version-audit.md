@@ -7,8 +7,8 @@ build. It does not claim that each entry is the newest upstream release.
 
 | Component | Configured version/source |
 | --- | --- |
-| Extension package | `0.5.0` |
-| Rust workspace | `0.5.0` |
+| Extension package | `0.5.1` |
+| Rust workspace | `0.5.1` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | Canonical browser contracts | `handshake-rs/hns-dane-engine` at `fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159` |

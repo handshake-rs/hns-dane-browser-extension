@@ -1,4 +1,12 @@
-import { NativeClient } from "./native-client.js";
+import {
+  MAX_REQUEST_TIMEOUT_MS,
+  NativeClient
+} from "./native-client.js";
+import {
+  AUTOMATIC_HEADER_SYNC_MIN_INTERVAL_MS,
+  automaticHeaderSyncAllowed,
+  needsAutomaticHeaderSync
+} from "./header-sync-schedule.js";
 import {
   DEFAULT_POLICY,
   LEGACY_HNS_DOH_KEYS,
@@ -6,14 +14,27 @@ import {
   normalizePolicy
 } from "./policy.js";
 import { currentSecurityResult } from "./security-result.js";
+import {
+  authoritativeHeaderSync,
+  currentHeaderSync,
+  validHeaderSyncEnvelope
+} from "./header-status.js";
 
 const NATIVE_HOST = "com.denuoweb.hns_dane_browser";
 const HEALTH_ALARM = "hns-runtime-health";
 const RECONNECT_ALARM = "hns-runtime-reconnect";
+const HEADER_SYNC_ALARM = "hns-header-sync";
 const HEALTH_PERIOD_MINUTES = 5;
+const HEADER_SYNC_PERIOD_MINUTES =
+  AUTOMATIC_HEADER_SYNC_MIN_INTERVAL_MS / (60 * 1000);
+const HEADER_SYNC_LAST_ATTEMPT_KEY = "headerSyncLastAttemptAt";
 const client = new NativeClient(chrome, NATIVE_HOST);
 
 let activeOperation = null;
+let headerSyncOperation = null;
+let headerMaintenanceOperation = null;
+let lastHeaderSyncAttemptAt = null;
+let lastHeaderSyncAttemptLoaded = false;
 let credentials = null;
 let publicStatus = {
   state: "starting",
@@ -22,6 +43,9 @@ let publicStatus = {
   runtimeGeneration: null,
   policyGeneration: 0,
   caReady: false,
+  headerSync: null,
+  headerSyncInProgress: false,
+  headerSyncError: null,
   latestMainFrameSecurity: null,
   latestMainFrameSecurityUnavailableReason: null
 };
@@ -31,6 +55,9 @@ client.onDisconnect(() => {
   setStatus({
     state: "degraded",
     reason: "nativeHostDisconnected",
+    headerSync: null,
+    headerSyncInProgress: false,
+    headerSyncError: "Native host disconnected",
     latestMainFrameSecurity: null,
     latestMainFrameSecurityUnavailableReason: null
   });
@@ -61,6 +88,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void refreshNativeStatus();
   } else if (alarm.name === RECONNECT_ALARM) {
     void recover();
+  } else if (alarm.name === HEADER_SYNC_ALARM) {
+    void maintainHeaderFreshness(true).catch(() => {});
   }
 });
 
@@ -101,6 +130,9 @@ chrome.webRequest.onAuthRequired.addListener(
 );
 
 chrome.alarms.create(HEALTH_ALARM, { periodInMinutes: HEALTH_PERIOD_MINUTES });
+chrome.alarms.create(HEADER_SYNC_ALARM, {
+  periodInMinutes: HEADER_SYNC_PERIOD_MINUTES
+});
 void recover();
 
 async function migrateAndRecover() {
@@ -123,6 +155,8 @@ function recover() {
       setStatus({
         state: publicStatus.state === "blocked" ? "blocked" : "degraded",
         reason: error instanceof Error ? error.message : String(error),
+        headerSyncInProgress: false,
+        headerSyncError: "Native runtime startup failed",
         latestMainFrameSecurity: null,
         latestMainFrameSecurityUnavailableReason: null
       });
@@ -138,6 +172,9 @@ async function startRuntime(policyOverride) {
   setStatus({
     state: "starting",
     reason: null,
+    headerSync: null,
+    headerSyncInProgress: false,
+    headerSyncError: null,
     latestMainFrameSecurity: null,
     latestMainFrameSecurityUnavailableReason: null
   });
@@ -167,9 +204,14 @@ async function startRuntime(policyOverride) {
       runtimeGeneration: result.runtimeGeneration,
       policyGeneration: result.policyGeneration,
       caReady: true,
+      headerSync: currentHeaderSync(result.headerSync),
+      headerSyncInProgress: false,
+      headerSyncError:
+        result.headerSync == null ? "Validated header status unavailable" : null,
       latestMainFrameSecurity: null,
       latestMainFrameSecurityUnavailableReason: null
     });
+    void maintainHeaderFreshness(false).catch(() => {});
     return publicStatus;
   } catch (error) {
     await clearProxy();
@@ -198,6 +240,8 @@ async function handleUiMessage(message) {
       return refreshNativeStatus();
     case "restart":
       return recover();
+    case "syncHeadersNow":
+      return synchronizeHeaders();
     case "setPolicy": {
       const policy = normalizePolicy(message.policy);
       const result = await startRuntime(policy);
@@ -213,6 +257,7 @@ async function handleUiMessage(message) {
 
 async function refreshNativeStatus() {
   if (publicStatus.state !== "active") return publicStatus;
+  if (headerSyncOperation) return publicStatus;
   try {
     const result = await client.request("status");
     validateStatusResult(result);
@@ -227,6 +272,13 @@ async function refreshNativeStatus() {
       runtimeGeneration: result.runtimeGeneration,
       policyGeneration: result.policyGeneration,
       caReady: result.caReady === true,
+      headerSync: currentHeaderSync(result.headerSync),
+      headerSyncInProgress: false,
+      headerSyncError:
+        result.headerSync == null &&
+        typeof result.headerSyncUnavailableReason === "string"
+          ? "Validated header status unavailable"
+          : null,
       latestMainFrameSecurity,
       latestMainFrameSecurityUnavailableReason:
         latestMainFrameSecurity == null &&
@@ -240,11 +292,93 @@ async function refreshNativeStatus() {
     setStatus({
       state: "degraded",
       reason: error instanceof Error ? error.message : String(error),
+      headerSync: null,
+      headerSyncInProgress: false,
+      headerSyncError: "Native runtime status unavailable",
       latestMainFrameSecurity: null,
       latestMainFrameSecurityUnavailableReason: null
     });
   }
   return publicStatus;
+}
+
+function maintainHeaderFreshness(refreshStatus) {
+  if (headerMaintenanceOperation) return headerMaintenanceOperation;
+  headerMaintenanceOperation = (async () => {
+    if (publicStatus.state !== "active") return publicStatus;
+    const status = refreshStatus ? await refreshNativeStatus() : publicStatus;
+    if (!needsAutomaticHeaderSync(status.headerSync)) return status;
+    const lastAttemptAt = await loadLastHeaderSyncAttempt();
+    if (!automaticHeaderSyncAllowed(lastAttemptAt)) return status;
+    return synchronizeHeaders();
+  })().finally(() => {
+    headerMaintenanceOperation = null;
+  });
+  return headerMaintenanceOperation;
+}
+
+function synchronizeHeaders() {
+  if (headerSyncOperation) return headerSyncOperation;
+  if (publicStatus.state !== "active") {
+    return Promise.reject(new Error("header sync requires an active native runtime"));
+  }
+
+  setStatus({
+    headerSyncInProgress: true,
+    headerSyncError: null,
+    latestMainFrameSecurity: null,
+    latestMainFrameSecurityUnavailableReason: "headerSyncInProgress"
+  });
+  headerSyncOperation = (async () => {
+    await recordHeaderSyncAttempt(Date.now());
+    try {
+      const result = await client.request(
+        "syncOnce",
+        {},
+        { timeoutMs: MAX_REQUEST_TIMEOUT_MS }
+      );
+      const headerSync = authoritativeHeaderSync(result);
+      if (!headerSync) throw new Error("native host returned invalid header sync status");
+      setStatus({
+        headerSync,
+        headerSyncInProgress: false,
+        headerSyncError: null
+      });
+      return publicStatus;
+    } catch (error) {
+      setStatus({
+        headerSyncInProgress: false,
+        headerSyncError: boundedError(error)
+      });
+      throw error;
+    }
+  })().finally(() => {
+    headerSyncOperation = null;
+  });
+  return headerSyncOperation;
+}
+
+async function loadLastHeaderSyncAttempt() {
+  if (lastHeaderSyncAttemptLoaded) return lastHeaderSyncAttemptAt;
+  const stored = await storageGet([HEADER_SYNC_LAST_ATTEMPT_KEY]);
+  const candidate = stored[HEADER_SYNC_LAST_ATTEMPT_KEY];
+  const now = Date.now();
+  lastHeaderSyncAttemptAt =
+    Number.isSafeInteger(candidate) && candidate >= 0 && candidate <= now
+      ? candidate
+      : null;
+  lastHeaderSyncAttemptLoaded = true;
+  return lastHeaderSyncAttemptAt;
+}
+
+async function recordHeaderSyncAttempt(attemptedAt) {
+  lastHeaderSyncAttemptAt = attemptedAt;
+  lastHeaderSyncAttemptLoaded = true;
+  try {
+    await storageSet({ [HEADER_SYNC_LAST_ATTEMPT_KEY]: attemptedAt });
+  } catch {
+    // The in-memory timestamp still prevents an automatic retry storm.
+  }
 }
 
 function validateStartResult(result) {
@@ -264,7 +398,8 @@ function validateStartResult(result) {
     result.runtimeGeneration < 1 ||
     !Number.isSafeInteger(result.policyGeneration) ||
     result.policyGeneration < 1 ||
-    !result.ca
+    !result.ca ||
+    !validHeaderSyncEnvelope(result)
   ) {
     throw new Error("native host returned an invalid proxy generation");
   }
@@ -280,7 +415,8 @@ function validateStatusResult(result) {
     result.runtimeGeneration !== publicStatus.runtimeGeneration ||
     !Number.isSafeInteger(result.policyGeneration) ||
     result.policyGeneration !== publicStatus.policyGeneration ||
-    result.caReady !== true
+    result.caReady !== true ||
+    !validHeaderSyncEnvelope(result)
   ) {
     throw new Error("native host returned a stale or invalid runtime status");
   }
@@ -318,6 +454,11 @@ function setStatus(update) {
   void chrome.action.setBadgeBackgroundColor({
     color: publicStatus.state === "active" ? "#177245" : "#9b2c2c"
   });
+}
+
+function boundedError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.slice(0, 512);
 }
 
 function storageGet(keys) {

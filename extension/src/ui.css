@@ -45,8 +45,16 @@ h2 {
 }
 
 .lede,
-small {
+small,
+.section-detail {
   color: #aec4ba;
+}
+
+.section-detail {
+  min-height: 2.5em;
+  margin: -4px 0 14px;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .row {
@@ -83,6 +91,11 @@ button {
   font-weight: 700;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 button.secondary {
   background: transparent;
 }
@@ -91,6 +104,10 @@ button.secondary {
   display: flex;
   gap: 10px;
   margin-top: 22px;
+}
+
+.section-actions {
+  margin-top: 14px;
 }
 
 pre {
@@ -115,6 +132,13 @@ dl div {
 
 dt {
   color: #aec4ba;
+}
+
+.field-note {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 dd {

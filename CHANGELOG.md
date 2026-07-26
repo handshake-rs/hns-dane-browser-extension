@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 0.5.1 - 2026-07-26
 
 ### Added
 
@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
   response-publication boundary, including namespace choice, chain
   currentness, actual DNS transport, HNS proof, DNSSEC, TLSA/DANE,
   intermediary identity, policy, and monotonic runtime authority.
+- Added a Chromium header-chain panel that separates the globally validated
+  tip, corroborated target, raw highest peer claim, schedule estimate, lag,
+  and page-specific proof anchor, plus an explicit `Sync headers now` action.
 
 ### Changed
 
@@ -32,9 +35,23 @@ All notable changes to this project will be documented in this file.
   `Auto`. The browser advertises no provider service.
 - Made Chromium health checks preserve a healthy proxy generation instead of
   rotating credentials and reinstalling the PAC on every alarm.
+- Decoupled live chain freshness from the 144-block proof-cache/reorganization
+  retention window. Browser HNS decisions now require the validated tip to be
+  within two blocks of a recent multi-address-group peer target; an unavailable
+  target is unknown and fails closed rather than being treated as current.
+- Isolated persisted header-height observation time from general peer
+  liveness, so proof retrieval, relay traffic, and unvalidated version claims
+  cannot refresh or promote currentness evidence.
+- Added stale-aware background header synchronization with a bounded
+  ten-minute attempt cadence. Status refreshes and popup opens remain local and
+  do not themselves poll Handshake peers.
 
 ### Fixed
 
+- Bound normal and upgraded response-head publication to the exact header
+  maintenance epoch used during validation. Header sync, cache clearing,
+  snapshot installation, or header reset now invalidates any prepared response
+  that has not yet been published.
 - Kept direct authoritative UDP/TCP 53 first when usable. A positive matching
   TEST-NET interception canary now stops futile TCP and remaining port-53
   attempts, classifies that path as unavailable, and continues through

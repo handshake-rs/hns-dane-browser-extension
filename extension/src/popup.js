@@ -6,8 +6,12 @@ import {
   stateLabel,
   transportLabel
 } from "./security-result.js";
+import { headerChainView, pageProofAnchor } from "./header-status.js";
 
 document.querySelector("#retry").addEventListener("click", () => void retry());
+document
+  .querySelector("#sync-headers")
+  .addEventListener("click", () => void syncHeadersNow());
 document.querySelector("#settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 void refresh();
 
@@ -19,8 +23,37 @@ async function retry() {
 async function refresh() {
   const response = await chrome.runtime.sendMessage({ type: "getStatus" });
   const status = response?.ok ? response.result : { state: "degraded", reason: response?.error };
+  renderStatus(status);
+}
+
+async function syncHeadersNow() {
+  setSyncBusy(true);
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "syncHeadersNow" });
+    if (response?.ok) {
+      renderStatus(response.result);
+      return;
+    }
+    await showSyncError(response?.error ?? "Header sync failed");
+  } catch (error) {
+    await showSyncError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function showSyncError(error) {
+  try {
+    const statusResponse = await chrome.runtime.sendMessage({ type: "getStatus" });
+    if (statusResponse?.ok) renderStatus(statusResponse.result);
+  } catch {
+    // The explicit error below remains useful if status refresh is unavailable.
+  }
+  setSyncBusy(false, error);
+}
+
+function renderStatus(status) {
   const active = status.state === "active";
   const security = currentSecurityResult(status.latestMainFrameSecurity, status);
+  renderHeaderStatus(status);
   document.querySelector("#state-title").textContent = active
     ? "Rust security path active"
     : "Handshake browsing blocked";
@@ -39,6 +72,7 @@ async function refresh() {
     status.policyGeneration ?? "—";
   document.querySelector("#ca-state").textContent = status.caReady ? "Installed" : "Not ready";
   document.querySelector("#security-origin").textContent = security?.host ?? "—";
+  document.querySelector("#security-proof-anchor").textContent = pageProofAnchor(security);
   document.querySelector("#security-namespace-outcome").textContent = security
     ? namespaceOutcomeLabel(security.namespaceOutcome)
     : "—";
@@ -71,6 +105,36 @@ async function refresh() {
     : "—";
   document.querySelector("#security-event").textContent =
     security?.eventSequence ?? "—";
+}
+
+function renderHeaderStatus(status) {
+  const view = headerChainView(status.headerSync, {
+    syncing: status.headerSyncInProgress,
+    error: status.headerSyncError
+  });
+  document.querySelector("#header-best-height").textContent = view.bestHeight;
+  document.querySelector("#header-peer-height").textContent = view.peerHeight;
+  document.querySelector("#header-estimated-height").textContent = view.estimatedHeight;
+  document.querySelector("#header-target-height").textContent = view.targetHeight;
+  document.querySelector("#header-target-groups").textContent = view.targetPeerGroups;
+  document.querySelector("#header-lag").textContent = view.lag;
+  document.querySelector("#header-threshold").textContent = view.threshold;
+  document.querySelector("#header-state").textContent = view.state;
+  document.querySelector("#header-detail").textContent = view.detail;
+  const button = document.querySelector("#sync-headers");
+  button.disabled = status.state !== "active" || status.headerSyncInProgress === true;
+  button.textContent =
+    status.headerSyncInProgress === true ? "Syncing headers…" : "Sync headers now";
+}
+
+function setSyncBusy(syncing, error = null) {
+  const button = document.querySelector("#sync-headers");
+  button.disabled = syncing;
+  button.textContent = syncing ? "Syncing headers…" : "Sync headers now";
+  document.querySelector("#header-state").textContent = syncing ? "Syncing" : "Sync failed";
+  document.querySelector("#header-detail").textContent = syncing
+    ? "Synchronizing validated headers with Handshake peers…"
+    : `The header sync request failed: ${String(error).slice(0, 512)}`;
 }
 
 function namespaceSummary(security) {

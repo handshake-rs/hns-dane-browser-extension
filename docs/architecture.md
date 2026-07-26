@@ -62,6 +62,32 @@ The bundled IANA list is a cache/performance hint only. It cannot select a
 namespace, bypass either full-host resolution, or cause a later IANA root
 change to silently reclassify an HNS name.
 
+## Header currentness
+
+Header synchronization and request resolution share a maintenance lock.
+Synchronization takes the write side while it advances or reorganizes the
+canonical chain and invalidates proof-cache entries; request validation takes
+the read side. A page therefore cannot publish against a chain that changes
+under it.
+
+Live currentness is intentionally separate from cache retention:
+
+```text
+proof-cache/reorganization retention   144 blocks
+browser currentness allowance            2 blocks
+peer target evidence lifetime           20 minutes
+minimum independent address groups       3
+```
+
+The effective target is an outlier-resistant median of recent
+header-sync-owned peer observations across address groups. Height evidence has
+its own persisted timestamp; proof retrieval, relay use, and ordinary
+transport liveness cannot refresh it. The raw maximum advertised height and a
+genesis-time schedule estimate are shown only as diagnostics. No corroborated
+target produces `Unknown`, which is non-admissible for HNS resolution.
+Background synchronization is stale-aware and rate-limited to a ten-minute
+attempt interval; an explicit toolbar action can request one immediate sync.
+
 ## ICANN DANE
 
 For every selected ICANN HTTPS/WSS origin, Rust derives the TLSA owner from the

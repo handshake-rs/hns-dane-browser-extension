@@ -1,6 +1,7 @@
 const SCHEMA_VERSION = 1;
 const MAX_PENDING_REQUESTS = 32;
-const REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export const MAX_REQUEST_TIMEOUT_MS = 120_000;
 
 export class NativeClient {
   constructor(chromeApi, hostName) {
@@ -27,10 +28,18 @@ export class NativeClient {
     return () => this.disconnectHandlers.delete(handler);
   }
 
-  request(command, fields = {}) {
+  request(command, fields = {}, options = {}) {
     this.connect();
     if (this.pending.size >= MAX_PENDING_REQUESTS) {
       return Promise.reject(new Error("native request capacity is exhausted"));
+    }
+    const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    if (
+      !Number.isSafeInteger(timeoutMs) ||
+      timeoutMs < 1 ||
+      timeoutMs > MAX_REQUEST_TIMEOUT_MS
+    ) {
+      return Promise.reject(new Error("native request timeout is out of bounds"));
     }
     const requestId = `request-${Date.now().toString(36)}-${++this.sequence}`;
     const message = {
@@ -43,7 +52,7 @@ export class NativeClient {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
         reject(new Error(`native request timed out: ${command}`));
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(requestId, { resolve, reject, timeout });
       try {
         this.port.postMessage(message);
