@@ -190,6 +190,9 @@ the service worker also clears it during orderly suspension.
 - Namespace decision fingerprints partition connection pools, TLS verifier and
   resumption state, and Alt-Svc state. Records from different roots are never
   mixed into one plan.
+- The live HNS delegated resolver follows the shared plan's direct-authority
+  order: UDP, TCP fallback, authenticated authoritative DoH, then any enabled
+  P2P DNS-relay fallback.
 - HTTPS/WSS and HTTP/WS share their persistent namespace binding at equal host
   and effective port, while retaining distinct request-plan fingerprints.
 - Proxy authentication is accepted only for the active `127.0.0.1` generation.
@@ -204,35 +207,34 @@ the service worker also clears it during orderly suspension.
   state from browser-visible headers.
 - Historical public-HNS-DoH settings are removed without granting P2P relay
   consent.
-- The P2P DNS relay requester remains an independent opt-in. Opaque
-  relay-serving capacity is default-on with an explicit operator opt-out,
-  while output-node serving is a separate explicit opt-in and is never implied
-  by requester settings. P2P ODoH, HNSR, and draft wire profiles are exposed
-  as policy vocabulary but currently fail closed in Rust rather than silently
-  downgrading.
+- The existing P2P DNS-relay checkbox remains an independent requester opt-in
+  in this extension schema. Rust maps it to the canonical shared policy's
+  `Disabled` or direct-authority-first `Auto` requester mode. This browser
+  product does not implement provider service: every opaque-relay,
+  output-node, target, market, and HNSR provider role is explicitly disabled
+  regardless of requester settings. P2P ODoH, HNSR, privacy downgrade, and
+  draft wire profiles remain fail-closed rather than silently downgrading.
+- A policy update is written to extension storage only after the native host
+  has accepted it and returned an active proxy generation.
 
 ## Qualification evidence
 
-The 2026-07-25 portable checkpoint passed:
+The 2026-07-26 shared-policy checkpoint passed:
 
 ```sh
-cargo +1.92.0 test --locked --offline \
-  --manifest-path rust/Cargo.toml \
-  -p hns-gateway -p hns-loopback-proxy \
-  -p hns-browser-runtime -p hns-chromium-native-host
-
-cargo +1.92.0 clippy --locked --offline \
-  --manifest-path rust/Cargo.toml \
-  -p hns-gateway -p hns-loopback-proxy \
-  -p hns-browser-runtime -p hns-chromium-native-host \
-  --all-targets -- -D warnings
-
+cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
+cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
+  --workspace --all-targets -- -D warnings
+cargo +1.92.0 fmt --manifest-path rust/Cargo.toml --all -- --check
+python3 -m unittest tests.test_cargo_git_policy tests.test_ci_changed_targets
+python3 scripts/verify_cargo_git_policy.py
+python3 scripts/generate-third-party-notices.py --check
 npm run check:extension
 ```
 
 The final Chromium checkpoint passed 48 gateway, 152 loopback-proxy, 154
-browser-runtime, 12 native-host, 64 resolver, and 51 transport tests. The
-extension gate passed all 6 Node suites, including isolated Linux
+browser-runtime, 14 native-host, 65 resolver, and 51 transport tests. The
+extension gate passed all 15 Node tests, including isolated Linux
 install/uninstall, Windows registration/removal coverage, PAC parity, native
 messaging, stale-generation rejection, health-generation preservation, and
 the unpacked MV3 build. Socket-backed Rust tests require permission to bind
@@ -240,16 +242,21 @@ loopback in a restricted sandbox; they passed with that local access. The full
 Chromium workspace also passed warning-denied Clippy and rustfmt.
 
 The historical cross-platform `./scripts/check.sh` wrapper is not a release
-gate for this extraction because it still contains mobile packaging and notice
-workflows. The Chromium-specific commands above are the authoritative local
-checkpoint.
+gate for this extraction because it still contains mobile packaging and ABI
+workflows. Its exact Cargo Git-source and notice checks are current, but the
+Chromium-specific commands above remain the authoritative local checkpoint.
+The active notice generator inventories the locked native-host closures for
+Linux, macOS, and Windows. `extension/THIRD_PARTY_NOTICES.txt` is checksummed,
+copied into the unpacked extension, and installed beside the native host.
 
 ## Remaining integration boundary
 
 This clone still contains its historical `hns-browser-runtime`,
-`hns-gateway`, and `hns-transport` implementations. TLSA owner derivation and
-the validating-DoH trust decision now come from the canonical
-`hns-icann-dane` crate through an immutable Git dependency on
+`hns-gateway`, and `hns-transport` implementations. TLSA owner derivation,
+validating-DoH trust decisions, dual-root namespace selection, and the typed
+requester/provider transport policy now consume the canonical
+`hns-icann-dane`, `hns-namespace-resolution`, and `hns-resolution-policy`
+crates through immutable Git dependencies on
 `handshake-rs/hns-dane-engine` commit
 `127b9ad55852df00b4df40826517715048dc3571`. The surrounding gateway,
 resolver adapter, and transport integration remain historical clone code

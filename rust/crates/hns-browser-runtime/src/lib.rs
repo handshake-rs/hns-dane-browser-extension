@@ -7109,8 +7109,7 @@ fn android_gateway_resolver(
         android_authoritative_dns_transport(mode, dns_trace.clone(), endpoint_policy, http.clone());
     let proof_peer = Arc::new(Mutex::new(None));
     let direct =
-        AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier)
-            .with_authoritative_doh_preferred();
+        AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier);
     let mut delegated = BoxedDelegatedResolver::new(direct);
 
     if experimental_p2p_dns_relay {

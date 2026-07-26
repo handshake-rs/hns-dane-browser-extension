@@ -6,6 +6,7 @@ ca_common_name="HNS DANE Browser Local CA"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$script_dir/../.." && pwd)"
 native_host="$repository_root/rust/target/release/hns-chromium-native-host"
+notice_source="$repository_root/extension/THIRD_PARTY_NOTICES.txt"
 extension_ids=()
 browsers=()
 
@@ -70,6 +71,10 @@ done
   echo "Build it with: cargo +1.92.0 build --release --locked --manifest-path rust/Cargo.toml -p hns-chromium-native-host" >&2
   exit 1
 }
+[[ -s "$notice_source" ]] || {
+  echo "Third-party notices are missing: $notice_source" >&2
+  exit 1
+}
 
 case "$(uname -s)" in
   Linux)
@@ -94,8 +99,9 @@ installed_host="$install_root/bin/hns-chromium-native-host"
 manifest_source="$install_root/$host_name.json"
 certificate_path="$data_dir/chromium-ca/hns-dane-browser-local-ca.pem"
 
-install -d -m 700 "$install_root" "$install_root/bin" "$data_dir"
+install -d -m 700 "$install_root" "$install_root/bin" "$install_root/licenses" "$data_dir"
 install -m 700 "$native_host" "$installed_host"
+install -m 644 "$notice_source" "$install_root/licenses/THIRD_PARTY_NOTICES.txt"
 
 manifest_arguments=(--print-host-manifest)
 for extension_id in "${extension_ids[@]}"; do

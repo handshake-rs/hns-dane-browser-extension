@@ -80,16 +80,16 @@ class CiChangedTargetsTests(unittest.TestCase):
             ios=False,
         )
 
-    def test_shared_notice_builds_both_application_shells(self) -> None:
+    def test_chromium_notice_conservatively_runs_every_legacy_target(self) -> None:
         for path in (
-            "android/app/src/main/assets/third_party_notices.txt",
+            "extension/THIRD_PARTY_NOTICES.txt",
             "scripts/generate-third-party-notices.py",
             "scripts/third-party-notices.sha256",
         ):
             with self.subTest(path=path):
                 self.assert_targets(
                     (path,),
-                    rust=False,
+                    rust=True,
                     android=True,
                     ios=True,
                 )
@@ -141,6 +141,8 @@ class CiChangedTargetsTests(unittest.TestCase):
             "scripts/ci-changed-targets.sh",
             "scripts/check-runtime-boundaries.sh",
             "scripts/verify-supply-chain.sh",
+            "scripts/verify_cargo_git_policy.py",
+            "tests/test_cargo_git_policy.py",
             "tests/test_ci_changed_targets.py",
         ):
             with self.subTest(path=path):

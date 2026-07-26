@@ -86,6 +86,13 @@ test("Linux installer and complete uninstaller are isolated and symmetric", () =
       statSync(join(installRoot, "data/chromium-ca/ca-bundle.json")).mode & 0o077,
       0
     );
+    assert.match(
+      readFileSync(
+        join(installRoot, "licenses/THIRD_PARTY_NOTICES.txt"),
+        "utf8"
+      ),
+      /^HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES\n/
+    );
     assert.match(readFileSync(certutilLog, "utf8"), / -A /);
 
     run("bash", [uninstallScript, "--browser", "all"], environment);
@@ -122,6 +129,7 @@ test("Windows scripts cover all browser registries, CA trust, and removal", () =
     assert.ok(uninstall.includes(browser), browser);
   }
   assert.match(install, /certutil\.exe -user -addstore Root/);
+  assert.match(install, /THIRD_PARTY_NOTICES\.txt/);
   assert.match(uninstall, /certutil\.exe -user -delstore Root/);
   assert.match(uninstall, /Remove-Item .* -Recurse -Force/);
 });

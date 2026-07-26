@@ -80,6 +80,9 @@ jobs:
             echo "::error::Required dependency lock is missing: rust/Cargo.lock"
             exit 1
           fi
+          python3 -m unittest -v tests/test_cargo_git_policy.py
+          python3 scripts/verify_cargo_git_policy.py
+          python3 scripts/generate-third-party-notices.py --check
           cargo +1.92.0 metadata \
             --locked \
             --manifest-path rust/Cargo.toml \

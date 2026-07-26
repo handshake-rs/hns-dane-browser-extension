@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Generate the reviewed in-app third-party notices asset from locked inputs.
+"""Generate the Chromium extension/native-host third-party notices.
 
-Generation is deliberately offline. Rust package metadata and license files come
-from Cargo's checksum-verified registry cache; Android license metadata and
-artifacts come from Gradle's dependency-verification cache. The lightweight
-``--check`` mode verifies the complete asset digest, committed input
-fingerprints, and locked Android runtime inventory, so it is suitable for a
-clean CI checkout.
+Generation is deliberately offline. Rust package metadata and license files
+come from Cargo's checksum-verified registry or immutable Git cache. The
+lightweight ``--check`` mode verifies the complete asset digest and every
+committed input fingerprint, so it is suitable for a clean CI checkout.
 """
 
 from __future__ import annotations
@@ -19,35 +17,52 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import xml.etree.ElementTree as ElementTree
-import zipfile
+import tomllib
+
+from verify_cargo_git_policy import (
+    ALLOWED_ENGINE_PACKAGES,
+    ENGINE_LOCK_SOURCE,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "android/app/src/main/assets/third_party_notices.txt"
+OUTPUT = ROOT / "extension/THIRD_PARTY_NOTICES.txt"
 OUTPUT_SHA256 = ROOT / "scripts/third-party-notices.sha256"
-SCHEMA = "2"
+SCHEMA = "3"
 LOCKED_INPUT_PATHS = (
     "scripts/generate-third-party-notices.py",
+    "scripts/verify_cargo_git_policy.py",
     "rust/Cargo.toml",
     "rust/Cargo.lock",
-    "android/gradle/libs.versions.toml",
-    "android/app/gradle.lockfile",
-    "android/gradle/verification-metadata.xml",
+    "extension/manifest.json",
+    "package.json",
 )
-RUST_MANIFEST_INPUTS = tuple(
-    path.relative_to(ROOT).as_posix()
-    for path in sorted((ROOT / "rust/crates").glob("*/Cargo.toml"))
-)
+
+
+def workspace_manifest_inputs() -> tuple[str, ...]:
+    with (ROOT / "rust/Cargo.toml").open("rb") as handle:
+        members = tomllib.load(handle).get("workspace", {}).get("members", [])
+    if not isinstance(members, list) or not members:
+        raise RuntimeError("The active Rust workspace has no explicit members.")
+    manifests = []
+    for member in members:
+        if not isinstance(member, str) or "*" in member:
+            raise RuntimeError(f"Unsupported Rust workspace member: {member!r}")
+        relative = Path("rust") / member / "Cargo.toml"
+        if not (ROOT / relative).is_file():
+            raise RuntimeError(f"Missing active workspace manifest: {relative}")
+        manifests.append(relative.as_posix())
+    return tuple(sorted(manifests))
+
+
+RUST_MANIFEST_INPUTS = workspace_manifest_inputs()
 INPUT_PATHS = LOCKED_INPUT_PATHS + RUST_MANIFEST_INPUTS
 LICENSE_FILE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
 MAX_NOTICE_FILE_SIZE = 512 * 1024
 RUST_SHIPPING_TARGETS = (
-    ("aarch64-linux-android", "android-ffi"),
-    ("x86_64-linux-android", "android-ffi"),
-    ("aarch64-apple-ios", "ios-ffi"),
-    ("aarch64-apple-ios-sim", "ios-ffi"),
-    ("x86_64-apple-ios", "ios-ffi"),
+    ("x86_64-unknown-linux-gnu", "hns-chromium-native-host"),
+    ("aarch64-apple-darwin", "hns-chromium-native-host"),
+    ("x86_64-pc-windows-msvc", "hns-chromium-native-host"),
 )
 
 # These registry packages are published without their workspace-level license
@@ -70,24 +85,6 @@ def input_fingerprints() -> dict[str, str]:
     }
 
 
-def android_runtime_coordinates() -> list[str]:
-    coordinates: list[str] = []
-    lockfile = ROOT / "android/app/gradle.lockfile"
-    for line in lockfile.read_text(encoding="utf-8").splitlines():
-        if "=" not in line:
-            continue
-        coordinate, configurations = line.split("=", 1)
-        if coordinate == "empty":
-            continue
-        if "releaseRuntimeClasspath" in configurations.split(","):
-            if coordinate.count(":") != 2:
-                raise RuntimeError(f"Unexpected locked Android coordinate: {coordinate}")
-            coordinates.append(coordinate)
-    if not coordinates:
-        raise RuntimeError("No releaseRuntimeClasspath dependencies were found in the Gradle lockfile.")
-    return sorted(set(coordinates))
-
-
 def check_committed_asset() -> int:
     if not OUTPUT.is_file():
         print(f"Missing generated third-party notices asset: {OUTPUT.relative_to(ROOT)}", file=sys.stderr)
@@ -108,7 +105,9 @@ def check_committed_asset() -> int:
             expected_output_digest = digest_fields[0]
     if expected_output_digest and sha256_bytes(OUTPUT.read_bytes()) != expected_output_digest:
         failures.append("the complete generated notices asset does not match its committed SHA-256")
-    if not text.startswith("HNS DANE BROWSER THIRD-PARTY SOFTWARE NOTICES\n"):
+    if not text.startswith(
+        "HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES\n"
+    ):
         failures.append("the generated marker is missing")
     if f"Generator schema: {SCHEMA}\n" not in text:
         failures.append("the generator schema is stale")
@@ -116,24 +115,15 @@ def check_committed_asset() -> int:
         if f"  {relative} = {digest}\n" not in text:
             failures.append(f"the fingerprint for {relative} is stale")
 
-    expected_android = {
-        f"  {coordinate} | Apache-2.0" for coordinate in android_runtime_coordinates()
-    }
-    match = re.search(
-        r"^ANDROID RUNTIME COMPONENTS \(\d+\)\n(?P<body>.*?)\n\nRUST COMPONENTS",
-        text,
-        flags=re.MULTILINE | re.DOTALL,
-    )
-    actual_android = set(match.group("body").splitlines()) if match else set()
-    if actual_android != expected_android:
-        failures.append("the Android release runtime inventory is stale")
+    if not re.search(r"^RUST COMPONENTS \([1-9][0-9]*\)$", text, re.MULTILINE):
+        failures.append("the Chromium native-host Rust inventory is missing")
 
     if failures:
         print("Third-party notices are stale:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         print(
-            "Resolve the locked Cargo and Gradle dependencies, then run "
+            "Resolve the locked Cargo dependencies, then run "
             "python3 scripts/generate-third-party-notices.py.",
             file=sys.stderr,
         )
@@ -202,7 +192,7 @@ def shipping_rust_packages(metadata: dict, root_package: str) -> list[dict]:
     third_party.sort(key=lambda package: (package["name"].casefold(), package["version"]))
     if not third_party:
         raise RuntimeError(
-            f"The {root_package} Rust dependency closure unexpectedly contains no registry packages."
+            f"The {root_package} Rust dependency closure unexpectedly contains no external Cargo packages."
         )
     for package in third_party:
         if not package.get("license"):
@@ -233,123 +223,8 @@ def shipping_rust_packages_for_targets() -> tuple[list[dict], dict[str, int]]:
         key=lambda package: (package["name"].casefold(), package["version"], package["id"]),
     )
     if not packages:
-        raise RuntimeError("The shipped Rust target closures contain no registry packages.")
+        raise RuntimeError("The shipped Rust target closures contain no external Cargo packages.")
     return packages, target_counts
-
-
-def local_name(element: ElementTree.Element) -> str:
-    return element.tag.rsplit("}", 1)[-1]
-
-
-def element_child_text(element: ElementTree.Element, name: str) -> str | None:
-    for child in element:
-        if local_name(child) == name and child.text:
-            return child.text.strip()
-    return None
-
-
-def gradle_module_dir(group: str, artifact: str, version: str) -> Path:
-    gradle_home = Path(os.environ.get("GRADLE_USER_HOME", Path.home() / ".gradle"))
-    return gradle_home / "caches/modules-2/files-2.1" / group / artifact / version
-
-
-def one_cached_pom(group: str, artifact: str, version: str) -> Path:
-    module_dir = gradle_module_dir(group, artifact, version)
-    poms = sorted(module_dir.glob("*/*.pom"))
-    if not poms:
-        raise RuntimeError(
-            f"Missing cached POM for locked Android dependency {group}:{artifact}:{version}. "
-            "Resolve the locked releaseRuntimeClasspath once before generating notices."
-        )
-    contents = {pom.read_bytes() for pom in poms}
-    if len(contents) != 1:
-        raise RuntimeError(f"Conflicting cached POMs found for {group}:{artifact}:{version}.")
-    return poms[0]
-
-
-def pom_license_metadata(
-    group: str,
-    artifact: str,
-    version: str,
-    visited: set[tuple[str, str, str]] | None = None,
-) -> list[tuple[str, str]]:
-    coordinate = (group, artifact, version)
-    visited = set() if visited is None else visited
-    if coordinate in visited:
-        raise RuntimeError(f"Cyclic Maven parent chain while reading {':'.join(coordinate)}.")
-    visited.add(coordinate)
-
-    root = ElementTree.parse(one_cached_pom(*coordinate)).getroot()
-    licenses: list[tuple[str, str]] = []
-    for child in root:
-        if local_name(child) != "licenses":
-            continue
-        for license_element in child:
-            if local_name(license_element) != "license":
-                continue
-            licenses.append((
-                element_child_text(license_element, "name") or "",
-                element_child_text(license_element, "url") or "",
-            ))
-    if licenses:
-        return licenses
-
-    parent = next((child for child in root if local_name(child) == "parent"), None)
-    if parent is None:
-        return []
-    parent_group = element_child_text(parent, "groupId")
-    parent_artifact = element_child_text(parent, "artifactId")
-    parent_version = element_child_text(parent, "version")
-    if not all((parent_group, parent_artifact, parent_version)):
-        return []
-    return pom_license_metadata(
-        parent_group or "",
-        parent_artifact or "",
-        parent_version or "",
-        visited,
-    )
-
-
-def require_apache_android_licenses(coordinates: list[str]) -> None:
-    for coordinate in coordinates:
-        group, artifact, version = coordinate.rsplit(":", 2)
-        licenses = pom_license_metadata(group, artifact, version)
-        if not licenses:
-            raise RuntimeError(f"No POM license metadata was found for {coordinate}.")
-        for name, url in licenses:
-            normalized = f"{name} {url}".lower()
-            if "apache" not in normalized or not (
-                "2.0" in normalized or "version 2" in normalized or "license-2.0" in normalized
-            ):
-                raise RuntimeError(
-                    f"Unreviewed Android license for {coordinate}: name={name!r}, url={url!r}"
-                )
-
-
-def apache_license_text(coordinates: list[str]) -> str:
-    candidates: set[str] = set()
-    for coordinate in coordinates:
-        group, artifact, version = coordinate.rsplit(":", 2)
-        module_dir = gradle_module_dir(group, artifact, version)
-        for artifact_file in sorted(module_dir.glob("*/*")):
-            if artifact_file.suffix not in {".aar", ".jar"}:
-                continue
-            try:
-                with zipfile.ZipFile(artifact_file) as archive:
-                    for entry in sorted(archive.namelist()):
-                        if not Path(entry).name.upper().startswith(LICENSE_FILE_PREFIXES):
-                            continue
-                        info = archive.getinfo(entry)
-                        if not 0 <= info.file_size <= MAX_NOTICE_FILE_SIZE:
-                            continue
-                        text = archive.read(entry).decode("utf-8").replace("\r\n", "\n").strip()
-                        if "Apache License" in text and "Version 2.0" in text:
-                            candidates.add(text)
-            except zipfile.BadZipFile:
-                continue
-    if not candidates:
-        raise RuntimeError("No Apache-2.0 license text was found in the verified Android artifacts.")
-    return sorted(candidates, key=lambda value: (len(value), value))[0]
 
 
 def registry_license_files(package: dict) -> list[tuple[str, str]]:
@@ -386,6 +261,57 @@ def registry_license_files(package: dict) -> list[tuple[str, str]]:
     return result
 
 
+def rust_package_license_files(package: dict) -> list[tuple[str, str]]:
+    source = package.get("source")
+    if not isinstance(source, str) or not source.startswith("git+"):
+        return registry_license_files(package)
+
+    name = package["name"]
+    if source != ENGINE_LOCK_SOURCE or name not in ALLOWED_ENGINE_PACKAGES:
+        raise RuntimeError(
+            f"Unreviewed Cargo Git source for {name} {package['version']}: "
+            f"{source}"
+        )
+
+    package_dir = Path(package["manifest_path"]).resolve().parent
+    checkout_root = package_dir.parents[1]
+    expected_package_dir = checkout_root / "crates" / name
+    if package_dir != expected_package_dir:
+        raise RuntimeError(
+            f"Unexpected canonical engine package location for {name}: "
+            f"{package_dir}"
+        )
+
+    files: list[tuple[str, str]] = []
+    for candidate in sorted(checkout_root.iterdir()):
+        if (
+            candidate.is_symlink()
+            or not candidate.is_file()
+            or not candidate.name.upper().startswith(LICENSE_FILE_PREFIXES)
+        ):
+            continue
+        size = candidate.stat().st_size
+        if not 0 <= size <= MAX_NOTICE_FILE_SIZE:
+            raise RuntimeError(
+                f"Engine license file has an unexpected size: {candidate}"
+            )
+        try:
+            content = (
+                candidate.read_text(encoding="utf-8")
+                .replace("\r\n", "\n")
+                .strip()
+            )
+        except UnicodeDecodeError as error:
+            raise RuntimeError(
+                f"Engine license file is not UTF-8 text: {candidate}"
+            ) from error
+        if content:
+            files.append(
+                (f"canonical engine workspace/{candidate.name}", content)
+            )
+    return files
+
+
 def sqlite_public_domain_notice(rust_packages: list[dict]) -> tuple[str, str] | None:
     package = next(
         (package for package in rust_packages if package["name"] == "libsqlite3-sys"),
@@ -415,8 +341,6 @@ def sqlite_public_domain_notice(rust_packages: list[dict]) -> tuple[str, str] | 
 
 
 def generate() -> str:
-    android_coordinates = android_runtime_coordinates()
-    require_apache_android_licenses(android_coordinates)
     rust_packages, rust_target_counts = shipping_rust_packages_for_targets()
 
     notice_groups: dict[str, dict[str, object]] = {}
@@ -431,14 +355,10 @@ def generate() -> str:
         group["applies_to"].add(applies_to)  # type: ignore[union-attr]
         group["source_names"].add(source_name)  # type: ignore[union-attr]
 
-    android_license = apache_license_text(android_coordinates)
-    for coordinate in android_coordinates:
-        add_notice(coordinate, "Apache-2.0 license text from a locked Android artifact", android_license)
-
     package_license_files: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for package in rust_packages:
         key = (package["name"], package["version"])
-        package_license_files[key] = registry_license_files(package)
+        package_license_files[key] = rust_package_license_files(package)
     for key, fallback in RUST_LICENSE_FILE_FALLBACKS.items():
         if key in package_license_files and not package_license_files[key]:
             fallback_files = package_license_files.get(fallback)
@@ -468,33 +388,30 @@ def generate() -> str:
         add_notice("Bundled SQLite used by libsqlite3-sys", source_name, content)
 
     lines = [
-        "HNS DANE BROWSER THIRD-PARTY SOFTWARE NOTICES",
+        "HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES",
         "",
-        "This app includes open-source components. The inventories below are generated from the",
-        "locked Android release runtime classpath and the non-development Cargo dependency closures",
-        "reachable from the Android and iOS native libraries for each shipped Rust target. The Rust",
-        "inventory is the union of the Android and Apple device/simulator closures. Cargo build-time",
+        "This Chromium extension and native host include open-source components. The inventory",
+        "below is generated from the locked non-development Cargo dependency closures reachable",
+        "from hns-chromium-native-host on every supported desktop target. Cargo build-time",
         "dependencies are retained conservatively. Workspace-owned HNS DANE Browser crates and",
-        "test-only, lint, platform build-tool, fuzz, and snapshot-exporter dependencies are excluded.",
+        "test-only, lint, mobile, fuzz, and snapshot-exporter dependencies are excluded.",
+        "The extension JavaScript has no third-party runtime package dependency.",
         "",
-        "Shipped Rust target closure counts:",
+        "Supported desktop Rust target closure counts:",
         *(
-            f"  {target}: {rust_target_counts[target]} registry components"
+            f"  {target}: {rust_target_counts[target]} external Cargo components"
             for target, _ in RUST_SHIPPING_TARGETS
         ),
         "",
         "License expressions are the declarations in the verified package metadata. The reproduced",
-        "texts come from the checksum-verified Cargo packages or dependency-verified Android",
-        "artifacts. Inclusion here does not imply endorsement by the component authors.",
+        "texts come from checksum-verified registry packages or immutable Cargo Git checkouts.",
+        "Inclusion here does not imply endorsement by the component authors.",
         "",
         f"Generator schema: {SCHEMA}",
         "Generated input SHA-256:",
     ]
     for relative, digest in input_fingerprints().items():
         lines.append(f"  {relative} = {digest}")
-
-    lines.extend(["", f"ANDROID RUNTIME COMPONENTS ({len(android_coordinates)})"])
-    lines.extend(f"  {coordinate} | Apache-2.0" for coordinate in android_coordinates)
 
     lines.extend(["", f"RUST COMPONENTS ({len(rust_packages)})"])
     for package in rust_packages:

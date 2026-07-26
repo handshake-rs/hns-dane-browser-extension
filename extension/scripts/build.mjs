@@ -23,6 +23,10 @@ rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 cpSync("extension/manifest.json", `${output}/manifest.json`);
 cpSync("extension/src", `${output}/src`, { recursive: true });
+cpSync(
+  "extension/THIRD_PARTY_NOTICES.txt",
+  `${output}/THIRD_PARTY_NOTICES.txt`
+);
 writeFileSync(
   `${output}/BUILD-METADATA.json`,
   `${JSON.stringify(

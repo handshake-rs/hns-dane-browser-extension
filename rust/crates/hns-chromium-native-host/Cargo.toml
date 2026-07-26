@@ -10,6 +10,7 @@ base64.workspace = true
 getrandom.workspace = true
 hns-browser-runtime.workspace = true
 hns-loopback-proxy.workspace = true
+hns-resolution-policy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

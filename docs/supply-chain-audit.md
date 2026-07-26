@@ -1,6 +1,6 @@
 # Build and Supply-Chain Audit
 
-Last audited: 2026-07-16
+Last audited: 2026-07-26
 
 > Most mobile evidence below is historical. The active workflow in this
 > extraction is Chromium-only: it always runs repository/supply-chain policy,
@@ -11,20 +11,25 @@ Last audited: 2026-07-16
 ## Configured and Local Gates
 
 - The checked-in GitHub Actions workflow always runs the Chromium policy, Rust/native-host, and extension gates. Its permissions are read-only, release secrets are not provided, every non-local `uses:` reference is pinned to a full commit SHA, checkout credentials are not persisted, and concurrent runs on the same ref are cancelled. Historical evidence: the earlier `0.4.1` cross-platform tree passed every selected job in [run 29477163745](https://github.com/Denuo-Web/hns-dane-browser/actions/runs/29477163745); that run does not validate this checkpoint.
-- Dependabot watches GitHub Actions, Gradle, and all three Cargo lockfile roots weekly.
-- Rust uses toolchain `1.92.0`; build, clippy, test, metadata, Android cross-compile, and cargo-deny commands use committed lockfiles with `--locked`. No Cargo lockfile contains a Git dependency, and registry packages carry Cargo checksums.
-- cargo-deny covers all three manifests. The fuzz and exporter packages now declare the repository license. `NCSA` is allowed specifically because `libfuzzer-sys` combines its MIT/Apache-2.0 code with LLVM libFuzzer code under the University of Illinois/NCSA license.
-- Gradle 9.6.1 has an official distribution checksum in `gradle-wrapper.properties`; the checked-in wrapper JAR is independently compared with the official wrapper-JAR SHA-256. Android dependency locking runs in strict mode, and Gradle verification metadata pins SHA-256 hashes for resolved artifacts and metadata.
-- `scripts/verify-supply-chain.sh` checks the exact wrapper distribution URL and hashes, required lock/verification files, Cargo lock consistency and absence of Git sources, shell syntax, immutable Action references, tracked secret-bearing filenames, and high-confidence secret patterns. Root-invoked Rust scripts explicitly select toolchain `1.92.0` instead of relying on rustup to discover a toolchain file beside a manifest in another directory.
-- Android JNI release builds reject unknown profiles, compiler/linker/profile overrides, and unexpected cargo-ndk/NDK versions; use `--locked`; force the release profile; require both ABI outputs; and restrict cleanup to `android/app/build`. Path-prefix maps remove checkout, home, Cargo, Rustup, and NDK paths while retaining line-table debug information for AGP. Gradle pins AGP to NDK `28.2.13676358`, treats the NDK location and `source.properties` as incremental inputs, and includes Rust `.txt` data files such as the ICANN TLD snapshot.
-- The unsigned bundle gate requires an exact two-library ABI inventory, `PAGE_ALIGNMENT_16K`, bounds-safe ELF64 ET_DYN files with the expected machine, 16 KiB PT_LOAD alignment, RELRO, one non-executable GNU stack, immediate binding, no text relocations, SHA-1 Build IDs, stripped shipping libraries, matching FULL debug metadata, no local paths, a non-empty R8 mapping, and non-empty third-party notices.
-- The signed Play bundle gate reads every content entry through Java's verifying `JarFile`, rejects bad digests, unsigned entries, mixed signers, or a signer that does not match `HNS_DANE_BROWSER_UPLOAD_CERTIFICATE_SHA256`, and depends on the unsigned structural gate.
-- The third-party notices generator derives the locked Android release-runtime inventory and the shipping Rust dependency closures for both Android and Apple targets, reproduces available license/notice text, commits a full-asset SHA-256, and is checked by `scripts/check.sh` without requiring dependency resolution in CI. The same reviewed notice asset is packaged by both application shells, and both FFI manifests are included in its input fingerprint.
-- Keystores, signing properties, service-account files, environment files, private-key formats, local Android properties, and generated APK/AAB artifacts are ignored. The Play API helper keeps its bearer token out of curl's process arguments, validates URL path inputs and release status, and enforces HTTPS/TLS timeouts.
+- Dependabot watches GitHub Actions and the active Cargo workspace weekly.
+- Rust uses toolchain `1.92.0`; metadata, build, test, Clippy, and cargo-deny commands use the committed root lock with `--locked`. Registry packages carry Cargo checksums.
+- The root workspace lock contains exactly three reviewed Cargo Git packages: `hns-icann-dane`, `hns-namespace-resolution`, and `hns-resolution-policy`, all from one immutable `handshake-rs/hns-dane-engine` revision. The dedicated verifier and nine negative/positive policy tests reject another package, URL, declaration location, alias, moving selector, or lock revision.
+- cargo-deny permits only the canonical engine Git URL and reviews the active workspace's licenses, advisories, bans, and sources.
+- The Chromium notice generator takes the union of the locked non-development `hns-chromium-native-host` dependency closures for Linux, macOS, and Windows. It reproduces registry and canonical engine license text, fingerprints the active manifests and lock, and commits a full-asset SHA-256.
+- `extension/THIRD_PARTY_NOTICES.txt` is copied into the unpacked extension build and beside the installed native host on Linux, macOS, and Windows. CI verifies it without requiring a dependency cache.
+- The active workflow runs the exact-source policy tests/verifier, notice integrity, cargo-deny, workspace formatting/Clippy/tests, a release native-host build, all extension tests, and the unpacked MV3 build. Its required aggregate job fails unless every gate succeeds.
+- Historical mobile supply-chain scripts and inputs remain in this clone pending the reviewed repository trim. They are not Chromium release authority.
 
 ## Audit Results
 
-### Current `0.5.0` Candidate
+### Current Chromium `0.5.0` Candidate
+
+- The extension, native host, and Rust workspace declare `0.5.0`.
+- The active native-host graph consumes the three exact-pinned engine contracts above. Direct authoritative UDP/TCP precedes authenticated authoritative DoH and policy-admitted relay fallback.
+- The generated desktop notice inventories 163 external Cargo components for Linux and macOS and 168 for Windows; its committed SHA-256 is recorded in `scripts/third-party-notices.sha256`.
+- Focused qualification results for the final source checkpoint are retained in `docs/chromium-extension.md` and the ecosystem evidence repository. Hosted current-main CI remains required before release.
+
+### Historical mobile `0.5.0` evidence
 
 - Android declares `0.5.0` / code 40 and the shared Rust workspace declares `0.5.0`. This is not a metadata-only release: it changes the shared resolver/P2P runtime and Android behavior.
 - The complete local `scripts/check.sh` gate passed on 2026-07-16, including supply-chain and version checks, warning-denied Clippy, all three cargo-deny scopes, the full Rust workspace tests, fuzz smoke, iOS C ABI tests, and the header-snapshot exporter. The final requester review and focused P2P suite also passed after closing query-profile, handshake-bound, forward-status, and peer-height issues.

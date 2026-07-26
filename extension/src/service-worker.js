@@ -191,8 +191,9 @@ async function handleUiMessage(message) {
       return recover();
     case "setPolicy": {
       const policy = normalizePolicy(message.policy);
+      const result = await startRuntime(policy);
       await storageSet({ policy });
-      return startRuntime(policy);
+      return result;
     }
     case "diagnostics":
       return client.request("diagnostics");

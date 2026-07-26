@@ -14,6 +14,10 @@ use hns_browser_runtime::{
     chromium_dane_pac_script, diagnostics_json,
 };
 use hns_loopback_proxy::LocalCertificateAuthority;
+use hns_resolution_policy::{
+    DnsRelayRequesterPolicy, HnsrPolicy, ObliviousDnsPolicy, PolicyConfig, ProviderPolicy,
+    ResolutionTransport, TransportPlan, WireProfile,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -1240,6 +1244,21 @@ impl Drop for NativeHostController {
 type ProtocolResult = Result<Value, (&'static str, String)>;
 
 fn runtime_policy(policy: &ExtensionPolicy) -> Result<RuntimePolicy, (&'static str, String)> {
+    let shared_policy = shared_resolution_policy(policy)?;
+    let transport_plan = TransportPlan::for_policy(shared_policy);
+    Ok(RuntimePolicy {
+        resolution_mode: ResolutionMode::Strict,
+        hns_doh_resolver: None,
+        experimental_p2p_dns_relay: transport_plan
+            .contains(ResolutionTransport::HandshakeP2pDnsRelay),
+        legacy_hns_doh_compatibility: false,
+        stateless_dane_certificates: false,
+    })
+}
+
+fn shared_resolution_policy(
+    policy: &ExtensionPolicy,
+) -> Result<PolicyConfig, (&'static str, String)> {
     if policy.p2p_odoh != P2pOdohMode::Off {
         return Err((
             "unsupportedPolicy",
@@ -1264,13 +1283,31 @@ fn runtime_policy(policy: &ExtensionPolicy) -> Result<RuntimePolicy, (&'static s
             "experimental wire profiles are not implemented by this native host".to_owned(),
         ));
     }
-    Ok(RuntimePolicy {
-        resolution_mode: ResolutionMode::Strict,
-        hns_doh_resolver: None,
-        experimental_p2p_dns_relay: policy.p2p_dns_relay,
-        legacy_hns_doh_compatibility: false,
-        stateless_dane_certificates: false,
-    })
+    let config = PolicyConfig {
+        dns_relay_requester: if policy.p2p_dns_relay {
+            DnsRelayRequesterPolicy::Auto
+        } else {
+            DnsRelayRequesterPolicy::Disabled
+        },
+        oblivious_dns: ObliviousDnsPolicy::Disabled,
+        hnsr: HnsrPolicy::disabled(),
+        authenticated_authoritative_doh: true,
+        providers: ProviderPolicy {
+            dns_relay: false,
+            odoh_proxy: false,
+            odoh_target: false,
+            market_gossip: false,
+        },
+        wire_profile: WireProfile::DenuoV1,
+        allow_legacy_regtest_compatibility: false,
+    };
+    config.validate().map_err(|error| {
+        (
+            "unsupportedPolicy",
+            format!("invalid shared resolution policy: {error}"),
+        )
+    })?;
+    Ok(config)
 }
 
 fn valid_request_id(value: &str) -> bool {
@@ -1428,6 +1465,69 @@ mod tests {
         policy.hnsr = HnsrMode::Off;
         policy.p2p_odoh = P2pOdohMode::Preferred;
         assert_eq!(runtime_policy(&policy).unwrap_err().0, "unsupportedPolicy");
+        policy.p2p_odoh = P2pOdohMode::Off;
+        policy.privacy_downgrade = PrivacyDowngradePolicy::AllowDirect;
+        assert_eq!(runtime_policy(&policy).unwrap_err().0, "unsupportedPolicy");
+        policy.privacy_downgrade = PrivacyDowngradePolicy::FailClosed;
+        policy.experimental_wire_profile = ExperimentalWireProfile::HipDrafts;
+        assert_eq!(runtime_policy(&policy).unwrap_err().0, "unsupportedPolicy");
+    }
+
+    #[test]
+    fn stable_extension_policy_maps_every_shared_control_without_hidden_roles() {
+        let policy = ExtensionPolicy::default();
+        let shared = shared_resolution_policy(&policy).unwrap();
+
+        assert_eq!(
+            shared.dns_relay_requester,
+            DnsRelayRequesterPolicy::Disabled
+        );
+        assert_eq!(shared.oblivious_dns, ObliviousDnsPolicy::Disabled);
+        assert_eq!(shared.hnsr, HnsrPolicy::disabled());
+        assert!(shared.authenticated_authoritative_doh);
+        assert_eq!(
+            shared.providers,
+            ProviderPolicy {
+                dns_relay: false,
+                odoh_proxy: false,
+                odoh_target: false,
+                market_gossip: false,
+            }
+        );
+        assert_eq!(shared.wire_profile, WireProfile::DenuoV1);
+        assert!(!shared.allow_legacy_regtest_compatibility);
+
+        let plan = TransportPlan::for_policy(shared);
+        assert_eq!(
+            plan.as_slice(),
+            &[
+                ResolutionTransport::DirectAuthoritativeUdp,
+                ResolutionTransport::DirectAuthoritativeTcp,
+                ResolutionTransport::AuthenticatedAuthoritativeDoh,
+            ]
+        );
+        assert!(!runtime_policy(&policy).unwrap().experimental_p2p_dns_relay);
+    }
+
+    #[test]
+    fn opted_in_relay_is_auto_fallback_derived_from_shared_transport_plan() {
+        let policy = ExtensionPolicy {
+            p2p_dns_relay: true,
+            ..ExtensionPolicy::default()
+        };
+        let shared = shared_resolution_policy(&policy).unwrap();
+
+        assert_eq!(shared.dns_relay_requester, DnsRelayRequesterPolicy::Auto);
+        assert_eq!(
+            TransportPlan::for_policy(shared).as_slice(),
+            &[
+                ResolutionTransport::DirectAuthoritativeUdp,
+                ResolutionTransport::DirectAuthoritativeTcp,
+                ResolutionTransport::AuthenticatedAuthoritativeDoh,
+                ResolutionTransport::HandshakeP2pDnsRelay,
+            ]
+        );
+        assert!(runtime_policy(&policy).unwrap().experimental_p2p_dns_relay);
     }
 
     #[test]

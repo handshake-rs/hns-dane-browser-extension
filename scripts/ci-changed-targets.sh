@@ -32,7 +32,9 @@ classify_path() {
       scripts/check.sh | \
       scripts/check-runtime-boundaries.sh | \
       scripts/check-version-consistency.sh | \
-      scripts/verify-supply-chain.sh)
+      scripts/verify-supply-chain.sh | \
+      scripts/verify_cargo_git_policy.py | \
+      tests/test_cargo_git_policy.py)
       set_all_targets
       ;;
 
@@ -57,12 +59,11 @@ classify_path() {
       set_all_targets
       ;;
 
-    # The generated third-party notice is packaged by both application shells.
-    android/app/src/main/assets/third_party_notices.txt | \
+    # The generated notice ships with the extension and native-host installer.
+    extension/THIRD_PARTY_NOTICES.txt | \
       scripts/generate-third-party-notices.py | \
       scripts/third-party-notices.sha256)
-      android=true
-      ios=true
+      set_all_targets
       ;;
 
     # Workspace-wide Rust inputs and shared runtime crates feed both native
@@ -100,8 +101,8 @@ classify_path() {
       set_all_targets
       ;;
 
-    # Android sources, build inputs, release helpers, and Android-specific
-    # notice generation do not require the Apple runner.
+    # Historical Android sources, build inputs, and release helpers do not
+    # require the Apple runner.
     android/* | \
       gradle/* | \
       scripts/build-android.sh | \
