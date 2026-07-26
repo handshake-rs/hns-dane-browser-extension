@@ -22,7 +22,8 @@ let publicStatus = {
   runtimeGeneration: null,
   policyGeneration: 0,
   caReady: false,
-  latestMainFrameSecurity: null
+  latestMainFrameSecurity: null,
+  latestMainFrameSecurityUnavailableReason: null
 };
 
 client.onDisconnect(() => {
@@ -30,7 +31,8 @@ client.onDisconnect(() => {
   setStatus({
     state: "degraded",
     reason: "nativeHostDisconnected",
-    latestMainFrameSecurity: null
+    latestMainFrameSecurity: null,
+    latestMainFrameSecurityUnavailableReason: null
   });
   void clearProxy();
   chrome.alarms.create(RECONNECT_ALARM, { delayInMinutes: 1 });
@@ -121,7 +123,8 @@ function recover() {
       setStatus({
         state: publicStatus.state === "blocked" ? "blocked" : "degraded",
         reason: error instanceof Error ? error.message : String(error),
-        latestMainFrameSecurity: null
+        latestMainFrameSecurity: null,
+        latestMainFrameSecurityUnavailableReason: null
       });
       return publicStatus;
     })
@@ -132,7 +135,12 @@ function recover() {
 }
 
 async function startRuntime(policyOverride) {
-  setStatus({ state: "starting", reason: null, latestMainFrameSecurity: null });
+  setStatus({
+    state: "starting",
+    reason: null,
+    latestMainFrameSecurity: null,
+    latestMainFrameSecurityUnavailableReason: null
+  });
   const stored = await storageGet(["policy"]);
   const policy = normalizePolicy(policyOverride ?? stored.policy ?? DEFAULT_POLICY);
   try {
@@ -159,7 +167,8 @@ async function startRuntime(policyOverride) {
       runtimeGeneration: result.runtimeGeneration,
       policyGeneration: result.policyGeneration,
       caReady: true,
-      latestMainFrameSecurity: null
+      latestMainFrameSecurity: null,
+      latestMainFrameSecurityUnavailableReason: null
     });
     return publicStatus;
   } catch (error) {
@@ -218,7 +227,12 @@ async function refreshNativeStatus() {
       runtimeGeneration: result.runtimeGeneration,
       policyGeneration: result.policyGeneration,
       caReady: result.caReady === true,
-      latestMainFrameSecurity
+      latestMainFrameSecurity,
+      latestMainFrameSecurityUnavailableReason:
+        latestMainFrameSecurity == null &&
+        typeof result.latestMainFrameSecurityUnavailableReason === "string"
+          ? result.latestMainFrameSecurityUnavailableReason
+          : null
     });
   } catch (error) {
     await clearProxy();
@@ -226,7 +240,8 @@ async function refreshNativeStatus() {
     setStatus({
       state: "degraded",
       reason: error instanceof Error ? error.message : String(error),
-      latestMainFrameSecurity: null
+      latestMainFrameSecurity: null,
+      latestMainFrameSecurityUnavailableReason: null
     });
   }
   return publicStatus;

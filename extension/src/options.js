@@ -7,7 +7,6 @@ const fields = {
   p2pDnsRelay: document.querySelector("#p2p-dns-relay"),
   p2pOdoh: document.querySelector("#p2p-odoh"),
   privacyDowngrade: document.querySelector("#privacy-downgrade"),
-  hnsr: document.querySelector("#hnsr"),
   experimentalWireProfile: document.querySelector("#wire-profile")
 };
 
@@ -64,7 +63,6 @@ function readPolicy() {
     p2pDnsRelay: fields.p2pDnsRelay.checked,
     p2pOdoh: fields.p2pOdoh.value,
     privacyDowngrade: fields.privacyDowngrade.value,
-    hnsr: fields.hnsr.value,
     experimentalWireProfile: fields.experimentalWireProfile.value
   });
 }
@@ -73,7 +71,6 @@ function renderPolicy(policy) {
   fields.p2pDnsRelay.checked = policy.p2pDnsRelay;
   fields.p2pOdoh.value = policy.p2pOdoh;
   fields.privacyDowngrade.value = policy.privacyDowngrade;
-  fields.hnsr.value = policy.hnsr;
   fields.experimentalWireProfile.value = policy.experimentalWireProfile;
 }
 

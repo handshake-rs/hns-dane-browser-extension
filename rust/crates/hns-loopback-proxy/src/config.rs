@@ -13,6 +13,7 @@ const SESSION_ID_RANDOM_BYTES: usize = 16;
 
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct ProxySessionId {
+    bytes: [u8; SESSION_ID_RANDOM_BYTES],
     token: String,
 }
 
@@ -22,9 +23,26 @@ impl ProxySessionId {
         SystemRandom::new()
             .fill(&mut bytes)
             .map_err(|_| SessionIdGenerationError)?;
+        Self::from_bytes(bytes)
+    }
+
+    /// Constructs one checked session while preserving the existing
+    /// URL-safe, unpadded platform token representation.
+    pub fn from_bytes(
+        bytes: [u8; SESSION_ID_RANDOM_BYTES],
+    ) -> Result<Self, SessionIdGenerationError> {
+        if bytes == [0; SESSION_ID_RANDOM_BYTES] {
+            return Err(SessionIdGenerationError);
+        }
         Ok(Self {
             token: URL_SAFE_NO_PAD.encode(bytes),
+            bytes,
         })
+    }
+
+    /// Exact nonzero bytes shared with the canonical browser runtime.
+    pub const fn as_bytes(&self) -> &[u8; SESSION_ID_RANDOM_BYTES] {
+        &self.bytes
     }
 
     /// Explicitly exposes the opaque token for platform boundary serialization.
@@ -461,8 +479,23 @@ mod tests {
         let second = ProxySessionId::generate().unwrap();
 
         assert_ne!(first, second);
+        assert_ne!(first.as_bytes(), &[0; SESSION_ID_RANDOM_BYTES]);
         assert!(!first.as_str().is_empty());
         assert!(!format!("{first:?}").contains(first.as_str()));
+    }
+
+    #[test]
+    fn checked_session_bytes_retain_the_frozen_base64url_token() {
+        let bytes = [0xabu8; SESSION_ID_RANDOM_BYTES];
+        let session = ProxySessionId::from_bytes(bytes).unwrap();
+
+        assert_eq!(session.as_bytes(), &bytes);
+        assert_eq!(session.as_str(), "q6urq6urq6urq6urq6urqw");
+        assert_eq!(
+            ProxySessionId::from_bytes([0; SESSION_ID_RANDOM_BYTES]),
+            Err(SessionIdGenerationError)
+        );
+        assert!(!format!("{session:?}").contains(session.as_str()));
     }
 
     #[test]

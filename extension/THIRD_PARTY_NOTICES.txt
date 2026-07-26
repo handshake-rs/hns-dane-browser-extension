@@ -8,9 +8,9 @@ test-only, lint, mobile, fuzz, and snapshot-exporter dependencies are excluded.
 The extension JavaScript has no third-party runtime package dependency.
 
 Supported desktop Rust target closure counts:
-  x86_64-unknown-linux-gnu: 163 external Cargo components
-  aarch64-apple-darwin: 163 external Cargo components
-  x86_64-pc-windows-msvc: 168 external Cargo components
+  x86_64-unknown-linux-gnu: 166 external Cargo components
+  aarch64-apple-darwin: 166 external Cargo components
+  x86_64-pc-windows-msvc: 171 external Cargo components
 
 License expressions are the declarations in the verified package metadata. The reproduced
 texts come from checksum-verified registry packages or immutable Cargo Git checkouts.
@@ -19,15 +19,15 @@ Inclusion here does not imply endorsement by the component authors.
 Generator schema: 3
 Generated input SHA-256:
   scripts/generate-third-party-notices.py = b19f8b0304c4a6df4be3e7701e543d547aef91db2bab5017d3e724f897a8c53a
-  scripts/verify_cargo_git_policy.py = 950de5ed8d9f103247a1c72585df2227808dd3c36c79de32039ae5be123dc665
-  rust/Cargo.toml = 273efaee0bc745365678c449cac81f515ad9aabcd0697609fb843a4b93272a03
-  rust/Cargo.lock = 7ed92d371f42c2d6dcad2cbaafedaaae561651b396d73a3624061df4d4b773c6
+  scripts/verify_cargo_git_policy.py = cfde378b2a145ccda8fbc1f8c09a5bf464597498d51f2e1cb948ea985d24cb4b
+  rust/Cargo.toml = 7c3e13dffc697102b65286baaef3702f3ce4ecce54042190e2b6da21bef41e3a
+  rust/Cargo.lock = d1b57344b83f1859a827a5a0cd4e0e64ebe610b3c35346da310c7b32afe1e0cb
   extension/manifest.json = ce63799e4ea7e340469fc9cddf888fab9f0628d02e18bc2d84180ef0d632bbcd
   package.json = 7929e8f469474ecfcb747e7e31cc9a72f443e49f0ce2dfb9bf096eab14f86599
   rust/crates/hns-cache/Cargo.toml = ecb37feb5e48f51bc3f4e8319aa3e8edca4178f419a3390215640e2e7c2ff058
   rust/crates/hns-chain/Cargo.toml = 0fdd59304d88167acd7cf0a0ceb2c333aa5cc79d45c46a26828d9788df944814
-  rust/crates/hns-chromium-native-host/Cargo.toml = f2f7529fb9e2f70da8ad362a449eb0f48a7472e93efa053e7f767d84434bd038
-  rust/crates/hns-chromium-platform-runtime/Cargo.toml = 340b0e48202e61a1a95ac1d4e09f2436a2a21836e0ac14ec4a9b7b5305f56aea
+  rust/crates/hns-chromium-native-host/Cargo.toml = fda3eaf22748a07f187a3a6dc755564b7a8d898f87b9602745b13c0d369fcf43
+  rust/crates/hns-chromium-platform-runtime/Cargo.toml = fef462b7bc2f6c77f4146ab5e3c495466c7c16d950c40b614ec8b538d8db5a8a
   rust/crates/hns-core/Cargo.toml = 0d2b63145e61850dc9c243cfd483a92cb7157672f87fcaa7879d7b42c0c91a6d
   rust/crates/hns-dane/Cargo.toml = e101a2c614120830bc2ead4b56f1cb7604cef15fda4104bc819060a562aa8d29
   rust/crates/hns-dnssec/Cargo.toml = 06c0ed11d5b80a3ff2f1780e9642e9986b13ecf1f34755cf1cd1d94b6a043cf0
@@ -39,7 +39,7 @@ Generated input SHA-256:
   rust/crates/hns-transport/Cargo.toml = b5c696c3b7f3b1f54a3835a95d029d35642f7a6ea9c895edd299e723209f305d
   rust/crates/hns-urkel/Cargo.toml = 83ddd253d6a3699205df6647d894fcb2f081857c96fa272627b18aad1f34eb88
 
-RUST COMPONENTS (168)
+RUST COMPONENTS (171)
   asn1-rs 0.7.2 | MIT OR Apache-2.0
   asn1-rs-derive 0.6.0 | MIT OR Apache-2.0
   asn1-rs-impl 0.2.0 | MIT/Apache-2.0
@@ -96,6 +96,8 @@ RUST COMPONENTS (168)
   hashlink 0.11.1 | MIT OR Apache-2.0
   hex 0.4.3 | MIT OR Apache-2.0
   hmac 0.12.1 | MIT OR Apache-2.0
+  hns-browser-observability 0.1.0 | MIT OR Apache-2.0
+  hns-browser-runtime 0.1.0 | MIT OR Apache-2.0
   hns-icann-dane 0.1.0 | MIT OR Apache-2.0
   hns-namespace-resolution 0.1.0 | MIT OR Apache-2.0
   hns-resolution-policy 0.1.0 | MIT OR Apache-2.0
@@ -169,9 +171,10 @@ RUST COMPONENTS (168)
   stable_deref_trait 1.2.1 | MIT OR Apache-2.0
   subtle 2.6.1 | BSD-3-Clause
   syn 2.0.118 | MIT OR Apache-2.0
+  syn 3.0.3 | MIT OR Apache-2.0
   synstructure 0.13.2 | MIT
-  thiserror 2.0.18 | MIT OR Apache-2.0
-  thiserror-impl 2.0.18 | MIT OR Apache-2.0
+  thiserror 2.0.19 | MIT OR Apache-2.0
+  thiserror-impl 2.0.19 | MIT OR Apache-2.0
   time 0.3.51 | MIT OR Apache-2.0
   time-core 0.1.9 | MIT OR Apache-2.0
   time-macros 0.2.30 | MIT OR Apache-2.0
@@ -1371,8 +1374,9 @@ Applies to:
   - Rust crate serde_derive 1.0.228
   - Rust crate serde_json 1.0.151
   - Rust crate syn 2.0.118
-  - Rust crate thiserror 2.0.18
-  - Rust crate thiserror-impl 2.0.18
+  - Rust crate syn 3.0.3
+  - Rust crate thiserror 2.0.19
+  - Rust crate thiserror-impl 2.0.19
   - Rust crate unicode-ident 1.0.24
   - Rust crate zmij 1.0.23
 Source file names:
@@ -2405,6 +2409,8 @@ Apache License
 ================================================================================
 Notice SHA-256: 4bf96504d6e83ce5c6fc7167f1795d9ceaa68e70ab86bc5d08ab93184262bbbe
 Applies to:
+  - Rust crate hns-browser-observability 0.1.0
+  - Rust crate hns-browser-runtime 0.1.0
   - Rust crate hns-icann-dane 0.1.0
   - Rust crate hns-namespace-resolution 0.1.0
   - Rust crate hns-resolution-policy 0.1.0
@@ -4388,8 +4394,9 @@ Applies to:
   - Rust crate serde_derive 1.0.228
   - Rust crate serde_json 1.0.151
   - Rust crate syn 2.0.118
-  - Rust crate thiserror 2.0.18
-  - Rust crate thiserror-impl 2.0.18
+  - Rust crate syn 3.0.3
+  - Rust crate thiserror 2.0.19
+  - Rust crate thiserror-impl 2.0.19
   - Rust crate unicode-ident 1.0.24
 Source file names:
   - LICENSE-APACHE
@@ -8173,6 +8180,8 @@ DEALINGS IN THE SOFTWARE.
 ================================================================================
 Notice SHA-256: f9165598d16dd8f69f8b1ff9a0e2871821b9f7e6c0bece512dfd4de11e613ae5
 Applies to:
+  - Rust crate hns-browser-observability 0.1.0
+  - Rust crate hns-browser-runtime 0.1.0
   - Rust crate hns-icann-dane 0.1.0
   - Rust crate hns-namespace-resolution 0.1.0
   - Rust crate hns-resolution-policy 0.1.0

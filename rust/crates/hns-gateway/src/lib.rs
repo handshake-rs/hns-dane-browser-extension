@@ -11,8 +11,9 @@ use hns_icann_dane::{
     decide_browser_tls,
 };
 use hns_namespace_resolution::{
-    ApplicationProtocol, CanonicalHost, CanonicalTlsa, Namespace, NamespaceDecision, OriginQuery,
-    OriginScheme, ProtocolCapabilities, ServiceTransport, TlsTrustPolicy, decision_fingerprint,
+    ApplicationProtocol, CanonicalHost, CanonicalTlsa, ClassificationError, Namespace,
+    NamespaceDecision, OriginQuery, OriginScheme, ProtocolCapabilities, ServiceTransport,
+    TlsTrustPolicy, decision_fingerprint,
 };
 use hns_resolver::{
     NameClass, PreparedNamespaceResolution, ResolutionAnswer, ResolutionRequest, Resolver,
@@ -120,6 +121,94 @@ pub enum GatewayError {
     Transport(#[from] TransportError),
 }
 
+/// Typed namespace evidence retained when gateway work fails.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GatewayFailureContext {
+    /// Classification succeeded before a later gateway or origin failure.
+    NamespaceDecision(Box<NamespaceDecision>),
+    /// Dual-root classification itself failed.
+    ClassificationError(Box<ClassificationError>),
+}
+
+/// Gateway failure plus any typed dual-root evidence available at failure.
+#[derive(Debug, Eq, PartialEq)]
+pub struct GatewayFailure {
+    error: Box<GatewayError>,
+    namespace_context: Option<GatewayFailureContext>,
+}
+
+impl GatewayFailure {
+    fn from_error(error: GatewayError) -> Self {
+        let namespace_context = match &error {
+            GatewayError::Resolver(ResolverError::NamespaceClassification(error)) => Some(
+                GatewayFailureContext::ClassificationError(Box::new(error.clone())),
+            ),
+            _ => None,
+        };
+        Self {
+            error: Box::new(error),
+            namespace_context,
+        }
+    }
+
+    /// Retains a completed decision across a later gateway failure.
+    #[must_use]
+    pub fn with_namespace_decision(error: GatewayError, decision: NamespaceDecision) -> Self {
+        Self {
+            error: Box::new(error),
+            namespace_context: Some(GatewayFailureContext::NamespaceDecision(Box::new(decision))),
+        }
+    }
+
+    /// Underlying gateway error.
+    #[must_use]
+    pub fn error(&self) -> &GatewayError {
+        self.error.as_ref()
+    }
+
+    /// Typed namespace evidence available at the failure boundary.
+    #[must_use]
+    pub const fn namespace_context(&self) -> Option<&GatewayFailureContext> {
+        self.namespace_context.as_ref()
+    }
+
+    /// Successful namespace decision retained across a later failure.
+    #[must_use]
+    pub fn namespace_decision(&self) -> Option<&NamespaceDecision> {
+        match self.namespace_context.as_ref() {
+            Some(GatewayFailureContext::NamespaceDecision(decision)) => Some(decision.as_ref()),
+            Some(GatewayFailureContext::ClassificationError(_)) | None => None,
+        }
+    }
+
+    /// Typed classification failure, without parsing diagnostic JSON.
+    #[must_use]
+    pub fn classification_error(&self) -> Option<&ClassificationError> {
+        match self.namespace_context.as_ref() {
+            Some(GatewayFailureContext::ClassificationError(error)) => Some(error.as_ref()),
+            Some(GatewayFailureContext::NamespaceDecision(_)) | None => None,
+        }
+    }
+
+    /// Discards the optional context and returns the compatibility error.
+    #[must_use]
+    pub fn into_error(self) -> GatewayError {
+        *self.error
+    }
+}
+
+impl From<GatewayError> for GatewayFailure {
+    fn from(error: GatewayError) -> Self {
+        Self::from_error(error)
+    }
+}
+
+impl From<ResolverError> for GatewayFailure {
+    fn from(error: ResolverError) -> Self {
+        Self::from_error(GatewayError::Resolver(error))
+    }
+}
+
 pub struct Gateway<R, T> {
     config: GatewayConfig,
     resolver: R,
@@ -218,10 +307,25 @@ where
     }
 
     pub fn handle(&self, request: &GatewayRequest) -> Result<GatewayResponse, GatewayError> {
-        self.authorize(request)?;
+        self.handle_with_failure_context(request)
+            .map_err(GatewayFailure::into_error)
+    }
+
+    /// Handles one request while retaining typed namespace evidence on error.
+    pub fn handle_with_failure_context(
+        &self,
+        request: &GatewayRequest,
+    ) -> Result<GatewayResponse, GatewayFailure> {
+        self.authorize(request).map_err(GatewayFailure::from)?;
         let (resolution, origin_request, namespace_decision) =
             self.resolve_origin_request(request, &self.config.supported_origin_protocols)?;
-        let origin = self.transport.fetch(&origin_request)?;
+        let origin = self.transport.fetch(&origin_request).map_err(|error| {
+            let error = GatewayError::Transport(error);
+            match namespace_decision.as_ref() {
+                Some(decision) => GatewayFailure::with_namespace_decision(error, decision.clone()),
+                None => GatewayFailure::from(error),
+            }
+        })?;
         Ok(GatewayResponse {
             resolution,
             namespace_decision,
@@ -235,10 +339,31 @@ where
         request: &GatewayRequest,
         body: &mut dyn Write,
     ) -> Result<GatewayResponseHead, GatewayError> {
-        self.authorize(request)?;
+        self.handle_to_writer_with_failure_context(request, body)
+            .map_err(GatewayFailure::into_error)
+    }
+
+    /// Streams one response while retaining typed namespace evidence on error.
+    pub fn handle_to_writer_with_failure_context(
+        &self,
+        request: &GatewayRequest,
+        body: &mut dyn Write,
+    ) -> Result<GatewayResponseHead, GatewayFailure> {
+        self.authorize(request).map_err(GatewayFailure::from)?;
         let (resolution, origin_request, namespace_decision) =
             self.resolve_origin_request(request, &self.config.supported_origin_protocols)?;
-        let origin = self.transport.fetch_to_writer(&origin_request, body)?;
+        let origin = self
+            .transport
+            .fetch_to_writer(&origin_request, body)
+            .map_err(|error| {
+                let error = GatewayError::Transport(error);
+                match namespace_decision.as_ref() {
+                    Some(decision) => {
+                        GatewayFailure::with_namespace_decision(error, decision.clone())
+                    }
+                    None => GatewayFailure::from(error),
+                }
+            })?;
         Ok(GatewayResponseHead {
             resolution,
             namespace_decision,
@@ -248,10 +373,30 @@ where
     }
 
     pub fn handle_tunnel(&self, request: &GatewayRequest) -> Result<GatewayTunnel, GatewayError> {
-        self.authorize(request)?;
+        self.handle_tunnel_with_failure_context(request)
+            .map_err(GatewayFailure::into_error)
+    }
+
+    /// Opens one tunnel while retaining typed namespace evidence on error.
+    pub fn handle_tunnel_with_failure_context(
+        &self,
+        request: &GatewayRequest,
+    ) -> Result<GatewayTunnel, GatewayFailure> {
+        self.authorize(request).map_err(GatewayFailure::from)?;
         let (resolution, origin_request, namespace_decision) =
             self.resolve_origin_request(request, &[OriginProtocol::Http11])?;
-        let origin = self.transport.open_tunnel(&origin_request)?;
+        let origin = self
+            .transport
+            .open_tunnel(&origin_request)
+            .map_err(|error| {
+                let error = GatewayError::Transport(error);
+                match namespace_decision.as_ref() {
+                    Some(decision) => {
+                        GatewayFailure::with_namespace_decision(error, decision.clone())
+                    }
+                    None => GatewayFailure::from(error),
+                }
+            })?;
         Ok(GatewayTunnel {
             resolution,
             namespace_decision,
@@ -286,9 +431,9 @@ where
         &self,
         request: &GatewayRequest,
         supported_origin_protocols: &[OriginProtocol],
-    ) -> Result<(ResolutionAnswer, OriginRequest, Option<NamespaceDecision>), GatewayError> {
+    ) -> Result<(ResolutionAnswer, OriginRequest, Option<NamespaceDecision>), GatewayFailure> {
         if !hosts_match(&request.origin.host, &request.resolution.qname) {
-            return Err(GatewayError::HostResolutionMismatch);
+            return Err(GatewayError::HostResolutionMismatch.into());
         }
         self.validate_origin_port(request.origin.port)?;
 
@@ -297,13 +442,16 @@ where
             .resolver
             .prepare_namespace_resolution(&namespace_query)?
         {
-            return self.apply_prepared_namespace_resolution(request, namespace_query, prepared);
+            let decision = prepared.decision.clone();
+            return self
+                .apply_prepared_namespace_resolution(request, namespace_query, prepared)
+                .map_err(|error| GatewayFailure::with_namespace_decision(error, decision));
         }
 
         let resolution = self.resolver.resolve(&request.resolution)?;
         let name_class = classify_name(&request.origin.host);
         if !resolution.secure && name_class != NameClass::Icann {
-            return Err(GatewayError::InsecureResolution);
+            return Err(GatewayError::InsecureResolution.into());
         }
 
         let mut origin_request = request.origin.clone();
@@ -337,7 +485,7 @@ where
                 {
                     Ok(()) => {}
                     Err(error) if optional_https_service_policy_error(&error) => {}
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(error.into()),
                 }
             }
             origin_request.tls.service_port = origin_request.port;
@@ -366,13 +514,17 @@ where
         namespace_query: OriginQuery,
         prepared: PreparedNamespaceResolution,
     ) -> Result<(ResolutionAnswer, OriginRequest, Option<NamespaceDecision>), GatewayError> {
-        if prepared.decision.query() != &namespace_query {
+        let PreparedNamespaceResolution {
+            decision,
+            selected_answer,
+        } = prepared;
+        if decision.query() != &namespace_query {
             return Err(GatewayError::Resolver(ResolverError::InvalidDnsResponse));
         }
-        let plan = prepared
-            .decision
+        let plan = decision
             .selected_plan()
             .ok_or(ResolverError::NamespaceUnavailable)?;
+        let selected_answer = selected_answer.ok_or(ResolverError::NamespaceUnavailable)?;
         let endpoint = *plan
             .endpoints()
             .first()
@@ -382,8 +534,7 @@ where
         origin_request.connect_host = Some(endpoint.ip().to_string());
         origin_request.port = plan.service().effective_port().get();
         origin_request.protocol = origin_protocol(plan.service().selected_protocol());
-        origin_request.tls.namespace_fingerprint =
-            Some(decision_fingerprint(&prepared.decision).to_hex());
+        origin_request.tls.namespace_fingerprint = Some(decision_fingerprint(&decision).to_hex());
         self.validate_origin_address(
             origin_request
                 .connect_host
@@ -407,11 +558,7 @@ where
         origin_request.tls.service_port = origin_request.port;
         origin_request.tls.service_transport = tlsa_transport(plan.service().transport());
 
-        Ok((
-            prepared.selected_answer,
-            origin_request,
-            Some(prepared.decision),
-        ))
+        Ok((selected_answer, origin_request, Some(decision)))
     }
 
     fn validate_origin_address(&self, address: &str) -> Result<(), GatewayError> {
@@ -962,8 +1109,8 @@ mod tests {
     use hns_dane::{DaneDecision, DaneError, TlsaMatching, TlsaSelector, TlsaUsage};
     use hns_namespace_resolution::{
         AbsenceKind, EvidenceProvenance, Freshness, HnsNetwork, IcannChainState, OriginPlanInput,
-        RootLookup, SelectionPolicy, ServiceBinding, ServiceBindingInput, ValidatedAbsence,
-        ValidatedOriginPlan, decide_namespace,
+        RootFailure, RootFailureKind, RootLookup, SelectionPolicy, ServiceBinding,
+        ServiceBindingInput, ValidatedAbsence, ValidatedOriginPlan, decide_namespace,
     };
     use hns_resolver::{PreparedNamespaceResolution, ResolutionAnswer, Resolver};
     use hns_transport::{
@@ -986,6 +1133,10 @@ mod tests {
     struct PreparedResolver {
         prepared: PreparedNamespaceResolution,
         record_calls: Arc<AtomicUsize>,
+    }
+
+    struct ClassificationFailingResolver {
+        error: ClassificationError,
     }
 
     impl Resolver for StaticResolver {
@@ -1023,6 +1174,19 @@ mod tests {
         }
     }
 
+    impl Resolver for ClassificationFailingResolver {
+        fn resolve(&self, _request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
+            Err(ResolverError::UnsupportedBackend)
+        }
+
+        fn prepare_namespace_resolution(
+            &self,
+            _query: &OriginQuery,
+        ) -> Result<Option<PreparedNamespaceResolution>, ResolverError> {
+            Err(ResolverError::NamespaceClassification(self.error.clone()))
+        }
+    }
+
     struct StaticTransport;
 
     impl OriginTransport for StaticTransport {
@@ -1034,6 +1198,18 @@ mod tests {
                 dane_decision: DaneDecision::NoTlsa,
                 tls_inspection: None,
             })
+        }
+    }
+
+    struct DaneFailingTransport;
+
+    impl OriginTransport for DaneFailingTransport {
+        fn fetch(&self, _request: &OriginRequest) -> Result<OriginResponse, TransportError> {
+            Err(TransportError::DaneFailed)
+        }
+
+        fn open_tunnel(&self, _request: &OriginRequest) -> Result<OriginTunnel, TransportError> {
+            Err(TransportError::DaneFailed)
         }
     }
 
@@ -1067,12 +1243,19 @@ mod tests {
     }
 
     fn prepared_icann_only(host: &str) -> PreparedNamespaceResolution {
+        prepared_icann_only_with_capabilities(host, ProtocolCapabilities::all())
+    }
+
+    fn prepared_icann_only_with_capabilities(
+        host: &str,
+        capabilities: ProtocolCapabilities,
+    ) -> PreparedNamespaceResolution {
         let host = CanonicalHost::parse(host).unwrap();
         let query = OriginQuery::new(
             host.clone(),
             OriginScheme::Https,
             NonZeroU16::new(443),
-            ProtocolCapabilities::all(),
+            capabilities,
         );
         let freshness = Freshness::new(1, u64::MAX).unwrap();
         let service = ServiceBinding::new(ServiceBindingInput {
@@ -1135,11 +1318,11 @@ mod tests {
         .unwrap();
         PreparedNamespaceResolution {
             decision,
-            selected_answer: ResolutionAnswer {
+            selected_answer: Some(ResolutionAnswer {
                 name: DnsName::from_ascii("example.com").unwrap(),
                 records: Vec::new(),
                 secure: true,
-            },
+            }),
         }
     }
 
@@ -1185,6 +1368,70 @@ mod tests {
                 record_count: NonZeroUsize::new(1).unwrap(),
             })
         );
+    }
+
+    #[test]
+    fn contextual_handlers_retain_classification_and_post_selection_decisions() {
+        for tunnel in [false, true] {
+            let capabilities = if tunnel {
+                ProtocolCapabilities::new(true, false, false).unwrap()
+            } else {
+                ProtocolCapabilities::all()
+            };
+            let prepared = prepared_icann_only_with_capabilities("example.com", capabilities);
+            let expected_decision = prepared.decision.clone();
+            let gateway = Gateway::new(
+                GatewayConfig::default(),
+                PreparedResolver {
+                    prepared: prepared.clone(),
+                    record_calls: Arc::new(AtomicUsize::new(0)),
+                },
+                DaneFailingTransport,
+            )
+            .unwrap();
+            let failure = if tunnel {
+                match gateway
+                    .handle_tunnel_with_failure_context(&request("example.com", "example.com"))
+                {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("DANE-failing tunnel transport must fail"),
+                }
+            } else {
+                gateway
+                    .handle_with_failure_context(&request("example.com", "example.com"))
+                    .unwrap_err()
+            };
+            assert_eq!(
+                failure.error(),
+                &GatewayError::Transport(TransportError::DaneFailed)
+            );
+            assert_eq!(failure.namespace_decision(), Some(&expected_decision));
+            assert_eq!(failure.classification_error(), None);
+        }
+
+        let query = prepared_icann_only("example.com").decision.query().clone();
+        let classification = ClassificationError::RootFailed {
+            hns: None,
+            icann: Some(RootFailure::new(
+                Namespace::Icann,
+                query,
+                RootFailureKind::BogusDnssec,
+                None,
+            )),
+        };
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            ClassificationFailingResolver {
+                error: classification.clone(),
+            },
+            StaticTransport,
+        )
+        .unwrap();
+        let failure = gateway
+            .handle_with_failure_context(&request("example.com", "example.com"))
+            .unwrap_err();
+        assert_eq!(failure.classification_error(), Some(&classification));
+        assert_eq!(failure.namespace_decision(), None);
     }
 
     #[test]

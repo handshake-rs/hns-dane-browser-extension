@@ -76,13 +76,15 @@ pub struct ResolutionAnswer {
     pub secure: bool,
 }
 
-/// Atomic dual-root decision and the selected root's retained raw DNS
-/// material. Consumers use the complete selected plan for connection state;
-/// this answer exists only for diagnostics and compatibility.
+/// Atomic dual-root decision and any selected root's retained raw DNS
+/// material. A completed `Neither` decision has no selected answer but still
+/// crosses this boundary so consumers retain its exact request-local evidence
+/// and fingerprint. Consumers use the complete selected plan for connection
+/// state; the answer exists only for diagnostics and compatibility.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedNamespaceResolution {
     pub decision: NamespaceDecision,
-    pub selected_answer: ResolutionAnswer,
+    pub selected_answer: Option<ResolutionAnswer>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

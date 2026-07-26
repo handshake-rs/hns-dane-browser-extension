@@ -75,9 +75,10 @@ for that feature claim.
 
 The loopback proxy observes typed internal response metadata before removing
 the private `X-HNS-*` fields from the browser-visible response. The native
-host converts that observation into security-result schema 2. Each result is
+host converts that observation into security-result schema 3. Each result is
 bound to the exact runtime session, runtime generation, policy generation, and
-one monotonic event sequence. A proxy stop or policy restart clears all
+the request's exact monotonic admission event. Callback completion order cannot
+replace that admission order. A proxy stop or policy restart clears all
 retained results before revoking the old proxy generation.
 
 The result reports the five-way namespace outcome, selected root and reason,
@@ -89,11 +90,16 @@ A relayed result continues to name the delegated nameserver as the authority
 and identifies the relay only as an intermediary.
 
 Only a bounded 32-result in-memory diagnostic window and the latest main-frame
-result are retained. The native host deliberately discards the raw resolution
-trace because it can contain a complete URL and certificate material. The
-popup displays only the sanitized Rust result using fixed labels. Before
-rendering, the service worker requires exact session, runtime-generation, and
-policy-generation matches; stale results render as unavailable.
+result are retained. Every security field comes from the checked canonical
+status; the trace may contribute only a bounded diagnostic final-error string.
+The raw trace never crosses the native-messaging boundary because it can
+contain a complete URL and certificate material. When a newer main-frame
+observation has no canonical status, the native host clears the previous
+result and reports a separate unavailable reason instead of synthesizing
+cryptographic state. The popup displays only the sanitized Rust result using
+fixed labels. Before rendering, the service worker requires exact session,
+runtime-generation, policy-generation, and event-sequence values; stale
+results render as unavailable.
 
 The periodic health alarm requests status from the existing generation. It
 does not restart a healthy proxy. Reconnection alone creates a new generation,
@@ -210,10 +216,11 @@ the service worker also clears it during orderly suspension.
 - The existing P2P DNS-relay checkbox remains an independent requester opt-in
   in this extension schema. Rust maps it to the canonical shared policy's
   `Disabled` or direct-authority-first `Auto` requester mode. This browser
-  product does not implement provider service: every opaque-relay,
-  output-node, target, market, and HNSR provider role is explicitly disabled
-  regardless of requester settings. P2P ODoH, HNSR, privacy downgrade, and
-  draft wire profiles remain fail-closed rather than silently downgrading.
+  product opts out of the ecosystem's default-on opaque provider-relay role.
+  Output/target roles remain separate default-off opt-ins and are not enabled
+  by requester settings. HNSR is not offered as an extension setting; legacy
+  non-off HNSR requests, P2P ODoH, privacy downgrade, and draft wire profiles
+  remain fail-closed rather than silently downgrading.
 - A policy update is written to extension storage only after the native host
   has accepted it and returned an active proxy generation.
 
@@ -222,7 +229,8 @@ the service worker also clears it during orderly suspension.
 The 2026-07-26 shared-policy checkpoint passed:
 
 ```sh
-cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
+cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml \
+  --workspace --all-targets
 cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
   --workspace --all-targets -- -D warnings
 cargo +1.92.0 fmt --manifest-path rust/Cargo.toml --all -- --check
@@ -232,14 +240,17 @@ python3 scripts/generate-third-party-notices.py --check
 npm run check:extension
 ```
 
-The final Chromium checkpoint passed 48 gateway, 152 loopback-proxy, 154
-browser-runtime, 14 native-host, 65 resolver, and 51 transport tests. The
-extension gate passed all 15 Node tests, including isolated Linux
+The final Chromium checkpoint passed 49 gateway, 154 loopback-proxy, 173
+browser-runtime, 17 native-host, 65 resolver, and 56 transport tests. The
+extension gate passed all 16 Node tests, including isolated Linux
 install/uninstall, Windows registration/removal coverage, PAC parity, native
 messaging, stale-generation rejection, health-generation preservation, and
-the unpacked MV3 build. Socket-backed Rust tests require permission to bind
-loopback in a restricted sandbox; they passed with that local access. The full
-Chromium workspace also passed warning-denied Clippy and rustfmt.
+the unpacked MV3 build. The native suite also drives one production Neither
+request through the authenticated loopback response head, metadata observer,
+canonical status mapper, schema-v3 serializer, and the actual JavaScript
+validator. Socket-backed Rust tests require permission to bind loopback in a
+restricted sandbox; they passed with that local access. The full Chromium
+workspace also passed warning-denied Clippy and rustfmt.
 
 The historical cross-platform `./scripts/check.sh` wrapper is not a release
 gate for this extraction because it still contains mobile packaging and ABI
@@ -255,20 +266,28 @@ This clone still contains its product-specific `hns-chromium-platform-runtime`,
 `hns-gateway`, and `hns-transport` implementations. TLSA owner derivation,
 validating-DoH trust decisions, dual-root namespace selection, and the typed
 requester/provider transport policy now consume the canonical
-`hns-icann-dane`, `hns-namespace-resolution`, and `hns-resolution-policy`
-crates through immutable Git dependencies on
+`hns-browser-runtime`, `hns-browser-observability`, `hns-icann-dane`,
+`hns-namespace-resolution`, and `hns-resolution-policy` crates through
+immutable Git dependencies on
 `handshake-rs/hns-dane-engine` commit
-`2850ac1f50e361e2772e18f2e5ecbd7e77085afb`. The surrounding gateway,
+`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`. The surrounding gateway,
 resolver adapter, and transport integration remain historical clone code
 pending broader engine consolidation.
-The separately coordinated `hns-dane-engine` repository now defines the
-canonical session-bound browser authority and bridge-authorization boundary
-in its distinct `hns-browser-runtime` crate.
-This checkpoint aligns Chromium observability with its session, runtime
-generation, policy generation, and event-sequence invariants, but does not
-claim that the Chromium product adapter has been replaced by the canonical
-engine runtime or that the canonical contract is a registry-published
-dependency. That consolidation, P2P ODoH,
+The Chromium adapter embeds the canonical session-bound authority and
+bridge-authorization boundary from `hns-browser-runtime`. A fresh authenticated
+listener may be bound while headers are still syncing, but it remains
+non-admitting: every request revalidates factual header currentness and proof
+service readiness before canonical activation. Policy, stop, readiness, and
+proxy-generation changes invalidate stamped work, origin streams, staged
+downloads, tunnels, typed status, and the final loopback response-head
+publication permit.
+Checked `hns-browser-observability` status is assembled only from the selected
+typed namespace plan and the exact per-request DNS transport event. Cached or
+legacy paths without exact transport evidence, and P2P relay paths without a
+negotiated registry fingerprint and protocol version, report an explicit
+typed-unavailable status rather than fabricated identity. This checkpoint does
+not claim that the Chromium product adapter has been replaced or that the
+canonical contract is a registry-published dependency. That consolidation, P2P ODoH,
 HNSR, and non-stable experimental wire profiles remain fail-closed work.
 
 The retained Android/iOS source and FFI directories are historical and excluded

@@ -1,7 +1,7 @@
 //! Platform-neutral request boundary used by the loopback HTTP server.
 
 use std::fmt;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -169,6 +169,9 @@ pub struct ProxyResponseHead {
     pub status_code: u16,
     pub reason_phrase: String,
     pub headers: Vec<ProxyHeader>,
+    /// Opaque backend-local correlation used only for typed status delivery.
+    /// It is never serialized into the proxy response.
+    pub observation_id: Option<u64>,
 }
 
 impl fmt::Debug for ProxyResponseHead {
@@ -177,6 +180,7 @@ impl fmt::Debug for ProxyResponseHead {
             .debug_struct("ProxyResponseHead")
             .field("status_code", &self.status_code)
             .field("header_count", &self.headers.len())
+            .field("observation_id_present", &self.observation_id.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -219,9 +223,64 @@ impl fmt::Debug for ProxyResponseBody {
     }
 }
 
+/// Authority hook which atomically validates and publishes one response head.
+///
+/// Implementations must hold the same exclusion boundary used by policy,
+/// lifecycle, and generation invalidation for the complete `publish`
+/// operation. The operation is intentionally limited to the sanitized
+/// response head; streaming bodies and tunnels retain their own cancellation
+/// and freshness checks.
+pub trait ProxyPublicationAuthority: Send + Sync + 'static {
+    fn publish(&self, operation: &mut dyn FnMut() -> io::Result<()>) -> io::Result<()>;
+}
+
+struct NoopProxyPublicationAuthority;
+
+impl ProxyPublicationAuthority for NoopProxyPublicationAuthority {
+    fn publish(&self, operation: &mut dyn FnMut() -> io::Result<()>) -> io::Result<()> {
+        operation()
+    }
+}
+
+/// Cloneable RAII permit carried from a backend result to loopback
+/// response-head publication.
+#[derive(Clone)]
+pub struct ProxyPublicationPermit {
+    authority: Arc<dyn ProxyPublicationAuthority>,
+}
+
+impl ProxyPublicationPermit {
+    pub fn new(authority: Arc<dyn ProxyPublicationAuthority>) -> Self {
+        Self { authority }
+    }
+
+    pub fn publish(&self, operation: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
+        let mut operation = Some(operation);
+        self.authority.publish(&mut || {
+            operation
+                .take()
+                .ok_or_else(|| io::Error::other("publication operation was already consumed"))?(
+            )
+        })
+    }
+}
+
+impl Default for ProxyPublicationPermit {
+    fn default() -> Self {
+        Self::new(Arc::new(NoopProxyPublicationAuthority))
+    }
+}
+
+impl fmt::Debug for ProxyPublicationPermit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProxyPublicationPermit(<redacted authority>)")
+    }
+}
+
 pub struct ProxyResponse {
     pub head: ProxyResponseHead,
     pub body: ProxyResponseBody,
+    pub publication_permit: ProxyPublicationPermit,
 }
 
 /// One typed HTTP Upgrade response and its live origin connection. The proxy
@@ -234,6 +293,7 @@ pub struct ProxyResponse {
 pub struct ProxyTunnel {
     pub head: ProxyResponseHead,
     pub stream: Box<dyn ProxyTunnelIo>,
+    pub publication_permit: ProxyPublicationPermit,
 }
 
 /// Result of opening an Upgrade route. Policy and resolution failures can be

@@ -33,7 +33,6 @@ test("policy normalization is bounded to known native-host values", () => {
       p2pDnsRelay: true,
       p2pOdoh: "off",
       privacyDowngrade: "allowDirect",
-      hnsr: "client",
       experimentalWireProfile: "stable"
     }
   );

@@ -2422,7 +2422,7 @@ fn execute_backend<W: Write + ?Sized>(
                     elapsed: started.elapsed(),
                 },
             );
-            if !cancellation.is_cancelled() {
+            if error != BackendError::Cancelled && !cancellation.is_cancelled() {
                 let (status, reason) = backend_error_status(error);
                 observe_proxy_generated_response(context, host, method, status, likely_main_frame);
                 let _result = write_error_response(stream, status, reason, &[]);
@@ -2434,8 +2434,17 @@ fn execute_backend<W: Write + ?Sized>(
         return;
     }
     let status = response.head.status_code;
+    let observation_id = response.head.observation_id;
     match write_backend_response(stream, request_method, response, cancellation, |metadata| {
-        observe_response_metadata(context, host, method, status, likely_main_frame, metadata);
+        observe_response_metadata(
+            context,
+            host,
+            method,
+            status,
+            likely_main_frame,
+            observation_id,
+            metadata,
+        );
     }) {
         Ok(()) => observe_request(
             context,
@@ -2487,7 +2496,7 @@ fn execute_backend_tunnel<S: ClientIo + ?Sized>(
                     elapsed: started.elapsed(),
                 },
             );
-            if !cancellation.is_cancelled() {
+            if error != BackendError::Cancelled && !cancellation.is_cancelled() {
                 let (status, reason) = backend_error_status(error);
                 let _result = write_error_response(client, status, reason, &[]);
             }
@@ -2500,17 +2509,27 @@ fn execute_backend_tunnel<S: ClientIo + ?Sized>(
     let ProxyTunnel {
         head,
         stream: mut origin,
+        publication_permit,
     } = match opened {
         ProxyTunnelOpen::Tunnel(tunnel) => tunnel,
         ProxyTunnelOpen::Response(response) => {
             let status = response.head.status_code;
+            let observation_id = response.head.observation_id;
             match write_backend_response(
                 client,
                 &request_method,
                 response,
                 cancellation,
                 |metadata| {
-                    observe_response_metadata(context, host, method, status, false, metadata);
+                    observe_response_metadata(
+                        context,
+                        host,
+                        method,
+                        status,
+                        false,
+                        observation_id,
+                        metadata,
+                    );
                 },
             ) {
                 Ok(()) => observe_request(
@@ -2564,10 +2583,31 @@ fn execute_backend_tunnel<S: ClientIo + ?Sized>(
                 return;
             }
         };
-    observe_response_metadata(context, host, method, 101, false, sanitized.metadata());
-    if client.write_all(encoded.as_bytes()).is_err() || client.flush().is_err() {
+    if cancellation.is_cancelled()
+        || publication_permit
+            .publish(|| {
+                if cancellation.is_cancelled() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "proxy generation was cancelled before publication",
+                    ));
+                }
+                client.write_all(encoded.as_bytes())?;
+                client.flush()
+            })
+            .is_err()
+    {
         return;
     }
+    observe_response_metadata(
+        context,
+        host,
+        method,
+        101,
+        false,
+        head.observation_id,
+        sanitized.metadata(),
+    );
 
     match pump_tunnel(client, origin.as_mut(), cancellation) {
         TunnelPumpOutcome::Completed => observe_request(
@@ -2691,7 +2731,11 @@ where
     W: Write + ?Sized,
     F: FnOnce(&crate::InternalResponseMetadata),
 {
-    let ProxyResponse { head, body } = response;
+    let ProxyResponse {
+        head,
+        body,
+        publication_permit,
+    } = response;
     let header_pairs: Vec<_> = head
         .headers
         .into_iter()
@@ -2709,10 +2753,22 @@ where
     )
     .map_err(|_error| WriteBackendError::InvalidBeforeHead)?;
     let body_allowed = encoded.body_allowed();
-    observe_metadata(headers.metadata());
-    stream
-        .write_all(encoded.as_bytes())
+    if cancellation.is_cancelled() {
+        return Err(WriteBackendError::Io);
+    }
+    publication_permit
+        .publish(|| {
+            if cancellation.is_cancelled() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "proxy generation was cancelled before publication",
+                ));
+            }
+            stream.write_all(encoded.as_bytes())?;
+            stream.flush()
+        })
         .map_err(|_error| WriteBackendError::Io)?;
+    observe_metadata(headers.metadata());
     if !body_allowed {
         return Ok(());
     }
@@ -3221,6 +3277,7 @@ fn observe_response_metadata(
     method: ObservedMethod,
     status_code: u16,
     likely_main_frame: bool,
+    observation_id: Option<u64>,
     metadata: &crate::InternalResponseMetadata,
 ) {
     let Ok(host) = ObservedHost::new(host) else {
@@ -3232,6 +3289,7 @@ fn observe_response_metadata(
         method,
         status_code,
         likely_main_frame,
+        observation_id,
         metadata.clone(),
     );
     let _result = catch_unwind(AssertUnwindSafe(|| {
@@ -3255,6 +3313,7 @@ fn observe_proxy_generated_response(
         method,
         status_code,
         true,
+        None,
         &crate::InternalResponseMetadata::default(),
     );
 }
@@ -3267,8 +3326,9 @@ fn observe(observer: &dyn ProxyObserver, event: ProxyEvent) {
 mod tests {
     use super::*;
     use crate::{
-        NoopProxyObserver, ProxyInstanceId, ProxyResponseHead, ProxyResponseMetadataObservation,
-        ProxySessionId, ProxyTunnel, ProxyTunnelIo,
+        NoopProxyObserver, ProxyInstanceId, ProxyPublicationAuthority, ProxyPublicationPermit,
+        ProxyResponseHead, ProxyResponseMetadataObservation, ProxySessionId, ProxyTunnel,
+        ProxyTunnelIo,
     };
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -3278,7 +3338,7 @@ mod tests {
     };
     use std::collections::VecDeque;
     use std::io::Cursor;
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Mutex, mpsc};
     use std::thread;
 
@@ -3344,8 +3404,10 @@ mod tests {
                     status_code: 200,
                     reason_phrase: "OK".to_owned(),
                     headers,
+                    observation_id: None,
                 },
                 body,
+                publication_permit: Default::default(),
             }
         }
     }
@@ -3394,6 +3456,53 @@ mod tests {
         }
     }
 
+    struct GatedPublicationAuthority {
+        revoked: AtomicBool,
+        entered: Mutex<Option<mpsc::Sender<()>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl ProxyPublicationAuthority for GatedPublicationAuthority {
+        fn publish(&self, operation: &mut dyn FnMut() -> io::Result<()>) -> io::Result<()> {
+            if let Some(entered) = self
+                .entered
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            {
+                let _result = entered.send(());
+            }
+            self.release
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .recv_timeout(TEST_TIMEOUT)
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "test permit timed out"))?;
+            if self.revoked.load(AtomicOrdering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "test authority was revoked",
+                ));
+            }
+            operation()
+        }
+    }
+
+    struct PublicationPermitBackend {
+        permit: ProxyPublicationPermit,
+    }
+
+    impl ProxyBackend for PublicationPermitBackend {
+        fn execute(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyResponse, BackendError> {
+            let mut response = ResponsePlan::plain("must-not-publish").response();
+            response.publication_permit = self.permit.clone();
+            Ok(response)
+        }
+    }
+
     struct EchoTunnelBackend {
         requests: Mutex<Vec<ProxyRequest>>,
         head: ProxyResponseHead,
@@ -3414,6 +3523,7 @@ mod tests {
                         ProxyHeader::new("X-Origin-Hop", "secret"),
                         ProxyHeader::new("X-HNS-Security-Path", "secret"),
                     ],
+                    observation_id: None,
                 },
                 initial_origin_bytes: initial_origin_bytes.into(),
             }
@@ -3460,6 +3570,7 @@ mod tests {
                 stream: Box::new(EchoTunnelStream {
                     pending: self.initial_origin_bytes.iter().copied().collect(),
                 }),
+                publication_permit: Default::default(),
             }))
         }
     }
@@ -3517,8 +3628,10 @@ mod tests {
                         ProxyHeader::new("Content-Type", "text/plain"),
                         ProxyHeader::new("X-HNS-Security-Path", "verified-non-inclusion"),
                     ],
+                    observation_id: None,
                 },
                 body: ProxyResponseBody::Bytes(b"verified non-inclusion".to_vec()),
+                publication_permit: Default::default(),
             }))
         }
     }
@@ -3543,6 +3656,7 @@ mod tests {
                     status_code: 200,
                     reason_phrase: "OK".to_owned(),
                     headers: vec![],
+                    observation_id: None,
                 },
                 body: ProxyResponseBody::Stream {
                     expected_len: 1,
@@ -3551,6 +3665,7 @@ mod tests {
                         read_started,
                     }),
                 },
+                publication_permit: Default::default(),
             })
         }
     }
@@ -4634,6 +4749,42 @@ mod tests {
     }
 
     #[test]
+    fn revocation_at_backend_return_boundary_prevents_response_head_publication() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let authority = Arc::new(GatedPublicationAuthority {
+            revoked: AtomicBool::new(false),
+            entered: Mutex::new(Some(entered_tx)),
+            release: Mutex::new(release_rx),
+        });
+        let backend = Arc::new(PublicationPermitBackend {
+            permit: ProxyPublicationPermit::new(authority.clone()),
+        });
+        let proxy =
+            RunningProxy::start(test_config(), backend, Arc::new(NoopProxyObserver)).unwrap();
+        let mut client = TcpStream::connect(proxy.endpoint().address()).unwrap();
+        client.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+        let request = format!(
+            "GET http://welcome/ HTTP/1.1\r\nHost: welcome\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.flush().unwrap();
+
+        entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
+        authority.revoked.store(true, AtomicOrdering::Release);
+        release_tx.send(()).unwrap();
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        assert!(
+            response.is_empty(),
+            "revoked backend result published bytes: {response:?}"
+        );
+        proxy.stop();
+    }
+
+    #[test]
     fn iframe_response_status_is_not_marked_as_main_frame() {
         let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain(b"iframe")));
         let observations = Arc::new(Mutex::new(Vec::new()));
@@ -5156,10 +5307,12 @@ mod tests {
         let backend = Arc::new(EchoTunnelBackend::websocket(b"origin"));
         let observations = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&observations);
+        let (observed_tx, observed_rx) = mpsc::channel();
         let metadata_observer = Arc::new(move |observation: &ProxyResponseMetadataObservation| {
             sink.lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push(observation.clone());
+            let _result = observed_tx.send(());
         });
         let proxy = RunningProxy::start_with_metadata_observer(
             test_config(),
@@ -5187,6 +5340,7 @@ mod tests {
         assert!(!response_text.contains("keep-alive"));
         assert!(!response_text.contains("X-Origin-Hop"));
         assert!(!response_text.contains("X-HNS-"));
+        observed_rx.recv_timeout(TEST_TIMEOUT).unwrap();
         {
             let observations = observations
                 .lock()
@@ -5289,6 +5443,7 @@ mod tests {
                 ProxyHeader::new("Upgrade", "websocket"),
                 ProxyHeader::new("X-HNS-Security-Path", "must-not-observe"),
             ],
+            observation_id: None,
         }));
         let observations = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&observations);

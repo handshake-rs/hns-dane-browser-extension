@@ -13,7 +13,7 @@ Last audited: 2026-07-26
 - The checked-in GitHub Actions workflow always runs the Chromium policy, Rust/native-host, and extension gates. Its permissions are read-only, release secrets are not provided, every non-local `uses:` reference is pinned to a full commit SHA, checkout credentials are not persisted, and concurrent runs on the same ref are cancelled. Historical evidence: the earlier `0.4.1` cross-platform tree passed every selected job in [run 29477163745](https://github.com/Denuo-Web/hns-dane-browser/actions/runs/29477163745); that run does not validate this checkpoint.
 - Dependabot watches GitHub Actions and the active Cargo workspace weekly.
 - Rust uses toolchain `1.92.0`; metadata, build, test, Clippy, and cargo-deny commands use the committed root lock with `--locked`. Registry packages carry Cargo checksums.
-- The root workspace lock contains exactly three reviewed Cargo Git packages: `hns-icann-dane`, `hns-namespace-resolution`, and `hns-resolution-policy`, all from one immutable `handshake-rs/hns-dane-engine` revision. The dedicated verifier and nine negative/positive policy tests reject another package, URL, declaration location, alias, moving selector, or lock revision.
+- The root workspace lock contains exactly five reviewed Cargo Git packages: `hns-browser-observability`, `hns-browser-runtime`, `hns-icann-dane`, `hns-namespace-resolution`, and `hns-resolution-policy`, all from immutable `handshake-rs/hns-dane-engine` revision `a03648ec85a115362ebc2ab24bb9ea0f1be127fc`. The dedicated verifier and nine negative/positive policy tests reject another package, URL, declaration location, alias, moving selector, or lock revision.
 - cargo-deny permits only the canonical engine Git URL and reviews the active workspace's licenses, advisories, bans, and sources.
 - The Chromium notice generator takes the union of the locked non-development `hns-chromium-native-host` dependency closures for Linux, macOS, and Windows. It reproduces registry and canonical engine license text, fingerprints the active manifests and lock, and commits a full-asset SHA-256.
 - `extension/THIRD_PARTY_NOTICES.txt` is copied into the unpacked extension build and beside the installed native host on Linux, macOS, and Windows. CI verifies it without requiring a dependency cache.
@@ -25,8 +25,8 @@ Last audited: 2026-07-26
 ### Current Chromium `0.5.0` Candidate
 
 - The extension, native host, and Rust workspace declare `0.5.0`.
-- The active native-host graph consumes the three exact-pinned engine contracts above. Direct authoritative UDP/TCP precedes authenticated authoritative DoH and policy-admitted relay fallback.
-- The generated desktop notice inventories 163 external Cargo components for Linux and macOS and 168 for Windows; its committed SHA-256 is recorded in `scripts/third-party-notices.sha256`.
+- The active native-host graph consumes the five exact-pinned engine contracts above. Direct authoritative UDP/TCP precedes authenticated authoritative DoH and policy-admitted relay fallback.
+- The generated desktop notice inventories 166 external Cargo components for Linux and macOS and 171 for Windows; its committed SHA-256 is recorded in `scripts/third-party-notices.sha256`.
 - Focused qualification results for the final source checkpoint are retained in `docs/chromium-extension.md` and the ecosystem evidence repository. Hosted current-main CI remains required before release.
 
 ### Historical mobile `0.5.0` evidence

@@ -17,18 +17,24 @@ const runtime = Object.freeze({
 
 function result(overrides = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     eventSequence: 11,
     runtimeSession: "session-a",
     runtimeGeneration: 7,
     policyGeneration: 3,
     host: "welcome",
+    canonicalStatus: "available",
+    canonicalStatusUnavailableReason: null,
     namespaceOutcome: "hnsOnly",
     selectedNamespace: "hns",
     namespaceSelectionReason: "onlyAvailableRoot",
+    decisionFingerprint: "12".repeat(32),
     hnsResolutionState: "securePresent",
-    icannResolutionState: "authenticatedAbsent",
+    icannResolutionState: "absent",
     actualSelectedTransport: "directAuthoritativeTcp",
+    transportPolicy: { directAuthoritativeFirst: true },
+    providerReadiness: { dnsRelay: "disabled" },
+    registryProfile: "denuoV1",
     ...overrides
   };
 }
@@ -122,39 +128,78 @@ test("security UI validates coherent five-way and indeterminate results", () => 
       selectedNamespace: "icann",
       namespaceSelectionReason: "onlyAvailableRoot",
       hnsResolutionState: "authenticatedAbsent",
-      icannResolutionState: "insecurePresent"
+      icannResolutionState: "present"
     }),
     result({
       namespaceOutcome: "bothConvergent",
       selectedNamespace: "icann",
-      namespaceSelectionReason: "convergentDefault",
+      namespaceSelectionReason: "icannDefault",
       hnsResolutionState: "securePresent",
-      icannResolutionState: "securePresent"
+      icannResolutionState: "present"
     }),
     result({
       namespaceOutcome: "bothDivergent",
       selectedNamespace: "icann",
       namespaceSelectionReason: "icannDefault",
       hnsResolutionState: "securePresent",
-      icannResolutionState: "securePresent"
+      icannResolutionState: "present"
     }),
     result({
       namespaceOutcome: "neither",
       selectedNamespace: null,
       namespaceSelectionReason: "unavailable",
       hnsResolutionState: "authenticatedAbsent",
-      icannResolutionState: "insecureAbsent"
+      icannResolutionState: "absent"
     }),
     result({
       namespaceOutcome: "indeterminate",
       selectedNamespace: null,
       namespaceSelectionReason: "unavailable",
+      decisionFingerprint: null,
       hnsResolutionState: "failed",
-      icannResolutionState: "securePresent"
+      icannResolutionState: "unknown"
     })
   ];
 
   for (const fixture of fixtures) {
     assert.equal(currentSecurityResult(fixture, runtime), fixture);
   }
+});
+
+test("security UI never accepts a synthesized result for canonical unavailability", () => {
+  const unavailable = result({
+    canonicalStatus: "unavailable",
+    canonicalStatusUnavailableReason: "evidenceUnavailable",
+    namespaceOutcome: "indeterminate",
+    selectedNamespace: null,
+    namespaceSelectionReason: "unavailable",
+    decisionFingerprint: null,
+    hnsResolutionState: "unknown",
+    icannResolutionState: "unknown",
+    actualSelectedTransport: "unavailable",
+    peerIdentity: null,
+    proxyIdentity: null,
+    targetIdentity: null,
+    transportPolicy: null,
+    providerReadiness: null,
+    registryProfile: null,
+    registryFingerprint: null,
+    protocolVersion: null
+  });
+
+  assert.equal(currentSecurityResult(unavailable, runtime), null);
+  assert.equal(
+    currentSecurityResult(
+      { ...unavailable, actualSelectedTransport: "handshakeP2pDnsRelay" },
+      runtime
+    ),
+    null
+  );
+  assert.equal(
+    currentSecurityResult(
+      { ...unavailable, peerIdentity: "198.51.100.7:12038" },
+      runtime
+    ),
+    null
+  );
 });

@@ -27,7 +27,11 @@ async function refresh() {
   document.querySelector("#state-detail").textContent = security
     ? namespaceSummary(security)
     : active
-      ? "No browser main-frame security result has been recorded in this proxy generation."
+      ? status.latestMainFrameSecurityUnavailableReason
+        ? `Checked main-frame security status unavailable: ${stateLabel(
+            status.latestMainFrameSecurityUnavailableReason
+          )}.`
+        : "No browser main-frame security result has been recorded in this proxy generation."
       : `Fail-closed reason: ${status.reason ?? status.state ?? "runtime unavailable"}`;
   document.querySelector("#runtime-generation").textContent =
     status.runtimeGeneration ?? "—";

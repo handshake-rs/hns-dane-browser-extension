@@ -7,15 +7,19 @@ are not part of this checkpoint's build graph, and they do not establish
 mobile dual-root or ICANN-DANE coverage. Current mobile work lives in the
 separate canonical
 [`hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile)
-repository. The shared namespace, DANE, and resolution-policy crates are pinned to
-`handshake-rs/hns-dane-engine` commit
-`2850ac1f50e361e2772e18f2e5ecbd7e77085afb`.
+repository. The shared browser runtime, observability, namespace, DANE, and
+resolution-policy crates are pinned to `handshake-rs/hns-dane-engine` commit
+`a03648ec85a115362ebc2ab24bb9ea0f1be127fc`.
 
 The active local `hns-chromium-platform-runtime` crate is this Chromium
 product's storage, network, proxy, PAC, and native-host adapter. It is distinct
 from the canonical engine's `hns-browser-runtime`, which owns the shared
-session-bound authority lifecycle and monotonic clock. This rename does not
-claim that the canonical lifecycle has already replaced the product adapter.
+session-bound authority lifecycle and monotonic clock. The adapter now embeds
+that canonical authority, derives its runtime session from the exact
+authenticated proxy-session bytes, and emits checked `hns-browser-observability`
+status when the exact typed evidence is representable. This integration does
+not replace the product-specific storage, resolver, transport, or proxy
+adapter.
 
 ## Layers
 
@@ -54,16 +58,25 @@ iOS UI / Browser Shell                             [historical/non-release]
 - `hns-transport`: bounded HTTP/1.1 origin transport over TCP or rustls TLS with same-origin keep-alive pooling, HTTPS rustls session resumption scoped to the active certificate policy, parser/transport support for experimental stateless DANE evidence, safe same-port Alt-Svc promotion to HTTP/2 or HTTP/3, HTTPS HTTP/2 origin transport over Tokio/Rustls, HTTPS HTTP/3 origin transport over Quinn/h3 with QUIC TLS bound to the same DNSSEC-gated TLSA/DANE certificate policy, WebPKI fallback, fail-closed response framing for unsupported transfer codings or ambiguous lengths, decoded response body streaming to caller-provided writers, and native HTTP/1.1 Upgrade tunnel opening for WebSocket/Upgrade streams after request validation. The atomic dual-root plan currently rejects selected HNS HTTPS without live secure TLSA before the certificate-evidence fallback can run; stateless DANE is therefore not a supported Chromium feature until the shared contract gains a typed trust policy.
 - `hns-gateway`: loopback gateway interfaces, secure-resolution checks, owner-scoped resolved A/AAAA connect-address routing with validated CNAME-chain terminal address support, delegated origin A/AAAA lookup for all-record Android gateway starts and origin-focused A/AAAA requests, separate HTTPS/SVCB service lookup for address-only answers, HTTPS/SVCB ALPN and service-port policy selection constrained to configured origin protocol support, HTTP/1.1 default fallback when SVCB does not disable default ALPN, tunnel-specific HTTPS/SVCB policy that requires HTTP/1.1 support for WebSocket/Upgrade streams, fail-closed HNS no-address/nameserver handling, exact service-owner DNSSEC-secure TLSA lookup, strict and compatibility HNS HTTPS policy modes, and validation error mapping.
 - `hns-cache`: bounded TTL cache primitives.
+- `hns-browser-runtime` (canonical engine dependency): nonzero
+  session identity, monotonic runtime generation and event clock, and the
+  canonical authority lifecycle used for admission stamps and revocation.
+- `hns-browser-observability` (canonical engine dependency): checked,
+  name-free schema-v2 browser status. Chromium publishes it only when the
+  selected typed plan, exact request transport, and required identities satisfy
+  every cross-field invariant; otherwise the local typed status records an
+  explicit unavailable reason without failing the request.
 - `hns-resolution-policy` (canonical engine dependency): typed requester,
   ODoH, HNSR, provider/output-role, wire-profile, and authoritative-DoH
   controls plus a direct-authority-first transport plan. The Chromium adapter
   constructs every field explicitly: its existing relay checkbox maps to
-  requester `Disabled` or `Auto`, while unsupported ODoH/HNSR paths, every
-  provider/output role, and legacy compatibility stay off. The historical
-  runtime relay boolean is derived only from whether that canonical plan
-  contains the P2P DNS-relay transport.
-- `hns-chromium-platform-runtime`: Chromium product ownership boundary for immutable network and storage configuration, revisioned runtime policy, independent experimental-relay and legacy-DoH controls, per-handle HTTP transport, synchronization and maintenance coordination, peer-state serialization, header sync and snapshots, resolver cache controls, proof diagnostics, gateway requests, and a typed `RuntimeProxyBackend` that shares the runtime's resolver/storage/transport state with ordinary and Upgrade proxy traffic. Its live delegated resolver now follows the canonical order: direct authoritative UDP/TCP 53, proof-authenticated authoritative DoH, the private P2P relay, and optional legacy DoH. It retains the historical immutable exact-HNS-scope startup for Android and optional-scope whole-browser startup for Apple. Whole-browser ICANN address discovery uses bounded WebPKI-authenticated DoH to explicit bootstrap addresses and returns only validated public A/AAAA endpoints; it does not resolve browser targets through the host operating system. The runtime also converts trusted internal response metadata into a bounded, typed, trace-redacted `BrowserProxyStatus` surface for native security UI.
-- `hns-loopback-proxy`: platform-neutral, JNI-free loopback proxy with a fresh authenticated endpoint on an ephemeral IPv4 `127.0.0.1` port. Its Android mode has an immutable exact HNS root/subdomain scope and rejects everything else. Its Apple mode covers the whole WebKit data store: the admitted HNS scope uses the shared HNS backend and Rust-owned exact-host P-256 TLS identities, while ICANN HTTP, CONNECT, and WebSocket traffic is forwarded only to explicit public addresses supplied by the runtime. Both modes share strict bounded HTTP/1 parsing/framing, unsafe-port and special-address policy, request/response header sanitization, active-client limits, streamed response bodies, live instance/host/certificate authorization, typed status, and owned cancellation-and-join lifecycle.
+  requester `Disabled` or `Auto`; the browser explicitly opts out of the
+  canonical default-on opaque provider-relay role, while independently
+  opt-in output/target roles, unsupported ODoH/HNSR paths, and legacy
+  compatibility stay off. The historical runtime relay boolean is derived
+  only from whether that canonical plan contains the P2P DNS-relay transport.
+- `hns-chromium-platform-runtime`: Chromium product ownership boundary for immutable network and storage configuration, revisioned runtime policy, independent experimental-relay and legacy-DoH controls, per-handle HTTP transport, synchronization and maintenance coordination, peer-state serialization, header sync and snapshots, resolver cache controls, proof diagnostics, gateway requests, and a typed `RuntimeProxyBackend` that shares the runtime's resolver/storage/transport state with ordinary and Upgrade proxy traffic. It binds the authenticated proxy generation only after listener startup, leaves fresh profiles non-admitting while headers synchronize, and revalidates factual header/proof readiness at admission and before every stamped publication. Its live delegated resolver follows the canonical order: direct authoritative UDP/TCP 53, proof-authenticated authoritative DoH, the private P2P relay, and optional legacy DoH. Whole-browser ICANN address discovery uses bounded WebPKI-authenticated DoH to explicit bootstrap addresses and returns only validated public A/AAAA endpoints; it does not resolve browser targets through the host operating system. The runtime converts trusted internal response metadata into a bounded, typed, trace-redacted `BrowserProxyStatus` surface for native security UI.
+- `hns-loopback-proxy`: platform-neutral, JNI-free loopback proxy with a fresh authenticated endpoint on an ephemeral IPv4 `127.0.0.1` port. Its Android mode has an immutable exact HNS root/subdomain scope and rejects everything else. Its Apple mode covers the whole WebKit data store: the admitted HNS scope uses the shared HNS backend and Rust-owned exact-host P-256 TLS identities, while ICANN HTTP, CONNECT, and WebSocket traffic is forwarded only to explicit public addresses supplied by the runtime. Both modes share strict bounded HTTP/1 parsing/framing, unsafe-port and special-address policy, request/response header sanitization, active-client limits, streamed response bodies, live instance/host/certificate authorization, typed status, and owned cancellation-and-join lifecycle. Backend responses and Upgrade tunnels carry a publication permit so the final authority check and loopback response-head write are atomic with respect to policy, stop, and generation invalidation.
 - `android-ffi`: historical Android JNI adapter, excluded from workspace membership and this release graph.
 - `ios-ffi`: historical Apple C ABI adapter, excluded from workspace membership and this release graph.
 - `rust/fuzz`: parser fuzz smoke targets for DNS messages/names/SVCB, HNS resource values, P2P frames/payloads, Urkel proofs, TLSA records, and X.509 SPKI extraction.

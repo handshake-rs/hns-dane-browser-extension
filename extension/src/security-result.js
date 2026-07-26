@@ -1,4 +1,4 @@
-const SECURITY_RESULT_SCHEMA_VERSION = 2;
+const SECURITY_RESULT_SCHEMA_VERSION = 3;
 
 const TRANSPORT_LABELS = Object.freeze({
   directAuthoritativeUdp: "Direct authoritative UDP",
@@ -36,6 +36,8 @@ const NAMESPACE_REASON_LABELS = Object.freeze({
 const HNS_ROOT_STATES = new Set([
   "securePresent",
   "authenticatedAbsent",
+  "present",
+  "absent",
   "failed",
   "unknown"
 ]);
@@ -45,9 +47,14 @@ const ICANN_ROOT_STATES = new Set([
   "insecurePresent",
   "authenticatedAbsent",
   "insecureAbsent",
+  "present",
+  "absent",
   "failed",
   "unknown"
 ]);
+
+const CANONICAL_STATUS_STATES = new Set(["available"]);
+const REGISTRY_PROFILES = new Set(["denuoV1", "official", "auto"]);
 
 export function currentSecurityResult(candidate, runtime) {
   if (!isRecord(candidate) || !isRecord(runtime)) return null;
@@ -64,12 +71,13 @@ export function currentSecurityResult(candidate, runtime) {
     typeof candidate.host !== "string" ||
     candidate.host.length < 1 ||
     candidate.host.length > 253 ||
+    !CANONICAL_STATUS_STATES.has(candidate.canonicalStatus) ||
     !Object.hasOwn(NAMESPACE_OUTCOME_LABELS, candidate.namespaceOutcome) ||
     !Object.hasOwn(NAMESPACE_REASON_LABELS, candidate.namespaceSelectionReason) ||
     !HNS_ROOT_STATES.has(candidate.hnsResolutionState) ||
     !ICANN_ROOT_STATES.has(candidate.icannResolutionState) ||
-    !validNamespaceDecision(candidate) ||
-    !Object.hasOwn(TRANSPORT_LABELS, candidate.actualSelectedTransport)
+    !Object.hasOwn(TRANSPORT_LABELS, candidate.actualSelectedTransport) ||
+    !validCanonicalSecurityResult(candidate)
   ) {
     return null;
   }
@@ -122,13 +130,13 @@ function validNamespaceDecision(candidate) {
   if (outcome === "hnsOnly") {
     return (
       hns === "securePresent" &&
-      ["authenticatedAbsent", "insecureAbsent"].includes(icann) &&
+      icann === "absent" &&
       ["explicitPin", "stickyBinding", "onlyAvailableRoot"].includes(reason)
     );
   }
   if (outcome === "icannOnly") {
     return (
-      ["securePresent", "insecurePresent"].includes(icann) &&
+      icann === "present" &&
       hns === "authenticatedAbsent" &&
       ["explicitPin", "stickyBinding", "onlyAvailableRoot"].includes(reason)
     );
@@ -136,21 +144,21 @@ function validNamespaceDecision(candidate) {
   if (outcome === "bothConvergent") {
     return (
       hns === "securePresent" &&
-      ["securePresent", "insecurePresent"].includes(icann) &&
-      ["explicitPin", "stickyBinding", "convergentDefault"].includes(reason)
+      icann === "present" &&
+      ["explicitPin", "stickyBinding", "icannDefault"].includes(reason)
     );
   }
   if (outcome === "bothDivergent") {
     return (
       hns === "securePresent" &&
-      ["securePresent", "insecurePresent"].includes(icann) &&
+      icann === "present" &&
       ["explicitPin", "stickyBinding", "icannDefault"].includes(reason)
     );
   }
   if (outcome === "neither") {
     return (
       hns === "authenticatedAbsent" &&
-      ["authenticatedAbsent", "insecureAbsent"].includes(icann) &&
+      icann === "absent" &&
       reason === "unavailable"
     );
   }
@@ -159,6 +167,30 @@ function validNamespaceDecision(candidate) {
     selected == null &&
     reason === "unavailable" &&
     [hns, icann].some((state) => state === "failed" || state === "unknown")
+  );
+}
+
+function validCanonicalSecurityResult(candidate) {
+  if (
+    candidate.canonicalStatusUnavailableReason != null ||
+    !validNamespaceDecision(candidate) ||
+    !REGISTRY_PROFILES.has(candidate.registryProfile) ||
+    !isRecord(candidate.transportPolicy) ||
+    !isRecord(candidate.providerReadiness)
+  ) {
+    return false;
+  }
+  const hasDecision = candidate.namespaceOutcome !== "indeterminate";
+  return hasDecision
+    ? validDecisionFingerprint(candidate.decisionFingerprint)
+    : candidate.decisionFingerprint == null;
+}
+
+function validDecisionFingerprint(value) {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{64}$/.test(value) &&
+    value !== "0".repeat(64)
   );
 }
 

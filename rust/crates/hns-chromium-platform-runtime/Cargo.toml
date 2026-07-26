@@ -6,6 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+hns-browser-observability.workspace = true
+hns-browser-runtime.workspace = true
 hns-chain.workspace = true
 hns-core.workspace = true
 hns-dane.workspace = true
@@ -13,6 +15,7 @@ hns-gateway.workspace = true
 hns-loopback-proxy.workspace = true
 hns-namespace-resolution.workspace = true
 hns-p2p.workspace = true
+hns-resolution-policy.workspace = true
 hns-resolver.workspace = true
 hns-sync.workspace = true
 hns-transport.workspace = true

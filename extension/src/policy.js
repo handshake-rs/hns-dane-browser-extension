@@ -2,7 +2,6 @@ export const DEFAULT_POLICY = Object.freeze({
   p2pDnsRelay: false,
   p2pOdoh: "off",
   privacyDowngrade: "failClosed",
-  hnsr: "off",
   experimentalWireProfile: "stable"
 });
 
@@ -15,7 +14,6 @@ export const LEGACY_HNS_DOH_KEYS = Object.freeze([
 
 const P2P_ODOH_MODES = new Set(["off", "preferred", "required", "directAllowed"]);
 const PRIVACY_DOWNGRADES = new Set(["failClosed", "allowDirect"]);
-const HNSR_MODES = new Set(["off", "client", "endpoint"]);
 const WIRE_PROFILES = new Set(["stable", "hipDrafts", "denuoExtension"]);
 
 export function normalizePolicy(value) {
@@ -28,7 +26,6 @@ export function normalizePolicy(value) {
       PRIVACY_DOWNGRADES,
       "failClosed"
     ),
-    hnsr: memberOrDefault(candidate.hnsr, HNSR_MODES, "off"),
     experimentalWireProfile: memberOrDefault(
       candidate.experimentalWireProfile,
       WIRE_PROFILES,

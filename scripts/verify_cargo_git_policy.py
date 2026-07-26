@@ -13,12 +13,14 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE_GIT_URL = "https://github.com/handshake-rs/hns-dane-engine.git"
-ENGINE_REVISION = "2850ac1f50e361e2772e18f2e5ecbd7e77085afb"
+ENGINE_REVISION = "a03648ec85a115362ebc2ab24bb9ea0f1be127fc"
 ENGINE_LOCK_SOURCE = (
     f"git+{ENGINE_GIT_URL}?rev={ENGINE_REVISION}#{ENGINE_REVISION}"
 )
 ALLOWED_ENGINE_PACKAGES = frozenset(
     {
+        "hns-browser-observability",
+        "hns-browser-runtime",
         "hns-icann-dane",
         "hns-namespace-resolution",
         "hns-resolution-policy",
@@ -183,7 +185,7 @@ def main() -> int:
         print(f"Cargo Git dependency policy failed: {error}", file=sys.stderr)
         return 1
     print(
-        "Cargo Git dependency policy permits only the three canonical "
+        "Cargo Git dependency policy permits only the five canonical "
         f"hns-dane-engine packages at {ENGINE_REVISION}."
     )
     return 0

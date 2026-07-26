@@ -858,8 +858,11 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeG
                     body,
                 },
             ))
-            .map(|((runtime, policy), request)| {
-                runtime.raw_gateway_request(request, policy).into_bytes()
+            .and_then(|((runtime, policy), request)| {
+                runtime
+                    .raw_gateway_request(request, policy)
+                    .ok()
+                    .map(GatewayHttpResponse::into_bytes)
             });
         match response.and_then(|bytes| env.byte_array_from_slice(&bytes).ok()) {
             Some(array) => array.into_raw(),
