@@ -10,7 +10,9 @@ The retained `android/`, `ios/`, `android-ffi`, and `ios-ffi` trees are
 historical source only. They are excluded from the Cargo workspace and from
 this release checkpoint; they do not establish mobile dual-root or ICANN-DANE
 coverage. The canonical mobile browser is maintained and qualified in the
-separate `hns-dane-browser-mobile` repository.
+separate
+[`hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile)
+repository.
 
 ## Layout
 
@@ -95,4 +97,4 @@ Donations are optional and do not unlock any app features.
 
 This repository is source-available under the PolyForm Noncommercial License 1.0.0. Noncommercial use, study, modification, and redistribution are allowed under the license. Commercial use requires separate written permission from Denuo Web, LLC.
 
-Source code: https://github.com/Denuo-Web/hns-dane-browser
+Source code: https://github.com/handshake-rs/hns-dane-browser-extension

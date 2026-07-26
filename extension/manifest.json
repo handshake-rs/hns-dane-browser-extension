@@ -3,6 +3,7 @@
   "name": "HNS DANE Browser",
   "description": "Routes web DNS names through a local Rust dual-root DNSSEC and DANE runtime.",
   "version": "0.5.0",
+  "homepage_url": "https://github.com/handshake-rs/hns-dane-browser-extension",
   "minimum_chrome_version": "121",
   "permissions": [
     "alarms",

@@ -249,16 +249,18 @@ checkpoint.
 This clone still contains its historical `hns-browser-runtime`,
 `hns-gateway`, and `hns-transport` implementations. TLSA owner derivation and
 the validating-DoH trust decision now come from the canonical
-`hns-icann-dane` crate through a checked path dependency. The surrounding
-gateway, resolver adapter, and transport integration remain historical clone
-code pending broader engine consolidation.
+`hns-icann-dane` crate through an immutable Git dependency on
+`handshake-rs/hns-dane-engine` commit
+`127b9ad55852df00b4df40826517715048dc3571`. The surrounding gateway,
+resolver adapter, and transport integration remain historical clone code
+pending broader engine consolidation.
 The separately coordinated `hns-dane-engine` repository now defines the
 canonical session-bound browser authority and bridge-authorization boundary.
 This checkpoint aligns Chromium observability with its session, runtime
 generation, policy generation, and event-sequence invariants, but does not
 claim that the duplicate runtime has been replaced or that the canonical
-contract is a published dependency. That consolidation, P2P ODoH, HNSR, and
-non-stable experimental wire profiles remain fail-closed work.
+contract is a registry-published dependency. That consolidation, P2P ODoH,
+HNSR, and non-stable experimental wire profiles remain fail-closed work.
 
 The retained Android/iOS source and FFI directories are historical and excluded
 from the Cargo workspace/release graph. Mobile dual-root and ICANN-DANE

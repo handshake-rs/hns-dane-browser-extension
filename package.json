@@ -3,6 +3,10 @@
   "version": "0.5.0",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/handshake-rs/hns-dane-browser-extension.git"
+  },
   "scripts": {
     "lint:extension": "node extension/scripts/lint.mjs",
     "test:extension": "cargo +1.92.0 build --locked --manifest-path rust/Cargo.toml -p hns-chromium-native-host && node --test extension/tests/*.test.mjs",

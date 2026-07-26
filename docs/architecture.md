@@ -5,7 +5,11 @@ host. The `android/`, `ios/`, `android-ffi`, and `ios-ffi` trees below are
 historical source only: their FFI crates are not Cargo workspace members, they
 are not part of this checkpoint's build graph, and they do not establish
 mobile dual-root or ICANN-DANE coverage. Current mobile work lives in the
-separate canonical `hns-dane-browser-mobile` repository.
+separate canonical
+[`hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile)
+repository. The shared namespace/DANE policy crates are pinned to
+`handshake-rs/hns-dane-engine` commit
+`127b9ad55852df00b4df40826517715048dc3571`.
 
 ## Layers
 
