@@ -6,7 +6,7 @@ Android and iOS work lives in
 
 The Chromium adapter consumes five canonical browser contracts from
 `handshake-rs/hns-dane-engine` at immutable revision
-`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`. The canonical
+`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`. The canonical
 `hns-browser-runtime` owns session-bound request authority;
 `hns-browser-observability` checks typed status;
 `hns-icann-dane` owns ICANN TLSA policy;
@@ -34,6 +34,12 @@ WS, and WSS to Rust, covering initial pages, redirects, subresources, Service
 Workers, downloads, and WebSockets through the browser proxy boundary.
 Malformed names, IP literals, special-use names, and non-web schemes are not
 classified as public DNS names by the PAC.
+
+Some HNS proofs contain the selected origin address, service, and TLSA data
+without requiring delegated DNS. Those successful results use the shared
+status-only `LocalHnsProof` provenance. It never enters the network transport
+plan or transport admission, and prevents a proof-contained main-frame result
+from being discarded merely because no DNS socket was used.
 
 ## Dual-root authority
 
@@ -159,3 +165,29 @@ proof, DNSSEC, HTTPS/SVCB, TLSA, and DANE checks.
 This repository implements no provider service. It opts out of opaque relay
 serving and leaves every output-node role disabled. HNSR and P2P ODoH are
 unimplemented and fail closed.
+
+## Explicit recursive HNS DoH recovery
+
+The new user-configured recursive endpoint is a terminal, separately
+generation-bound requester transport:
+
+```text
+direct authoritative UDP/TCP
+  -> proof-anchored owner authoritative DoH
+  -> opted-in requester-only P2P relay
+  -> opted-in user-configured recursive HNS DoH
+  -> fail closed
+```
+
+The last edge exists only when the new URL is nonblank and Rust accepts its
+strict HTTPS/hostname/port form. It is taken only for `DnsTransport` or
+positively confirmed `Port53InterceptionDetected`. Response codes, malformed
+wire data, DNSSEC failure, relay DNSSEC failure, and stale/missing chain or
+proof evidence cannot cross it.
+
+Endpoint bootstrap uses fixed-address validating ICANN DoH, never system DNS.
+The connection targets an explicit public IP while WebPKI authenticates the
+configured hostname. Its RFC 8484 response remains raw input to the local HNS
+DNSSEC/TLSA/DANE stack; AD is ignored. Canonical status reports
+`userConfiguredRecursiveHnsDoh` and
+`userConfiguredRecursiveResolver`, never authoritative DoH.

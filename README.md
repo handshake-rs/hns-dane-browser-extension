@@ -30,7 +30,7 @@ malformed data, and resolver failure fail closed.
 The native host integrates the five canonical browser contracts from
 [`handshake-rs/hns-dane-engine`](https://github.com/handshake-rs/hns-dane-engine)
 at immutable revision
-`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`:
+`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`:
 
 - `hns-browser-runtime`;
 - `hns-browser-observability`;
@@ -57,6 +57,17 @@ This requester setting does not advertise or enable any service. The Chromium
 product opts out of opaque relay serving and enables no output-node/provider
 role. Ecosystem defaults for opaque relaying and explicit output-node consent
 belong to the products that implement those services.
+
+The options page also accepts an explicit recursive HNS DoH recovery URL. It
+is blank and disabled by default, is never inherited from historical resolver
+settings, and is generation-bound separately from P2P consent. The exact HNS
+transport order is direct authoritative UDP/TCP, proof-anchored owner
+authoritative DoH, an opted-in requester-only P2P relay, then the configured
+recursive endpoint. The final endpoint is eligible only after a typed
+transport failure or confirmed port-53 interception; invalid responses, DNS
+failure codes, bogus DNSSEC, and missing or stale proof/chain evidence remain
+terminal. Returned RFC 8484 bytes are locally DNSSEC- and DANE-validated; the
+resolver's AD bit is not trusted.
 
 HNSR is not implemented by this native host. Requests for that role fail
 closed, and the extension does not present an HNSR control. P2P ODoH, privacy

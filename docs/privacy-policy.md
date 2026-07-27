@@ -10,8 +10,9 @@ advertising, or browsing-history service.
 The extension and native host keep only data needed to provide the browser
 feature, including:
 
-- extension settings, the explicit P2P DNS-relay requester choice, and the
-  local timestamp of the last header-sync attempt used for retry limiting;
+- extension settings, the explicit P2P DNS-relay requester choice, the
+  independently configured recursive HNS DoH URL, and the local timestamp of
+  the last header-sync attempt used for retry limiting;
 - native-host registration and installation markers;
 - a per-install local CA key and certificate;
 - Handshake headers, peer state, verified proof/resource cache, namespace
@@ -31,12 +32,22 @@ ICANN by the Rust native host. ICANN resolution and TLSA discovery use the
 configured validating ICANN DoH service. That resolver can observe queried
 ICANN names and the caller's network address.
 
-HNS names are not sent to a public recursive HNS resolver. After local header
-and proof validation, direct delegated authority is preferred. If the user
-explicitly enables the experimental P2P DNS-relay requester, a selected peer
-can observe the relayed qname, qtype, timing, and source connection. Ordinary
-Handshake TCP does not provide query confidentiality. The relay is not ODoH.
-Relayed answers remain untrusted and are validated locally.
+HNS names are not sent automatically to a public recursive HNS resolver. After
+local header and proof validation, Rust tries direct delegated authority and
+proof-anchored owner authoritative DoH first. If the user explicitly enables
+the experimental P2P DNS-relay requester, a selected peer can observe the
+relayed qname, qtype, timing, and source connection. Ordinary Handshake TCP
+does not provide query confidentiality. The relay is not ODoH. Relayed answers
+remain untrusted and are validated locally.
+
+A separate recursive HNS DoH field is blank by default and no request is sent
+to such an operator while it remains blank. If the user enters and applies a
+URL, that operator can observe HNS qnames and qtypes, request timing, and the
+user's source IP when the typed recovery path is selected. Historical
+resolver values are not migrated. The configured hostname is bootstrapped
+through built-in validating ICANN DoH rather than system DNS; the configured
+operator's raw replies remain subject to local HNS DNSSEC/TLSA/DANE
+validation, and its AD bit is not trusted.
 
 The browser setting controls requester behavior only. This product advertises
 no opaque relay or output-node/provider service.

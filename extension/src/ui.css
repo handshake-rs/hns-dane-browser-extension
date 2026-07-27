@@ -77,12 +77,39 @@ dl div {
 }
 
 select,
+input[type="url"],
 button {
   border: 1px solid #3a6654;
   border-radius: 8px;
   padding: 10px 12px;
   background: #173429;
   color: inherit;
+}
+
+.field-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.field-stack input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+}
+
+.field-stack button {
+  justify-self: end;
+}
+
+.warning {
+  margin: 10px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #765f28;
+  border-radius: 8px;
+  background: #2c2614;
+  color: #eadba7;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 button {

@@ -16,6 +16,30 @@
         <div><dt>Policy generation</dt><dd id="policy-generation">—</dd></div>
         <div><dt>Local CA</dt><dd id="ca-state">—</dd></div>
       </dl>
+      <h2>Latest browser main frame</h2>
+      <dl>
+        <div><dt>Origin</dt><dd id="security-origin">—</dd></div>
+        <div><dt>Page proof anchor</dt><dd id="security-proof-anchor">—</dd></div>
+        <div><dt>Namespace result</dt><dd id="security-namespace-outcome">—</dd></div>
+        <div><dt>Selected namespace</dt><dd id="security-namespace-selected">—</dd></div>
+        <div><dt>Selection reason</dt><dd id="security-namespace-reason">—</dd></div>
+        <div><dt>HNS resolution</dt><dd id="security-hns-resolution">—</dd></div>
+        <div><dt>ICANN resolution</dt><dd id="security-icann-resolution">—</dd></div>
+        <div><dt>DNS transport</dt><dd id="security-transport">—</dd></div>
+        <div><dt>HNS proof</dt><dd id="security-hns-proof">—</dd></div>
+        <div><dt>DNSSEC</dt><dd id="security-dnssec">—</dd></div>
+        <div><dt>TLSA</dt><dd id="security-tlsa">—</dd></div>
+        <div><dt>DANE</dt><dd id="security-dane">—</dd></div>
+        <div><dt>Security event</dt><dd id="security-event">—</dd></div>
+      </dl>
+      <div class="actions">
+        <button id="retry" type="button">Retry</button>
+        <button id="settings" type="button" class="secondary">Settings</button>
+      </div>
+      <p class="warning">
+        Network intercepting port 53? Settings can enable the requester-only P2P DNS relay or an
+        explicit recursive HNS DoH recovery URL. Both retain local DNSSEC and DANE verification.
+      </p>
       <h2>Header chain</h2>
       <p id="header-detail" class="section-detail" aria-live="polite">
         Reading validated header status…
@@ -38,26 +62,6 @@
       </dl>
       <div class="actions section-actions">
         <button id="sync-headers" type="button">Sync headers now</button>
-      </div>
-      <h2>Latest browser main frame</h2>
-      <dl>
-        <div><dt>Origin</dt><dd id="security-origin">—</dd></div>
-        <div><dt>Page proof anchor</dt><dd id="security-proof-anchor">—</dd></div>
-        <div><dt>Namespace result</dt><dd id="security-namespace-outcome">—</dd></div>
-        <div><dt>Selected namespace</dt><dd id="security-namespace-selected">—</dd></div>
-        <div><dt>Selection reason</dt><dd id="security-namespace-reason">—</dd></div>
-        <div><dt>HNS resolution</dt><dd id="security-hns-resolution">—</dd></div>
-        <div><dt>ICANN resolution</dt><dd id="security-icann-resolution">—</dd></div>
-        <div><dt>DNS transport</dt><dd id="security-transport">—</dd></div>
-        <div><dt>HNS proof</dt><dd id="security-hns-proof">—</dd></div>
-        <div><dt>DNSSEC</dt><dd id="security-dnssec">—</dd></div>
-        <div><dt>TLSA</dt><dd id="security-tlsa">—</dd></div>
-        <div><dt>DANE</dt><dd id="security-dane">—</dd></div>
-        <div><dt>Security event</dt><dd id="security-event">—</dd></div>
-      </dl>
-      <div class="actions">
-        <button id="retry" type="button">Retry</button>
-        <button id="settings" type="button" class="secondary">Settings</button>
       </div>
     </main>
     <script type="module" src="popup.js"></script>

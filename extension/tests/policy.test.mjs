@@ -9,7 +9,10 @@ import {
 test("legacy public HNS DoH settings are removed without inheriting relay consent", () => {
   const migration = migrateStoredSettings({
     legacyHnsDohCompatibility: true,
-    hnsDohResolver: "https://resolver.invalid/dns-query"
+    hnsDohResolver: "https://legacy.example/dns-query",
+    policy: {
+      hnsDohResolver: "https://nested-legacy.example/dns-query"
+    }
   });
   assert.deepEqual(migration.policy, DEFAULT_POLICY);
   assert.deepEqual(migration.removedLegacyKeys, [
@@ -30,10 +33,43 @@ test("policy normalization is bounded to known native-host values", () => {
       experimentalWireProfile: "future"
     }),
     {
+      recursiveHnsDohUrl: "",
       p2pDnsRelay: true,
       p2pOdoh: "off",
       privacyDowngrade: "allowDirect",
       experimentalWireProfile: "stable"
     }
   );
+});
+
+test("new recursive HNS DoH consent is explicit, blank by default, and bounded", () => {
+  assert.equal(normalizePolicy({}).recursiveHnsDohUrl, "");
+  assert.equal(
+    normalizePolicy({
+      recursiveHnsDohUrl: "  https://hnsdoh.com/dns-query  "
+    }).recursiveHnsDohUrl,
+    "https://hnsdoh.com/dns-query"
+  );
+  assert.equal(
+    normalizePolicy({ recursiveHnsDohUrl: "x".repeat(10_000) })
+      .recursiveHnsDohUrl.length,
+    2_049
+  );
+});
+
+test("migration preserves only the new resolver key and never revives legacy values", () => {
+  const migrated = migrateStoredSettings({
+    hnsDohResolver: "https://legacy.example/dns-query",
+    policy: {
+      hnsDohResolver: "https://nested-legacy.example/dns-query",
+      recursiveHnsDohUrl: "https://hnsdoh.com/dns-query"
+    }
+  });
+
+  assert.equal(
+    migrated.policy.recursiveHnsDohUrl,
+    "https://hnsdoh.com/dns-query"
+  );
+  assert.deepEqual(migrated.removedLegacyKeys, ["hnsDohResolver"]);
+  assert.equal(migrated.migration.version, 2);
 });

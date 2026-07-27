@@ -20,14 +20,20 @@ The direct-authority-first order is:
    fails, including when a positive matching TEST-NET canary classifies port
    53 as intercepted;
 4. experimental HNS P2P DNS relay, when the browser requester is explicitly
-   opted in.
+   opted in; and
+5. the independently user-configured recursive HNS DoH recovery endpoint,
+   when present and the earlier stages ended in typed transport
+   unavailability.
 
 A positive canary stops futile TCP and remaining direct-server attempts for
 the intercepted path. A timeout or inconclusive canary does not classify
 interception or authenticated absence.
 
-No production path uses a public recursive HNS resolver. Relayed bytes never
-set `secure` by themselves and cannot replace a missing or stale local proof.
+No production path selects or contacts a public recursive HNS resolver
+automatically. The optional configured endpoint is a separate explicit
+consent, not part of the P2P checkbox. Relayed or recursively returned bytes
+never set `secure` by themselves and cannot replace a missing or stale local
+proof.
 
 ## Consent and role separation
 

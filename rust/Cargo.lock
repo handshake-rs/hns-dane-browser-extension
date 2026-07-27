@@ -537,7 +537,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-observability"
 version = "0.1.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159#fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5#7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5"
 dependencies = [
  "hns-browser-runtime",
  "hns-icann-dane",
@@ -549,15 +549,15 @@ dependencies = [
 [[package]]
 name = "hns-browser-runtime"
 version = "0.1.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159#fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5#7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5"
 
 [[package]]
 name = "hns-cache"
-version = "0.5.1"
+version = "0.5.2"
 
 [[package]]
 name = "hns-chain"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hns-core",
  "rusqlite",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "hns-chromium-native-host"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64",
  "getrandom 0.3.4",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "hns-chromium-platform-runtime"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hns-browser-observability",
  "hns-browser-runtime",
@@ -602,6 +602,7 @@ dependencies = [
  "hns-sync",
  "hns-transport",
  "hns-urkel",
+ "http",
  "httparse",
  "rusqlite",
  "sha2",
@@ -610,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "hns-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "blake2",
  "hex",
@@ -623,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "hns-dane"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hns-core",
  "hns-dnssec",
@@ -634,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "hns-dnssec"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hns-core",
  "num-bigint",
@@ -648,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "hns-gateway"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hns-core",
  "hns-dane",
@@ -663,11 +664,11 @@ dependencies = [
 [[package]]
 name = "hns-icann-dane"
 version = "0.1.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159#fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5#7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5"
 
 [[package]]
 name = "hns-loopback-proxy"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64",
  "hns-core",
@@ -687,11 +688,11 @@ dependencies = [
 [[package]]
 name = "hns-namespace-resolution"
 version = "0.1.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159#fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5#7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5"
 
 [[package]]
 name = "hns-p2p"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "getrandom 0.3.4",
  "hex",
@@ -704,11 +705,11 @@ dependencies = [
 [[package]]
 name = "hns-resolution-policy"
 version = "0.1.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159#fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5#7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5"
 
 [[package]]
 name = "hns-resolver"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hns-cache",
  "hns-core",
@@ -721,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "hns-sync"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hns-chain",
  "hns-core",
@@ -733,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "hns-transport"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "bytes",
  "h2",
@@ -754,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "hns-urkel"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hns-core",
  "thiserror",

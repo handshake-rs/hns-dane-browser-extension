@@ -19,15 +19,15 @@ Inclusion here does not imply endorsement by the component authors.
 Generator schema: 4
 Generated input SHA-256:
   scripts/generate-third-party-notices.py = 47321291ac9254867a5f9deedca4967a497a9d6983571d9dbe6148ee5f02bc16
-  scripts/verify_cargo_git_policy.py = d46e5d7c0e6bdb9672927a498f86113e651c78721209d0cec37bb4d061625fd6
-  rust/Cargo.toml = 2565070ad485f04791e68c6e7ab95480cf9ead8f56a4c9d3ab8be2efb537901b
-  rust/Cargo.lock = 7227ae9d5be10c53eaf49e0154777467093f0f00ebdef02777e0858593ef9d69
-  extension/manifest.json = f31c58039b0dedf5f69a917e4162bdfbb6bd6c9094f2f5e209afabac9c7eb553
-  package.json = dc8c26f36d52921df466d1f9fde72e05afc143df015bef2d1a33ececf521010a
+  scripts/verify_cargo_git_policy.py = 7db7c19d5423e93e72ad4350b109d1d6f262fe882f87ef3524f09a2a3c483630
+  rust/Cargo.toml = 659ca81d5a7992bdbcd9c7da403296402b526944126815dca9c5154900ad64ec
+  rust/Cargo.lock = 58939a4689158c7304b0e789ddcb5bfd2c58d9aadc7ab6707b34919d02274b57
+  extension/manifest.json = cfb0cc8d04a218e20d1cc98dae8a7e618a6e93ae4796ddb7d3d4dcb1d028c707
+  package.json = b8dd475a05d3dcaffc3ae50094802835816b29a1128f2cbb511f68040275880c
   rust/crates/hns-cache/Cargo.toml = ecb37feb5e48f51bc3f4e8319aa3e8edca4178f419a3390215640e2e7c2ff058
   rust/crates/hns-chain/Cargo.toml = 0fdd59304d88167acd7cf0a0ceb2c333aa5cc79d45c46a26828d9788df944814
   rust/crates/hns-chromium-native-host/Cargo.toml = fda3eaf22748a07f187a3a6dc755564b7a8d898f87b9602745b13c0d369fcf43
-  rust/crates/hns-chromium-platform-runtime/Cargo.toml = fef462b7bc2f6c77f4146ab5e3c495466c7c16d950c40b614ec8b538d8db5a8a
+  rust/crates/hns-chromium-platform-runtime/Cargo.toml = 6e4839322f98fb76c337680ed4b60259e360e8edb33d9d1c4cddf6d3a08edaf4
   rust/crates/hns-core/Cargo.toml = 0d2b63145e61850dc9c243cfd483a92cb7157672f87fcaa7879d7b42c0c91a6d
   rust/crates/hns-dane/Cargo.toml = e101a2c614120830bc2ead4b56f1cb7604cef15fda4104bc819060a562aa8d29
   rust/crates/hns-dnssec/Cargo.toml = 06c0ed11d5b80a3ff2f1780e9642e9986b13ecf1f34755cf1cd1d94b6a043cf0

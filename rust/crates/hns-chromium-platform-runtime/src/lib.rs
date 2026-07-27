@@ -22,7 +22,10 @@ use hns_core::dns::{
     SVCB_PARAM_PORT, SvcbRecord,
 };
 pub use hns_core::network::NetworkKind;
-use hns_core::network_policy::browser_special_use_suffixes;
+use hns_core::network_policy::{
+    browser_special_use_suffixes, is_browser_blocked_port, is_browser_special_use_host,
+    is_publicly_routable,
+};
 use hns_core::{BlockHeader, HEADER_SIZE, Height, NameHash};
 use hns_dane::{
     DaneDecision, MAX_STATELESS_DANE_ROOTS, StatelessDaneConfig, TlsaMatching, TlsaRecord,
@@ -40,13 +43,14 @@ use hns_loopback_proxy::{
     ProxyResponseMetadataObserver, ProxySessionId, ProxyTunnel, ProxyTunnelOpen, RunningProxy,
     SessionIdGenerationError,
 };
+pub use hns_namespace_resolution::RootResolutionDisposition;
 use hns_namespace_resolution::{
     AbsenceKind, AliasKind, AliasStep, ApplicationProtocol, CanonicalHost, CanonicalTlsa,
     ClassificationError, DefaultPrecedence, EvidenceProvenance, Freshness, HnsNetwork,
     IcannChainState, Namespace, NamespaceDecision, NamespaceOutcome, OriginPlanInput, OriginQuery,
-    OutcomeKind, RootFailure, RootFailureKind, RootLookup, SelectionPolicy, SelectionReason,
-    ServiceBinding, ServiceBindingInput, ServiceParameter, ServiceTransport, TlsTrustPolicy,
-    ValidatedAbsence, ValidatedOriginPlan, decide_namespace, decision_fingerprint,
+    OutcomeKind, RootFailure, RootFailureKind, RootLookup, RootResolutionState, SelectionPolicy,
+    SelectionReason, ServiceBinding, ServiceBindingInput, ServiceParameter, ServiceTransport,
+    TlsTrustPolicy, ValidatedAbsence, ValidatedOriginPlan, decide_namespace, decision_fingerprint,
 };
 use hns_p2p::{
     DnsRelayClient, DnsRelayClientError, DnsSeedPeerSource, EXPERIMENTAL_DNS_RELAY_SERVICE,
@@ -102,6 +106,7 @@ pub const DEFAULT_RESOURCE_CACHE_LIMIT_BYTES: usize = 50 * 1024 * 1024;
 pub const MAX_GATEWAY_HEADER_TEXT_BYTES: usize = 64 * 1024;
 pub const MAX_BROWSER_PROXY_RESOLUTION_TRACE_JSON_BYTES: usize = 64 * 1024;
 pub const CHROMIUM_PAC_SCHEMA_VERSION: u32 = 3;
+pub const MAX_CONFIGURED_HNS_DOH_URL_BYTES: usize = 2_048;
 const MAX_STATIC_RELAY_PEER_ENDPOINT_BYTES: usize = 320;
 const MAX_PENDING_CANONICAL_STATUSES: usize = 128;
 static GATEWAY_BODY_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -351,8 +356,9 @@ impl Default for SyncOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimePolicy {
     pub resolution_mode: ResolutionMode,
-    /// Retained only for one-way migration of historical settings. Runtime
-    /// normalization always clears this prohibited public-recursive endpoint.
+    /// Optional, explicitly user-configured recursive HNS DoH recovery
+    /// endpoint. An empty setting is represented as `None`; it is never
+    /// populated from historical compatibility settings or a built-in default.
     pub hns_doh_resolver: Option<String>,
     /// Enables the private, proof-backed HNS peer DNS-relay transport.
     pub experimental_p2p_dns_relay: bool,
@@ -379,9 +385,12 @@ impl RuntimePolicy {
     }
 }
 
-fn prohibit_public_hns_recursive_resolution(policy: &mut RuntimePolicy) {
-    policy.hns_doh_resolver = None;
+fn normalize_runtime_policy(policy: &mut RuntimePolicy) -> Result<(), RuntimeError> {
+    policy.hns_doh_resolver =
+        normalize_configured_hns_doh_resolver(policy.hns_doh_resolver.as_deref())
+            .map_err(RuntimeError::InvalidConfiguration)?;
     policy.legacy_hns_doh_compatibility = false;
+    Ok(())
 }
 
 fn canonical_policy_snapshot(
@@ -397,6 +406,7 @@ fn canonical_policy_snapshot(
         oblivious_dns: CanonicalObliviousDnsPolicy::Disabled,
         hnsr: CanonicalHnsrPolicy::disabled(),
         authenticated_authoritative_doh: true,
+        user_configured_recursive_hns_doh: policy.hns_doh_resolver.is_some(),
         // This browser is a requester, not a background provider. It opts out
         // of the ecosystem's default-on opaque relay role. Output/target roles
         // remain independently opt-in and are not enabled by this product.
@@ -477,7 +487,7 @@ pub enum BrowserProxyTlsPolicy {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserProxyResolverPolicy {
-    HnsDohCompatibility,
+    UserConfiguredRecursiveHnsDoh,
 }
 
 #[non_exhaustive]
@@ -486,13 +496,15 @@ pub enum BrowserProxySecurityPath {
     DaneAuthoritativeDoh,
     DaneAuthoritativeDns53,
     DaneP2pDnsRelay,
-    DaneThirdPartyDoh,
+    DaneUserConfiguredRecursiveHnsDoh,
+    DaneLocalHnsProof,
     StatelessDane,
     DaneIcannDoh,
     HnsAuthoritativeDoh,
     HnsAuthoritativeDns53,
     HnsP2pDnsRelay,
-    HnsThirdPartyDoh,
+    HnsUserConfiguredRecursiveHnsDoh,
+    HnsLocalHnsProof,
 }
 
 /// Why one successful response could not be represented by the shared,
@@ -511,6 +523,36 @@ pub enum CanonicalStatusUnavailableReason {
     SchemaValidationRejected,
 }
 
+/// Bounded per-root dispositions retained beside one checked canonical status.
+///
+/// Successful root lookups are reduced to present or absent, so this value
+/// never carries origin plans, addresses, TLSA records, or proof payloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalRootResolutionStates {
+    hns: RootResolutionDisposition,
+    icann: RootResolutionDisposition,
+}
+
+impl CanonicalRootResolutionStates {
+    /// Creates a bounded pair from independently completed root lookups.
+    #[must_use]
+    pub const fn new(hns: RootResolutionDisposition, icann: RootResolutionDisposition) -> Self {
+        Self { hns, icann }
+    }
+
+    /// Bounded HNS lookup disposition.
+    #[must_use]
+    pub const fn hns(self) -> RootResolutionDisposition {
+        self.hns
+    }
+
+    /// Bounded ICANN lookup disposition.
+    #[must_use]
+    pub const fn icann(self) -> RootResolutionDisposition {
+        self.icann
+    }
+}
+
 /// Platform-local availability of the shared, name-free browser status.
 ///
 /// This Rust-only diagnostic does not alter the native-message JSON schema.
@@ -521,6 +563,14 @@ pub enum CanonicalStatusAvailability {
     Pending,
     /// A checked schema-v2 status constructed from typed origin evidence.
     Available(Box<CanonicalBrowserStatus>),
+    /// A checked schema-v2 status plus the bounded root dispositions retained
+    /// from an indeterminate dual-root classification.
+    AvailableWithRootStates {
+        /// Checked canonical browser status.
+        status: Box<CanonicalBrowserStatus>,
+        /// Typed states copied directly from the classification failure.
+        root_states: CanonicalRootResolutionStates,
+    },
     /// A successful response was intentionally not misrepresented.
     Unavailable(CanonicalStatusUnavailableReason),
 }
@@ -663,9 +713,26 @@ impl BrowserProxyStatus {
     pub fn canonical_status(&self) -> Option<&CanonicalBrowserStatus> {
         match &self.canonical_status {
             CanonicalStatusAvailability::Available(status) => Some(status),
+            CanonicalStatusAvailability::AvailableWithRootStates { status, .. } => Some(status),
             CanonicalStatusAvailability::Pending | CanonicalStatusAvailability::Unavailable(_) => {
                 None
             }
+        }
+    }
+
+    /// Bounded per-root dispositions for an indeterminate classification.
+    ///
+    /// These values are carried beside the checked canonical status under the
+    /// same admitted observation tuple. They are never reconstructed from the
+    /// sensitive diagnostic JSON trace.
+    pub const fn canonical_root_resolution_states(&self) -> Option<CanonicalRootResolutionStates> {
+        match &self.canonical_status {
+            CanonicalStatusAvailability::AvailableWithRootStates { root_states, .. } => {
+                Some(*root_states)
+            }
+            CanonicalStatusAvailability::Pending
+            | CanonicalStatusAvailability::Available(_)
+            | CanonicalStatusAvailability::Unavailable(_) => None,
         }
     }
 
@@ -673,9 +740,9 @@ impl BrowserProxyStatus {
     pub fn canonical_status_unavailable_reason(&self) -> Option<CanonicalStatusUnavailableReason> {
         match &self.canonical_status {
             CanonicalStatusAvailability::Unavailable(reason) => Some(*reason),
-            CanonicalStatusAvailability::Pending | CanonicalStatusAvailability::Available(_) => {
-                None
-            }
+            CanonicalStatusAvailability::Pending
+            | CanonicalStatusAvailability::Available(_)
+            | CanonicalStatusAvailability::AvailableWithRootStates { .. } => None,
         }
     }
 }
@@ -704,6 +771,7 @@ impl std::fmt::Debug for BrowserProxyStatus {
                 &matches!(
                     &self.canonical_status,
                     CanonicalStatusAvailability::Available(_)
+                        | CanonicalStatusAvailability::AvailableWithRootStates { .. }
                 ),
             )
             .field(
@@ -748,8 +816,8 @@ fn parse_browser_proxy_tls_policy(value: Option<&str>) -> Option<BrowserProxyTls
 
 fn parse_browser_proxy_resolver_policy(value: Option<&str>) -> Option<BrowserProxyResolverPolicy> {
     match value.map(str::trim) {
-        Some(value) if value.eq_ignore_ascii_case("hns-doh-compat") => {
-            Some(BrowserProxyResolverPolicy::HnsDohCompatibility)
+        Some(value) if value.eq_ignore_ascii_case("user-configured-recursive-hns-doh") => {
+            Some(BrowserProxyResolverPolicy::UserConfiguredRecursiveHnsDoh)
         }
         _ => None,
     }
@@ -763,8 +831,10 @@ fn parse_browser_proxy_security_path(value: Option<&str>) -> Option<BrowserProxy
         Some(BrowserProxySecurityPath::DaneAuthoritativeDns53)
     } else if value.eq_ignore_ascii_case("dane-p2p-dns-relay") {
         Some(BrowserProxySecurityPath::DaneP2pDnsRelay)
-    } else if value.eq_ignore_ascii_case("dane-third-party-doh") {
-        Some(BrowserProxySecurityPath::DaneThirdPartyDoh)
+    } else if value.eq_ignore_ascii_case("dane-user-configured-recursive-hns-doh") {
+        Some(BrowserProxySecurityPath::DaneUserConfiguredRecursiveHnsDoh)
+    } else if value.eq_ignore_ascii_case("dane-local-hns-proof") {
+        Some(BrowserProxySecurityPath::DaneLocalHnsProof)
     } else if value.eq_ignore_ascii_case("stateless-dane") {
         Some(BrowserProxySecurityPath::StatelessDane)
     } else if value.eq_ignore_ascii_case("dane-icann-doh") {
@@ -775,8 +845,10 @@ fn parse_browser_proxy_security_path(value: Option<&str>) -> Option<BrowserProxy
         Some(BrowserProxySecurityPath::HnsAuthoritativeDns53)
     } else if value.eq_ignore_ascii_case("hns-p2p-dns-relay") {
         Some(BrowserProxySecurityPath::HnsP2pDnsRelay)
-    } else if value.eq_ignore_ascii_case("hns-third-party-doh") {
-        Some(BrowserProxySecurityPath::HnsThirdPartyDoh)
+    } else if value.eq_ignore_ascii_case("hns-user-configured-recursive-hns-doh") {
+        Some(BrowserProxySecurityPath::HnsUserConfiguredRecursiveHnsDoh)
+    } else if value.eq_ignore_ascii_case("hns-local-hns-proof") {
+        Some(BrowserProxySecurityPath::HnsLocalHnsProof)
     } else {
         None
     }
@@ -1982,7 +2054,7 @@ impl BrowserRuntime {
             .to_owned();
         configuration.data_dir = canonical_data_dir;
         let mut policy = configuration.initial_policy.clone();
-        prohibit_public_hns_recursive_resolution(&mut policy);
+        normalize_runtime_policy(&mut policy)?;
         let base = network_base_path(&data_dir, configuration.network);
         fs::create_dir_all(&base).map_err(|error| {
             RuntimeError::Operation(format!("create runtime directory: {error}"))
@@ -2054,7 +2126,7 @@ impl BrowserRuntime {
     }
 
     fn set_policy_locked(&self, mut policy: RuntimePolicy) -> Result<u64, RuntimeError> {
-        prohibit_public_hns_recursive_resolution(&mut policy);
+        normalize_runtime_policy(&mut policy)?;
         let mut current = self
             .inner
             .policy
@@ -2663,6 +2735,12 @@ impl BrowserRuntime {
         } else {
             ": 0\r\n"
         });
+        if let Some(endpoint) = policy.hns_doh_resolver.as_deref() {
+            header_text.push_str(HNS_GATEWAY_DOH_RESOLVER_HEADER);
+            header_text.push_str(": ");
+            header_text.push_str(endpoint);
+            header_text.push_str("\r\n");
+        }
         if policy.resolution_mode == ResolutionMode::Strict {
             header_text.push_str(HNS_GATEWAY_STRICT_MODE_HEADER);
             header_text.push_str(": 1\r\n");
@@ -2948,6 +3026,7 @@ impl BrowserRuntime {
             GatewayResolverContext {
                 network,
                 mode,
+                configured_hns_doh: parsed_headers.configured_hns_doh,
                 experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
                 peer_state: Some(Arc::clone(&self.inner.coordination.peer_state)),
                 relay: Some(self.inner.coordination.relay.clone()),
@@ -3232,7 +3311,9 @@ fn proxy_response_from_gateway(
         response.origin.tls_inspection.is_some(),
         dns_trace,
     );
-    let resolver_policy = fallback_marker.used().then_some("hns-doh-compat");
+    let resolver_policy = fallback_marker
+        .used()
+        .then_some("user-configured-recursive-hns-doh");
     let selected_namespace = response
         .namespace_decision
         .as_ref()
@@ -3307,7 +3388,7 @@ fn proxy_error_response_from_gateway(
     let input = runtime_gateway_input(runtime, request);
     let error = failure.error();
     let (status, reason, detail) =
-        map_gateway_error_for_namespace(dns_trace.selected_namespace(), error);
+        map_gateway_error_for_namespace(dns_trace.selected_namespace(), error, dns_trace);
     let trace = resolution_trace_json(
         &input,
         network,
@@ -3464,7 +3545,9 @@ fn proxy_tunnel_from_gateway(
         response.origin.tls_inspection.is_some(),
         dns_trace,
     );
-    let resolver_policy = fallback_marker.used().then_some("hns-doh-compat");
+    let resolver_policy = fallback_marker
+        .used()
+        .then_some("user-configured-recursive-hns-doh");
     let trace = resolution_trace_json(
         &input,
         network,
@@ -3522,10 +3605,32 @@ fn canonical_status_for_gateway_failure(
     failure: &GatewayFailure,
     dns_trace: &DnsTraceRecorder,
 ) -> CanonicalStatusAvailability {
-    match try_canonical_status_for_gateway_failure(runtime, stamp, network, failure, dns_trace) {
-        Ok(status) => CanonicalStatusAvailability::Available(Box::new(status)),
-        Err(reason) => CanonicalStatusAvailability::Unavailable(reason),
+    let root_states = failure
+        .classification_error()
+        .and_then(canonical_root_resolution_states);
+    match (
+        try_canonical_status_for_gateway_failure(runtime, stamp, network, failure, dns_trace),
+        root_states,
+    ) {
+        (Ok(status), Some(root_states)) => CanonicalStatusAvailability::AvailableWithRootStates {
+            status: Box::new(status),
+            root_states,
+        },
+        (Ok(status), None) => CanonicalStatusAvailability::Available(Box::new(status)),
+        (Err(reason), _) => CanonicalStatusAvailability::Unavailable(reason),
     }
+}
+
+fn canonical_root_resolution_states(
+    classification: &ClassificationError,
+) -> Option<CanonicalRootResolutionStates> {
+    let ClassificationError::RootFailed { hns, icann } = classification else {
+        return None;
+    };
+    Some(CanonicalRootResolutionStates::new(
+        hns.disposition(),
+        icann.disposition(),
+    ))
 }
 
 fn try_canonical_status_for_gateway_failure(
@@ -3629,8 +3734,8 @@ fn canonical_status_for_classification_failure(
     let ClassificationError::RootFailed { hns, icann } = classification else {
         return Err(CanonicalStatusUnavailableReason::EvidenceUnavailable);
     };
-    let hns_failure = hns.as_ref().map(RootFailure::kind);
-    let icann_failure = icann.as_ref().map(RootFailure::kind);
+    let hns_failure = hns.failure().map(RootFailure::kind);
+    let icann_failure = icann.failure().map(RootFailure::kind);
     if hns_failure.is_none() && icann_failure.is_none() {
         return Err(CanonicalStatusUnavailableReason::EvidenceUnavailable);
     }
@@ -3995,17 +4100,30 @@ fn canonical_hns_actual_transport_for_plan(
             &[RecordType::A, RecordType::Aaaa],
             Namespace::Hns,
         )
-    }
-    .ok_or(CanonicalStatusUnavailableReason::EvidenceUnavailable)?;
+    };
+    let Some(protocol) = protocol else {
+        if has_hns_dns_transport_event(&events) {
+            return Err(CanonicalStatusUnavailableReason::EvidenceUnavailable);
+        }
+        return Ok(CanonicalResolutionTransport::LocalHnsProof);
+    };
 
     match protocol {
         "udp53" => Ok(CanonicalResolutionTransport::DirectAuthoritativeUdp),
         "tcp53" => Ok(CanonicalResolutionTransport::DirectAuthoritativeTcp),
         "authoritative_doh" => Ok(CanonicalResolutionTransport::AuthenticatedAuthoritativeDoh),
         "p2p_dns_relay" => Ok(CanonicalResolutionTransport::HandshakeP2pDnsRelay),
-        "hns_doh" => Err(CanonicalStatusUnavailableReason::TransportNotRepresentable),
+        "user_configured_recursive_hns_doh" => {
+            Ok(CanonicalResolutionTransport::UserConfiguredRecursiveHnsDoh)
+        }
         _ => Err(CanonicalStatusUnavailableReason::EvidenceUnavailable),
     }
+}
+
+fn has_hns_dns_transport_event(events: &[DnsTraceEvent]) -> bool {
+    events
+        .iter()
+        .any(|event| dns_protocol_namespace(event.protocol) == Some(Namespace::Hns))
 }
 
 const fn canonical_tlsa_transport(transport: ServiceTransport) -> TlsaTransport {
@@ -4236,6 +4354,7 @@ fn is_valid_gateway_header_value(value: &str) -> bool {
 struct ParsedGatewayHeaders {
     headers: Vec<(String, String)>,
     strict_hns_mode: bool,
+    configured_hns_doh: Option<HnsDohEndpoint>,
     experimental_p2p_dns_relay: bool,
     stateless_dane_certificates: bool,
     network: NetworkKind,
@@ -4424,6 +4543,84 @@ impl HnsDohEndpoint {
             format!("https://{}:{}{}", self.host, self.port, self.path_and_query)
         }
     }
+}
+
+/// Validates and canonicalizes the explicit recursive HNS DoH recovery
+/// endpoint accepted by browser policy. A blank value disables the recovery
+/// path. The endpoint hostname is intentionally restricted to an ordinary
+/// ICANN DNS name: runtime bootstrap is performed through the built-in
+/// validating ICANN DoH path and never through the operating-system resolver.
+pub fn normalize_configured_hns_doh_resolver(
+    value: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    parse_configured_hns_doh_endpoint(value).map(|endpoint| Some(endpoint.display()))
+}
+
+fn parse_configured_hns_doh_endpoint(value: &str) -> Result<HnsDohEndpoint, String> {
+    if value.len() > MAX_CONFIGURED_HNS_DOH_URL_BYTES {
+        return Err(format!(
+            "configured HNS DoH URL exceeds {MAX_CONFIGURED_HNS_DOH_URL_BYTES} bytes"
+        ));
+    }
+    if value
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err("configured HNS DoH URL contains whitespace or control bytes".to_owned());
+    }
+    if value.contains('#') {
+        return Err("configured HNS DoH URL must not contain a fragment".to_owned());
+    }
+
+    let uri = value
+        .parse::<http::Uri>()
+        .map_err(|_| "configured HNS DoH URL is invalid".to_owned())?;
+    if !uri
+        .scheme_str()
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https"))
+    {
+        return Err("configured HNS DoH URL must use https".to_owned());
+    }
+    let authority = uri
+        .authority()
+        .ok_or_else(|| "configured HNS DoH URL must contain a hostname".to_owned())?;
+    if authority.as_str().contains('@') {
+        return Err("configured HNS DoH URL must not contain credentials".to_owned());
+    }
+    let raw_host = authority.host();
+    if raw_host.parse::<IpAddr>().is_ok() {
+        return Err(
+            "configured HNS DoH URL must use a WebPKI-authenticated ICANN hostname".to_owned(),
+        );
+    }
+    let host = CanonicalHost::parse(raw_host)
+        .map_err(|_| "configured HNS DoH URL hostname is invalid".to_owned())?;
+    if !host.as_str().contains('.') || is_browser_special_use_host(host.as_str()) {
+        return Err("configured HNS DoH URL must use a non-special-use ICANN hostname".to_owned());
+    }
+    let port = authority.port_u16().unwrap_or(443);
+    if is_browser_blocked_port(port) {
+        return Err(format!(
+            "configured HNS DoH URL port {port} is blocked by browser network policy"
+        ));
+    }
+    let path_and_query = uri
+        .path_and_query()
+        .map(|path| path.as_str())
+        .filter(|path| !path.is_empty())
+        .unwrap_or("/");
+    if !path_and_query.starts_with('/') {
+        return Err("configured HNS DoH URL path is invalid".to_owned());
+    }
+
+    Ok(HnsDohEndpoint {
+        host: host.as_str().to_owned(),
+        port,
+        path_and_query: path_and_query.to_owned(),
+    })
 }
 
 struct GatewayProofProvider {
@@ -5673,7 +5870,6 @@ struct FallbackMarker {
 }
 
 impl FallbackMarker {
-    #[cfg(test)]
     fn mark(&self, reason: &'static str) {
         self.used.store(true, Ordering::Relaxed);
         if let Ok(mut fallback_reason) = self.reason.lock()
@@ -5757,17 +5953,19 @@ fn fallback_cache_root(request: &ResolutionRequest) -> String {
     hns_trace_root(&request.qname).to_ascii_lowercase()
 }
 
+/// Adds the separately consented recursive HNS DoH endpoint only after every
+/// earlier delegated transport has exhausted a typed availability failure.
+/// Per-root memory avoids replaying known-unavailable direct/owner/P2P paths
+/// for every A, AAAA, HTTPS, and TLSA query in one origin decision.
 #[derive(Clone, Debug)]
-#[cfg(test)]
-struct FallbackDelegatedResolver<P, F> {
+struct ConfiguredDohFallbackDelegatedResolver<P, F> {
     primary: P,
     fallback: F,
     fallback_marker: FallbackMarker,
     fallback_roots: Arc<Mutex<HashMap<String, &'static str>>>,
 }
 
-#[cfg(test)]
-impl<P, F> FallbackDelegatedResolver<P, F> {
+impl<P, F> ConfiguredDohFallbackDelegatedResolver<P, F> {
     fn new(primary: P, fallback: F, fallback_marker: FallbackMarker) -> Self {
         Self {
             primary,
@@ -5793,8 +5991,7 @@ impl<P, F> FallbackDelegatedResolver<P, F> {
     }
 }
 
-#[cfg(test)]
-impl<P, F> DelegatedResolver for FallbackDelegatedResolver<P, F>
+impl<P, F> DelegatedResolver for ConfiguredDohFallbackDelegatedResolver<P, F>
 where
     P: DelegatedResolver,
     F: DelegatedResolver,
@@ -5812,7 +6009,7 @@ where
         match self.primary.resolve_delegated(request, delegation) {
             Ok(answer) => Ok(answer),
             Err(error) => {
-                let Some(reason) = delegated_doh_transport_fallback_reason(&error) else {
+                let Some(reason) = configured_doh_transport_fallback_reason(&error) else {
                     return Err(error);
                 };
                 self.remember_fallback_reason(request, reason);
@@ -5822,6 +6019,9 @@ where
         }
     }
 }
+
+#[cfg(test)]
+type FallbackDelegatedResolver<P, F> = ConfiguredDohFallbackDelegatedResolver<P, F>;
 
 trait RelayDnssecAttemptFeedback {
     fn begin_attempt(&self, retry_offset: usize);
@@ -5916,7 +6116,8 @@ where
                         // Once relay-provided DNS has failed local validation,
                         // every exhausted retry path remains a relay DNSSEC
                         // failure. In particular, a transport error from the
-                        // alternate must not reopen the legacy DoH fallback.
+                        // alternate must not reopen the configured recursive
+                        // HNS DoH fallback.
                         Err(ResolverError::RelayDnssecFailed)
                     }
                 }
@@ -6153,6 +6354,216 @@ impl Resolver for IcannDohResolver {
         self.evidence.record(request, observation)?;
         Ok(answer)
     }
+}
+
+/// Raw RFC 8484 transport for the explicitly user-configured recursive HNS
+/// recovery endpoint. Its hostname is bootstrapped only through the built-in
+/// fixed-address ICANN DoH resolver, every connection uses an explicit public
+/// IP plus WebPKI hostname authentication, and returned DNS bytes remain
+/// untrusted until `AuthoritativeDnssecResolver` validates them locally.
+#[derive(Clone)]
+struct ConfiguredRecursiveHnsDohTransport {
+    endpoint: HnsDohEndpoint,
+    trace: DnsTraceRecorder,
+    http: TcpHttpTransport,
+    endpoint_policy: DnsEndpointPolicy,
+    bootstrap_cache: Arc<Mutex<Option<Vec<IpAddr>>>>,
+}
+
+impl ConfiguredRecursiveHnsDohTransport {
+    fn new(
+        endpoint: HnsDohEndpoint,
+        trace: DnsTraceRecorder,
+        http: TcpHttpTransport,
+        endpoint_policy: DnsEndpointPolicy,
+    ) -> Self {
+        Self {
+            endpoint,
+            trace,
+            http,
+            endpoint_policy,
+            bootstrap_cache: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn bootstrap_addresses(&self) -> Result<Vec<IpAddr>, ResolverError> {
+        if let Some(addresses) = self
+            .bootstrap_cache
+            .lock()
+            .map_err(|_| ResolverError::CachePoisoned)?
+            .clone()
+        {
+            return Ok(addresses);
+        }
+
+        let addresses = resolve_configured_doh_bootstrap_addresses(
+            &self.endpoint.host,
+            &self.trace,
+            &self.http,
+        )?;
+        let mut cache = self
+            .bootstrap_cache
+            .lock()
+            .map_err(|_| ResolverError::CachePoisoned)?;
+        *cache = Some(addresses.clone());
+        Ok(addresses)
+    }
+
+    fn exchange(&self, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        let (wire_query, original_id) = recursive_doh_query(query)?;
+        let addresses = match self.bootstrap_addresses() {
+            Ok(addresses) => addresses,
+            Err(error) => {
+                let (question_name, question_type) = dns_trace_question(&wire_query);
+                self.trace.push(DnsTraceEvent {
+                    protocol: "user_configured_recursive_hns_doh",
+                    server: self.endpoint.display(),
+                    question_name,
+                    question_type,
+                    status: dns_trace_error_status(&error).to_owned(),
+                    elapsed_ms: 0,
+                    error: Some(format!("ICANN DoH bootstrap failed: {error}")),
+                });
+                return Err(error);
+            }
+        };
+        let mut last_error = None;
+        for address in addresses {
+            let started = Instant::now();
+            let response = self.http.fetch(&configured_doh_origin_request(
+                &self.endpoint,
+                address,
+                wire_query.clone(),
+            ));
+            self.trace.push(doh_trace_event(
+                "user_configured_recursive_hns_doh",
+                format!("{} via {address}", self.endpoint.display()),
+                &wire_query,
+                elapsed_millis(started),
+                &response,
+            ));
+            match response {
+                Ok(response) => {
+                    if !doh_http_status_success(response.status) {
+                        last_error = Some(ResolverError::DnsTransport(format!(
+                            "user-configured recursive HNS DoH returned HTTP {}",
+                            response.status
+                        )));
+                        continue;
+                    }
+                    if !doh_response_has_dns_message_content_type(&response)
+                        || response.body.len() > u16::MAX as usize
+                    {
+                        return Err(ResolverError::InvalidDnsResponse);
+                    }
+                    return restore_doh_response_id(&response.body, original_id);
+                }
+                Err(error) => {
+                    last_error = Some(ResolverError::DnsTransport(format!(
+                        "user-configured recursive HNS DoH transport failed: {error}"
+                    )));
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            ResolverError::DnsTransport(
+                "user-configured recursive HNS DoH has no public ICANN bootstrap address"
+                    .to_owned(),
+            )
+        }))
+    }
+}
+
+impl DnsTransport for ConfiguredRecursiveHnsDohTransport {
+    fn endpoint_policy(&self) -> DnsEndpointPolicy {
+        self.endpoint_policy
+    }
+
+    fn exchange_udp(&self, _server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        self.exchange(query)
+    }
+
+    fn exchange_tcp(&self, _server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        self.exchange(query)
+    }
+
+    fn is_recursive_relay(&self) -> bool {
+        true
+    }
+}
+
+fn resolve_configured_doh_bootstrap_addresses(
+    host: &str,
+    trace: &DnsTraceRecorder,
+    http: &TcpHttpTransport,
+) -> Result<Vec<IpAddr>, ResolverError> {
+    let resolver = IcannDohResolver::new(trace.clone(), http.clone());
+    let start = CanonicalHost::parse(host).map_err(|_| ResolverError::InvalidDnsResponse)?;
+    let (ipv4_target, mut addresses) =
+        resolve_icann_bootstrap_family(&resolver, &start, RecordType::A)?;
+    let (ipv6_target, ipv6) = resolve_icann_bootstrap_family(&resolver, &start, RecordType::Aaaa)?;
+    if ipv4_target != ipv6_target {
+        return Err(ResolverError::InvalidDnsResponse);
+    }
+    addresses.extend(ipv6);
+    addresses.retain(|address| is_publicly_routable(*address));
+    addresses.sort_unstable();
+    addresses.dedup();
+    addresses.truncate(16);
+    if addresses.is_empty() {
+        return Err(ResolverError::DnsTransport(
+            "validating ICANN DoH bootstrap returned no public resolver address".to_owned(),
+        ));
+    }
+    Ok(addresses)
+}
+
+fn resolve_icann_bootstrap_family(
+    resolver: &IcannDohResolver,
+    start: &CanonicalHost,
+    qtype: RecordType,
+) -> Result<(CanonicalHost, Vec<IpAddr>), ResolverError> {
+    let mut owner = start.clone();
+    let mut seen = Vec::new();
+    for _ in 0..=hns_namespace_resolution::MAX_ALIAS_STEPS {
+        if seen.contains(&owner) {
+            return Err(ResolverError::InvalidDnsResponse);
+        }
+        seen.push(owner.clone());
+        let answer = resolver.resolve(&ResolutionRequest {
+            qname: owner.as_str().to_owned(),
+            qtype: qtype.code(),
+        })?;
+        let owner_name =
+            DnsName::from_ascii(owner.as_str()).map_err(|_| ResolverError::InvalidDnsResponse)?;
+        let cnames = records_for_owner(&answer.records, &owner_name, RecordType::Cname)
+            .map_err(|_| ResolverError::InvalidDnsResponse)?;
+        let records = records_for_owner(&answer.records, &owner_name, qtype)
+            .map_err(|_| ResolverError::InvalidDnsResponse)?;
+        if !cnames.is_empty() && !records.is_empty() {
+            return Err(ResolverError::InvalidDnsResponse);
+        }
+        if let Some(target) =
+            one_cname_target(&cnames).map_err(|_| ResolverError::InvalidDnsResponse)?
+        {
+            owner = canonical_dns_host(&target).map_err(|_| ResolverError::InvalidDnsResponse)?;
+            continue;
+        }
+        let addresses = records
+            .iter()
+            .map(|record| match (qtype, record.rdata.as_slice()) {
+                (RecordType::A, [a, b, c, d]) => Ok(IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d))),
+                (RecordType::Aaaa, bytes) if bytes.len() == 16 => {
+                    let mut address = [0u8; 16];
+                    address.copy_from_slice(bytes);
+                    Ok(IpAddr::V6(Ipv6Addr::from(address)))
+                }
+                _ => Err(ResolverError::InvalidDnsResponse),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok((owner, addresses));
+    }
+    Err(ResolverError::InvalidDnsResponse)
 }
 
 struct DualRootBrowserResolver {
@@ -7281,11 +7692,11 @@ fn indeterminate_namespace_trace_json(
 ) -> String {
     let (hns_state, icann_state, hns_failure, icann_failure) = match error {
         hns_namespace_resolution::ClassificationError::RootFailed { hns, icann } => (
-            if hns.is_some() { "failed" } else { "unknown" },
-            if icann.is_some() { "failed" } else { "unknown" },
-            hns.as_ref().map(|failure| format!("{:?}", failure.kind())),
+            root_resolution_trace_state(hns),
+            root_resolution_trace_state(icann),
+            hns.failure().map(|failure| format!("{:?}", failure.kind())),
             icann
-                .as_ref()
+                .failure()
                 .map(|failure| format!("{:?}", failure.kind())),
         ),
         _ => ("unknown", "unknown", None, None),
@@ -7299,6 +7710,14 @@ fn indeterminate_namespace_trace_json(
     format!(
         r#"{{"schemaVersion":2,"outcome":"indeterminate","selected":null,"reason":"unavailable","fingerprint":null,"divergenceMask":null,"hnsState":"{hns_state}","icannState":"{icann_state}","hns":{{"state":"{hns_state}","rcode":null,"denial":null,"failure":{hns_failure}}},"icann":{{"state":"{icann_state}","rcode":null,"denial":null,"failure":{icann_failure}}}}}"#
     )
+}
+
+fn root_resolution_trace_state(state: &RootResolutionState) -> &'static str {
+    match state.disposition() {
+        RootResolutionDisposition::Present => "present",
+        RootResolutionDisposition::Absent => "absent",
+        RootResolutionDisposition::Failed => "failed",
+    }
 }
 
 fn default_icann_doh_endpoint() -> HnsDohEndpoint {
@@ -7319,14 +7738,10 @@ fn doh_fallback_reason(error: &ResolverError) -> Option<&'static str> {
     }
 }
 
-#[cfg(test)]
-fn delegated_doh_transport_fallback_reason(error: &ResolverError) -> Option<&'static str> {
+fn configured_doh_transport_fallback_reason(error: &ResolverError) -> Option<&'static str> {
     match error {
-        ResolverError::DnsTransport(_) => Some("authoritative_nameserver_transport_failed"),
+        ResolverError::DnsTransport(_) => Some("earlier_hns_transports_unavailable"),
         ResolverError::Port53InterceptionDetected => Some("port53_interception_detected"),
-        ResolverError::DnsResponseCode(_) => Some("authoritative_nameserver_response_code"),
-        ResolverError::InvalidDnsResponse => Some("authoritative_nameserver_invalid_response"),
-        ResolverError::DnssecFailed => Some("delegated_dnssec_validation_failed"),
         _ => None,
     }
 }
@@ -7334,11 +7749,7 @@ fn delegated_doh_transport_fallback_reason(error: &ResolverError) -> Option<&'st
 fn delegated_p2p_fallback_allowed(error: &ResolverError) -> bool {
     matches!(
         error,
-        ResolverError::DnsTransport(_)
-            | ResolverError::Port53InterceptionDetected
-            | ResolverError::DnsResponseCode(_)
-            | ResolverError::InvalidDnsResponse
-            | ResolverError::DnssecFailed
+        ResolverError::DnsTransport(_) | ResolverError::Port53InterceptionDetected
     )
 }
 
@@ -7397,6 +7808,17 @@ fn doh_origin_request(
         ],
         body,
     }
+}
+
+/// Constructs a configured-recursive request only with a pre-resolved address.
+/// Keeping the address mandatory prevents this path from ever falling through
+/// to the operating system's DNS resolver.
+fn configured_doh_origin_request(
+    endpoint: &HnsDohEndpoint,
+    connect_address: IpAddr,
+    body: Vec<u8>,
+) -> OriginRequest {
+    doh_origin_request(endpoint, Some(connect_address.to_string()), body)
 }
 
 fn fetch_authoritative_doh_message(
@@ -7472,7 +7894,6 @@ fn doh_response_has_dns_message_content_type(response: &OriginResponse) -> bool 
         })
 }
 
-#[cfg(test)]
 fn recursive_doh_query(query: &[u8]) -> Result<(Vec<u8>, u16), ResolverError> {
     if query.len() < 4 {
         return Err(ResolverError::InvalidDnsResponse);
@@ -7485,7 +7906,6 @@ fn recursive_doh_query(query: &[u8]) -> Result<(Vec<u8>, u16), ResolverError> {
     Ok((query, original_id))
 }
 
-#[cfg(test)]
 fn restore_doh_response_id(body: &[u8], original_id: u16) -> Result<Vec<u8>, ResolverError> {
     if body.len() < 2 || body[0] != 0 || body[1] != 0 {
         return Err(ResolverError::InvalidDnsResponse);
@@ -7735,6 +8155,10 @@ pub fn core_version() -> &'static str {
 pub fn diagnostics_json() -> String {
     r#"{"core":"hns-dane-browser-rust-core","version":"__VERSION__","features":["header-hash","header-pow-validation","header-mainnet-difficulty-retarget","header-mainnet-checkpoints","header-canonical-height-index","hns-name-hash","hns-dotted-root-label","urkel-proof-verification","urkel-proof-value-handoff","hns-name-state-resource-extraction","hns-resource-decoder","hns-authoritative-doh-rfc8484","hns-resource-provider-adapter","hns-memory-resource-provider","hns-sqlite-resource-provider","hns-negative-cache","hns-ttl-cache-lru","hns-resource-cache-stats","hns-resource-cache-eviction","hns-resource-cache-cap-enforcement","hns-resource-cache-chain-anchors","hns-resource-cache-reorg-invalidation","hns-resource-cache-current-tip","hns-proof-backed-resolver-boundary","hns-delegating-resolver-boundary","hns-proof-backed-ns-address-hydration","hns-authoritative-dnssec-delegated-resolver","hns-doh-compat-resolver","dns-wire","dns-svcb-https","dnssec-ds-dnskey-link","dnssec-ds-sha1","dnssec-ds-sha384","dnssec-rrsig-signed-data","dnssec-canonical-name-rdata","dnssec-ecdsa-p256-verify","dnssec-ecdsa-p384-verify","dnssec-rsa-sha1-verify","dnssec-rsa-sha256-sha512-verify","dnssec-ed25519-verify","dnssec-signed-rrset-validation","dnssec-delegated-chain-validation","dnssec-delegated-no-data-validation","dnssec-delegated-name-error-validation","dnssec-delegated-cname-chain","dnssec-child-referral-validation","dnssec-child-cname-chain","dnssec-child-no-data-validation","dnssec-child-name-error-validation","dnssec-nsec-denial-validation","dnssec-nsec3-denial-validation","dnssec-nxdomain-name-error-validation","dane-policy","dane-certificate-chain-policy","x509-spki-extraction","x509-stateless-dane-evidence","hip17-experimental-urkel-extension","rfc9102-authentication-chain-parser","p2p-codec","p2p-tcp-peer-connection","p2p-static-peer-source","p2p-dns-seed-source","p2p-getaddr-peer-discovery","p2p-discovery-rotation","p2p-peer-diversity","p2p-sqlite-peer-store","sync-coordinator","sync-header-runner","sync-multi-batch-header-runner","sync-parallel-peer-probing","sync-ranged-peer-rotation","sync-checkpoint-prefetch","sync-proof-scheduler","native-sync-once","sync-status","sync-outcome-status","sync-progress-heights","sync-high-batch-catchup","clear-resolver-cache","persistent-gateway-resolver","gateway-live-proof-fetch","gateway-header-forwarding","gateway-range-forwarding","gateway-body-forwarding","gateway-file-body-stream","chromium-browser-request-gateway","chromium-service-worker-gateway","chromium-redirect-gateway","actionable-hns-errors","hns-name-not-found-error","gateway-policy","gateway-hns-address-required","gateway-tlsa-service-scope","gateway-delegated-origin-address-lookup","gateway-origin-address-query","gateway-https-service-query","gateway-svcb-alpn-policy","gateway-actionable-nameserver-errors","gateway-cname-address-routing","chromium-proxy-gateway-hook","random-loopback-proxy-port","rust-loopback-local-hns-connect-certs","hns-websocket-native-tunnel","http-origin-transport","http-origin-connection-pooling","http2-origin-transport","http3-origin-transport","http-origin-response-framing","https-rustls-transport","https-tls-session-resumption","https-alt-svc-promotion","dane-tls-policy"],"securityDefault":"fail-closed"}"#
         .replace("__VERSION__", env!("CARGO_PKG_VERSION"))
+        .replace(
+            "hns-doh-compat-resolver",
+            "user-configured-recursive-hns-doh",
+        )
 }
 
 pub fn sync_once(data_dir: &str) -> String {
@@ -7860,7 +8284,7 @@ fn prepare_gateway_http_response_with_transport(
         Ok(headers) => headers,
         Err(error) => {
             return PreparedGatewayHttpResponse::without_namespace_decision(
-                plain_response_for_request(&input, 400, "Bad Request", error),
+                plain_response_for_request(&input, 400, "Bad Request", &error),
             );
         }
     };
@@ -7900,6 +8324,7 @@ fn prepare_gateway_http_response_with_transport(
         GatewayResolverContext {
             network,
             mode,
+            configured_hns_doh: parsed_headers.configured_hns_doh,
             experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
             peer_state,
             relay: None,
@@ -7936,7 +8361,9 @@ fn prepare_gateway_http_response_with_transport(
     match gateway.handle(&request) {
         Ok(response) => {
             let namespace_decision = response.namespace_decision.clone();
-            let resolver_policy = fallback_marker.used().then_some("hns-doh-compat");
+            let resolver_policy = fallback_marker
+                .used()
+                .then_some("user-configured-recursive-hns-doh");
             let selected_namespace = response
                 .namespace_decision
                 .as_ref()
@@ -7976,7 +8403,7 @@ fn prepare_gateway_http_response_with_transport(
         }
         Err(error) => {
             let (status, reason, detail) =
-                map_gateway_error_for_namespace(dns_trace.selected_namespace(), &error);
+                map_gateway_error_for_namespace(dns_trace.selected_namespace(), &error, &dns_trace);
             let trace = resolution_trace_json(
                 &input,
                 network,
@@ -8108,7 +8535,7 @@ fn prepare_gateway_http_response_body_to_file_with_transport(
                 &input,
                 400,
                 "Bad Request",
-                error,
+                &error,
                 body_path,
             )
             .map(PreparedGatewayFileResponse::without_namespace_decision);
@@ -8150,6 +8577,7 @@ fn prepare_gateway_http_response_body_to_file_with_transport(
         GatewayResolverContext {
             network,
             mode,
+            configured_hns_doh: parsed_headers.configured_hns_doh,
             experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
             peer_state,
             relay: None,
@@ -8197,7 +8625,9 @@ fn prepare_gateway_http_response_body_to_file_with_transport(
             drop(body_file);
             pending_body.publish(body_path)?;
             let namespace_decision = response.namespace_decision.clone();
-            let resolver_policy = fallback_marker.used().then_some("hns-doh-compat");
+            let resolver_policy = fallback_marker
+                .used()
+                .then_some("user-configured-recursive-hns-doh");
             let selected_namespace = response
                 .namespace_decision
                 .as_ref()
@@ -8237,7 +8667,7 @@ fn prepare_gateway_http_response_body_to_file_with_transport(
         }
         Err(error) => {
             let (status, reason, detail) =
-                map_gateway_error_for_namespace(dns_trace.selected_namespace(), &error);
+                map_gateway_error_for_namespace(dns_trace.selected_namespace(), &error, &dns_trace);
             let trace = resolution_trace_json(
                 &input,
                 network,
@@ -8337,6 +8767,7 @@ fn android_gateway_resolver(
     let GatewayResolverContext {
         network,
         mode,
+        configured_hns_doh,
         experimental_p2p_dns_relay,
         peer_state,
         relay,
@@ -8370,6 +8801,23 @@ fn android_gateway_resolver(
             BoxedDelegatedResolver::new(P2pFallbackDelegatedResolver::new(delegated, relay));
     }
 
+    if let Some(endpoint) = configured_hns_doh {
+        let configured_transport = ConfiguredRecursiveHnsDohTransport::new(
+            endpoint,
+            dns_trace.clone(),
+            http.clone(),
+            endpoint_policy,
+        );
+        let configured =
+            AuthoritativeDnssecResolver::new(configured_transport, SystemDnssecVerifier)
+                .without_authoritative_doh();
+        delegated = BoxedDelegatedResolver::new(ConfiguredDohFallbackDelegatedResolver::new(
+            delegated,
+            configured,
+            fallback_marker.clone(),
+        ));
+    }
+
     let hns_lineage = HnsProofLineage::default();
     let proof_provider = GatewayProofProvider::new(base.clone(), values, network)
         .with_peer_state(peer_state)
@@ -8382,7 +8830,6 @@ fn android_gateway_resolver(
     #[cfg(test)]
     let icann = icann.with_test_single_label_absence();
 
-    let _ = fallback_marker;
     AndroidGatewayResolver::new(DualRootBrowserResolver {
         hns: Box::new(primary),
         icann: Box::new(icann),
@@ -8397,6 +8844,7 @@ fn android_gateway_resolver(
 struct GatewayResolverContext {
     network: NetworkKind,
     mode: GatewayResolutionMode,
+    configured_hns_doh: Option<HnsDohEndpoint>,
     experimental_p2p_dns_relay: bool,
     peer_state: Option<Arc<Mutex<()>>>,
     relay: Option<SharedDnsRelayState>,
@@ -8419,24 +8867,25 @@ fn android_authoritative_dns_transport(
     AndroidAuthoritativeDnsTransport::new(transport, dns_trace, http)
 }
 
-fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'static str> {
+fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, String> {
     if header_text.len() > MAX_GATEWAY_HEADER_TEXT_BYTES {
-        return Err("request headers are too large");
+        return Err("request headers are too large".to_owned());
     }
 
     let mut headers = Vec::new();
     let mut strict_hns_mode = false;
+    let mut configured_hns_doh = None;
     let mut experimental_p2p_dns_relay = false;
     let mut stateless_dane_certificates = false;
     let mut network = NetworkKind::Mainnet;
     for line in header_text.split("\r\n").filter(|line| !line.is_empty()) {
         let Some(separator) = line.find(':') else {
-            return Err("request header is malformed");
+            return Err("request header is malformed".to_owned());
         };
         let name = line[..separator].trim();
         let value = line[separator + 1..].trim();
         if !is_valid_gateway_header_name(name) || !is_valid_gateway_header_value(value) {
-            return Err("request header is invalid");
+            return Err("request header is invalid".to_owned());
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_STRICT_MODE_HEADER) {
             if value == "1" || value.eq_ignore_ascii_case("true") {
@@ -8445,7 +8894,11 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
             continue;
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_DOH_RESOLVER_HEADER) {
-            return Err("third-party HNS recursive DoH is prohibited");
+            if configured_hns_doh.is_some() {
+                return Err("configured HNS DoH resolver header is duplicated".to_owned());
+            }
+            configured_hns_doh = Some(parse_configured_hns_doh_endpoint(value)?);
+            continue;
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_P2P_DNS_RELAY_HEADER) {
             experimental_p2p_dns_relay = value == "1" || value.eq_ignore_ascii_case("true");
@@ -8453,7 +8906,7 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_LEGACY_DOH_HEADER) {
             if value == "1" || value.eq_ignore_ascii_case("true") {
-                return Err("third-party HNS recursive DoH is prohibited");
+                return Err("legacy HNS DoH compatibility is prohibited".to_owned());
             }
             continue;
         }
@@ -8464,7 +8917,9 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
             continue;
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_NETWORK_HEADER) {
-            network = value.parse().map_err(|_| "Handshake network is invalid")?;
+            network = value
+                .parse()
+                .map_err(|_| "Handshake network is invalid".to_owned())?;
             continue;
         }
         if name.eq_ignore_ascii_case(HNS_SECURITY_PATH_HEADER) {
@@ -8476,6 +8931,7 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
     Ok(ParsedGatewayHeaders {
         headers,
         strict_hns_mode,
+        configured_hns_doh,
         experimental_p2p_dns_relay,
         stateless_dane_certificates,
         network,
@@ -8682,7 +9138,7 @@ fn resolution_trace_json(
     let hns_proof = hns_proof_trace_status(input, network, selected_namespace, resolution, error);
     let fallback_reason = fallback_marker.reason().unwrap_or("none");
     let fallback_type = if fallback_marker.used() {
-        r#""HNS_DOH""#
+        r#""USER_CONFIGURED_RECURSIVE_HNS_DOH""#
     } else {
         "null"
     };
@@ -8814,19 +9270,25 @@ fn resolution_source_name(
             Some("authoritative_doh") => return "authoritative_doh",
             Some("udp53" | "tcp53") => return "authoritative_dns",
             Some("p2p_dns_relay") => return "p2p_dns_relay",
-            Some("hns_doh") => return "hns_doh",
+            Some("user_configured_recursive_hns_doh") => {
+                return "user_configured_recursive_hns_doh";
+            }
             _ => return "hns_resource",
         }
     }
     if let Some(last) = dns_events.iter().rev().find(|event| {
         matches!(
             event.protocol,
-            "authoritative_doh" | "udp53" | "tcp53" | "p2p_dns_relay" | "hns_doh"
+            "authoritative_doh"
+                | "udp53"
+                | "tcp53"
+                | "p2p_dns_relay"
+                | "user_configured_recursive_hns_doh"
         )
     }) {
         return match last.protocol {
             "p2p_dns_relay" => "p2p_dns_relay",
-            "hns_doh" => "hns_doh",
+            "user_configured_recursive_hns_doh" => "user_configured_recursive_hns_doh",
             "authoritative_doh" => "authoritative_doh",
             _ => "authoritative_dns",
         };
@@ -9393,7 +9855,11 @@ fn dns_trace_attempts_json(events: &[DnsTraceEvent]) -> String {
 fn dns_trace_root(protocol: &str) -> &'static str {
     match protocol {
         "icann_doh" => "icann",
-        "udp53" | "tcp53" | "authoritative_doh" | "p2p_dns_relay" | "hns_doh" => "hns",
+        "udp53"
+        | "tcp53"
+        | "authoritative_doh"
+        | "p2p_dns_relay"
+        | "user_configured_recursive_hns_doh" => "hns",
         _ => "diagnostic",
     }
 }
@@ -9434,9 +9900,11 @@ fn successful_dns_path_for_namespace<'a>(
 fn dns_protocol_namespace(protocol: &str) -> Option<Namespace> {
     match protocol {
         "icann_doh" => Some(Namespace::Icann),
-        "udp53" | "tcp53" | "authoritative_doh" | "p2p_dns_relay" | "hns_doh" => {
-            Some(Namespace::Hns)
-        }
+        "udp53"
+        | "tcp53"
+        | "authoritative_doh"
+        | "p2p_dns_relay"
+        | "user_configured_recursive_hns_doh" => Some(Namespace::Hns),
         _ => None,
     }
 }
@@ -9458,8 +9926,13 @@ fn security_path_name(
                 Some("authoritative_doh") => Some("dane-authoritative-doh"),
                 Some("udp53" | "tcp53") => Some("dane-authoritative-dns53"),
                 Some("p2p_dns_relay") => Some("dane-p2p-dns-relay"),
-                Some("hns_doh") => Some("dane-third-party-doh"),
+                Some("user_configured_recursive_hns_doh") => {
+                    Some("dane-user-configured-recursive-hns-doh")
+                }
                 Some("icann_doh") => Some("dane-icann-doh"),
+                None if namespace == Namespace::Hns && !has_hns_dns_transport_event(events) => {
+                    Some("dane-local-hns-proof")
+                }
                 _ => None,
             };
         }
@@ -9482,7 +9955,8 @@ fn security_path_name(
         Some("authoritative_doh") => Some("hns-authoritative-doh"),
         Some("udp53" | "tcp53") => Some("hns-authoritative-dns53"),
         Some("p2p_dns_relay") => Some("hns-p2p-dns-relay"),
-        Some("hns_doh") => Some("hns-third-party-doh"),
+        Some("user_configured_recursive_hns_doh") => Some("hns-user-configured-recursive-hns-doh"),
+        None if !has_hns_dns_transport_event(events) => Some("hns-local-hns-proof"),
         _ => None,
     }
 }
@@ -9926,7 +10400,13 @@ fn hns_tls_policy_header(decision: &DaneDecision) -> Option<&'static str> {
 fn map_gateway_error_for_namespace(
     selected_namespace: Option<Namespace>,
     error: &GatewayError,
+    dns_trace: &DnsTraceRecorder,
 ) -> (u16, &'static str, &'static str) {
+    if classification_has_hns_transport_failure(error)
+        && dns_trace_has_detected_port53_interception(dns_trace)
+    {
+        return interception_recovery_error(dns_trace);
+    }
     if selected_namespace == Some(Namespace::Icann) {
         match error {
             GatewayError::Resolver(ResolverError::DnsTransport(_)) => (
@@ -10055,6 +10535,50 @@ fn map_gateway_error_for_namespace(
     }
 }
 
+fn interception_recovery_error(dns_trace: &DnsTraceRecorder) -> (u16, &'static str, &'static str) {
+    let p2p_attempted = dns_trace.relay_snapshot().is_some();
+    let configured_doh_attempted = dns_trace
+        .snapshot()
+        .iter()
+        .any(|event| event.protocol == "user_configured_recursive_hns_doh");
+    let detail = match (p2p_attempted, configured_doh_attempted) {
+        (false, false) => {
+            "This network intercepted direct authoritative DNS and no authenticated alternate completed. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB). Users can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings; both retain local DNSSEC and DANE verification."
+        }
+        (true, false) => {
+            "This network intercepted direct authoritative DNS. The opted-in P2P DNS relay requester was attempted and exhausted. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB). Users can configure an explicit recursive HNS DoH URL in extension settings; local DNSSEC and DANE verification remains mandatory."
+        }
+        (false, true) => {
+            "This network intercepted direct authoritative DNS. The configured recursive HNS DoH recovery endpoint was attempted and exhausted. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB). Users can enable the requester-only P2P DNS relay or update the resolver URL in extension settings; local DNSSEC and DANE verification remains mandatory."
+        }
+        (true, true) => {
+            "This network intercepted direct authoritative DNS. Both the opted-in P2P DNS relay requester and configured recursive HNS DoH recovery endpoint were attempted and exhausted. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB)."
+        }
+    };
+    (502, "HNS Port 53 Interception Detected", detail)
+}
+
+fn classification_has_hns_transport_failure(error: &GatewayError) -> bool {
+    let GatewayError::Resolver(ResolverError::NamespaceClassification(
+        ClassificationError::RootFailed { hns, .. },
+    )) = error
+    else {
+        return false;
+    };
+    matches!(
+        hns,
+        RootResolutionState::Failed(failure)
+            if failure.kind() == RootFailureKind::Transport
+    )
+}
+
+fn dns_trace_has_detected_port53_interception(dns_trace: &DnsTraceRecorder) -> bool {
+    dns_trace
+        .snapshot()
+        .iter()
+        .any(|event| event.protocol == "dns_interception_probe" && event.status == "detected")
+}
+
 fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) {
     match error {
         GatewayError::Resolver(ResolverError::UnsupportedBackend) => (
@@ -10100,7 +10624,7 @@ fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) 
         GatewayError::Resolver(ResolverError::Port53InterceptionDetected) => (
             502,
             "HNS Port 53 Interception Detected",
-            "This network intercepted direct authoritative DNS; no authenticated alternate transport completed.",
+            "This network intercepted direct authoritative DNS. Site owners can publish proof-anchored authoritative DoH on HTTPS 443; users can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings.",
         ),
         GatewayError::Resolver(ResolverError::DnsResponseCode(_)) => (
             502,
@@ -11589,7 +12113,10 @@ mod tests {
     fn browser_proxy_status_parses_only_known_trusted_metadata_values() {
         let metadata = trusted_proxy_metadata(&[
             (HNS_TLS_POLICY_HEADER, " DaNe "),
-            (HNS_RESOLVER_POLICY_HEADER, " HNS-DOH-COMPAT "),
+            (
+                HNS_RESOLVER_POLICY_HEADER,
+                " USER-CONFIGURED-RECURSIVE-HNS-DOH ",
+            ),
             (HNS_SECURITY_PATH_HEADER, " Dane-Authoritative-DoH "),
             (HNS_RESOLUTION_TRACE_HEADER, r#"{"mode":"strict"}"#),
             ("X-HNS-Future-Metadata", "must-not-surface"),
@@ -11612,7 +12139,7 @@ mod tests {
                 status_code: 204,
                 likely_main_frame: true,
                 tls_policy: Some(BrowserProxyTlsPolicy::Dane),
-                resolver_policy: Some(BrowserProxyResolverPolicy::HnsDohCompatibility),
+                resolver_policy: Some(BrowserProxyResolverPolicy::UserConfiguredRecursiveHnsDoh,),
                 security_path: Some(BrowserProxySecurityPath::DaneAuthoritativeDoh),
                 resolution_trace_json: Some(r#"{"mode":"strict"}"#.to_owned()),
                 canonical_observation: None,
@@ -11660,8 +12187,8 @@ mod tests {
                 BrowserProxySecurityPath::DaneP2pDnsRelay,
             ),
             (
-                "dane-third-party-doh",
-                BrowserProxySecurityPath::DaneThirdPartyDoh,
+                "dane-user-configured-recursive-hns-doh",
+                BrowserProxySecurityPath::DaneUserConfiguredRecursiveHnsDoh,
             ),
             ("stateless-dane", BrowserProxySecurityPath::StatelessDane),
             ("dane-icann-doh", BrowserProxySecurityPath::DaneIcannDoh),
@@ -11678,8 +12205,8 @@ mod tests {
                 BrowserProxySecurityPath::HnsP2pDnsRelay,
             ),
             (
-                "hns-third-party-doh",
-                BrowserProxySecurityPath::HnsThirdPartyDoh,
+                "hns-user-configured-recursive-hns-doh",
+                BrowserProxySecurityPath::HnsUserConfiguredRecursiveHnsDoh,
             ),
         ] {
             assert_eq!(
@@ -12507,7 +13034,7 @@ mod tests {
         let configuration = RuntimeConfiguration::new(&data_dir, NetworkKind::Testnet)
             .with_initial_policy(RuntimePolicy {
                 resolution_mode: ResolutionMode::Strict,
-                hns_doh_resolver: Some("https://resolver.example/dns-query".to_owned()),
+                hns_doh_resolver: Some("https://hnsdoh.com/dns-query".to_owned()),
                 experimental_p2p_dns_relay: true,
                 legacy_hns_doh_compatibility: false,
                 stateless_dane_certificates: true,
@@ -12534,8 +13061,15 @@ mod tests {
         assert!(parsed.experimental_p2p_dns_relay);
         assert!(parsed.stateless_dane_certificates);
         assert_eq!(parsed.network, NetworkKind::Testnet);
+        assert_eq!(
+            parsed.configured_hns_doh.map(|endpoint| endpoint.display()),
+            Some("https://hnsdoh.com/dns-query".to_owned())
+        );
         let normalized = runtime.policy().unwrap();
-        assert!(normalized.hns_doh_resolver.is_none());
+        assert_eq!(
+            normalized.hns_doh_resolver.as_deref(),
+            Some("https://hnsdoh.com/dns-query")
+        );
         assert!(!normalized.legacy_hns_doh_compatibility);
         cleanup_dir(&data_dir);
     }
@@ -12597,7 +13131,7 @@ mod tests {
 
         let changed = RuntimePolicy {
             resolution_mode: ResolutionMode::Strict,
-            hns_doh_resolver: Some("https://Resolver.Example:443/dns-query".to_owned()),
+            hns_doh_resolver: Some("https://HNSDOH.COM:443/dns-query".to_owned()),
             experimental_p2p_dns_relay: true,
             legacy_hns_doh_compatibility: false,
             stateless_dane_certificates: true,
@@ -12610,7 +13144,10 @@ mod tests {
         assert_eq!(policy.resolution_mode, ResolutionMode::Strict);
         assert!(policy.experimental_p2p_dns_relay);
         assert!(!policy.legacy_hns_doh_compatibility);
-        assert!(policy.hns_doh_resolver.is_none());
+        assert_eq!(
+            policy.hns_doh_resolver.as_deref(),
+            Some("https://hnsdoh.com/dns-query")
+        );
         assert!(policy.stateless_dane_certificates);
         assert_eq!(
             runtime
@@ -12721,7 +13258,10 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert!(matches!(post_admission, RuntimeError::Operation(_)));
+        assert!(matches!(
+            post_admission,
+            RuntimeError::InvalidConfiguration(_)
+        ));
         assert!(!post_admission.to_string().contains("not-a-doh-url"));
         assert_eq!(
             parse_untrusted_gateway_headers(
@@ -13176,9 +13716,13 @@ mod tests {
                 .as_deref()
                 .is_some_and(|trace| trace.contains(r#""mode":"strict""#))
         );
+        assert_eq!(status.canonical_status_unavailable_reason(), None);
         assert_eq!(
-            status.canonical_status_unavailable_reason(),
-            Some(CanonicalStatusUnavailableReason::EvidenceUnavailable)
+            status
+                .canonical_status()
+                .expect("proof-contained HNS success has canonical status")
+                .actual_transport(),
+            CanonicalResolutionTransport::LocalHnsProof
         );
 
         proxy.stop();
@@ -13876,7 +14420,7 @@ mod tests {
         assert!(diagnostics_json().contains(r#""chromium-browser-request-gateway""#));
         assert!(diagnostics_json().contains(r#""chromium-service-worker-gateway""#));
         assert!(diagnostics_json().contains(r#""chromium-redirect-gateway""#));
-        assert!(diagnostics_json().contains(r#""hns-doh-compat-resolver""#));
+        assert!(diagnostics_json().contains(r#""user-configured-recursive-hns-doh""#));
         assert!(diagnostics_json().contains(r#""random-loopback-proxy-port""#));
     }
 
@@ -14547,23 +15091,28 @@ mod tests {
                 dane_decision: DaneDecision::Matched(hns_dane::TlsaUsage::DaneEe),
                 tls_inspection: None,
             },
-            Some("hns-doh-compat"),
+            Some("user-configured-recursive-hns-doh"),
         );
         let text = String::from_utf8(response).unwrap();
 
         assert!(
-            text.contains("X-HNS-TLS-Policy: dane\r\nX-HNS-Resolver-Policy: hns-doh-compat\r\n",)
+            text.contains("X-HNS-TLS-Policy: dane\r\nX-HNS-Resolver-Policy: user-configured-recursive-hns-doh\r\n",)
         );
     }
 
     #[test]
-    fn gateway_headers_reject_prohibited_public_hns_resolver() {
-        assert!(matches!(
-            parse_gateway_headers(
-                "X-HNS-Browser-DoH-Resolver: https://resolver.example/dns-query\r\n"
-            ),
-            Err("third-party HNS recursive DoH is prohibited")
-        ));
+    fn gateway_headers_accept_only_the_validated_internal_recursive_hns_doh_url() {
+        let configured = parse_gateway_headers(
+            "X-HNS-Browser-DoH-Resolver: https://HNSDOH.COM:443/dns-query\r\n",
+        )
+        .unwrap();
+        assert_eq!(
+            configured
+                .configured_hns_doh
+                .map(|endpoint| endpoint.display()),
+            Some("https://hnsdoh.com/dns-query".to_owned())
+        );
+        assert!(configured.headers.is_empty());
 
         let parsed = parse_gateway_headers(
             "Accept: text/html\r\n\
@@ -14575,6 +15124,7 @@ mod tests {
 
         assert!(parsed.strict_hns_mode);
         assert!(parsed.stateless_dane_certificates);
+        assert!(parsed.configured_hns_doh.is_none());
         assert_eq!(parsed.network, NetworkKind::Mainnet);
         assert_eq!(
             parsed.headers,
@@ -14650,13 +15200,45 @@ mod tests {
     }
 
     #[test]
-    fn gateway_headers_reject_every_public_hns_doh_endpoint() {
-        assert!(matches!(
-            parse_gateway_headers(
-                "X-HNS-Browser-DoH-Resolver: http://resolver.example/dns-query\r\n"
-            ),
-            Err("third-party HNS recursive DoH is prohibited")
-        ));
+    fn configured_recursive_hns_doh_url_rejects_unsafe_or_ambiguous_endpoints() {
+        for value in [
+            "http://hnsdoh.com/dns-query",
+            "https://user@hnsdoh.com/dns-query",
+            "https://hnsdoh.com/dns-query#fragment",
+            "https://1.1.1.1/dns-query",
+            "https://resolver.local/dns-query",
+            "https://hnsdoh.com:53/dns-query",
+        ] {
+            assert!(
+                parse_gateway_headers(&format!("X-HNS-Browser-DoH-Resolver: {value}\r\n")).is_err(),
+                "{value}"
+            );
+        }
+        assert!(
+            normalize_configured_hns_doh_resolver(Some(&format!(
+                "https://hnsdoh.com/{}",
+                "a".repeat(MAX_CONFIGURED_HNS_DOH_URL_BYTES)
+            )))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn configured_recursive_hns_doh_request_requires_explicit_ip_and_keeps_webpki_hostname() {
+        let endpoint = parse_configured_hns_doh_endpoint("https://hnsdoh.com/dns-query").unwrap();
+        let request = configured_doh_origin_request(
+            &endpoint,
+            "203.0.113.53".parse().unwrap(),
+            vec![0x12, 0x34],
+        );
+
+        assert_eq!(request.scheme, "https");
+        assert_eq!(request.host, "hnsdoh.com");
+        assert_eq!(request.connect_host.as_deref(), Some("203.0.113.53"));
+        assert_eq!(request.port, 443);
+        assert_eq!(request.path_and_query, "/dns-query");
+        assert_eq!(request.tls, TlsValidation::default());
+        assert_eq!(request.body, vec![0x12, 0x34]);
     }
 
     #[test]
@@ -14669,18 +15251,22 @@ mod tests {
 
     #[test]
     fn gateway_headers_reject_invalid_network() {
-        assert!(matches!(
-            parse_gateway_headers("X-HNS-Browser-Network: staging\r\n"),
-            Err("Handshake network is invalid")
-        ));
+        assert_eq!(
+            parse_gateway_headers("X-HNS-Browser-Network: staging\r\n")
+                .err()
+                .as_deref(),
+            Some("Handshake network is invalid")
+        );
     }
 
     #[test]
     fn gateway_headers_reject_legacy_hns_doh_enablement() {
-        assert!(matches!(
-            parse_gateway_headers("X-HNS-Browser-Legacy-HNS-DoH: 1\r\n"),
-            Err("third-party HNS recursive DoH is prohibited")
-        ));
+        assert_eq!(
+            parse_gateway_headers("X-HNS-Browser-Legacy-HNS-DoH: 1\r\n")
+                .err()
+                .as_deref(),
+            Some("legacy HNS DoH compatibility is prohibited")
+        );
         assert!(parse_gateway_headers("X-HNS-Browser-Legacy-HNS-DoH: 0\r\n").is_ok());
     }
 
@@ -14797,7 +15383,7 @@ mod tests {
                 error: None,
             },
             DnsTraceEvent {
-                protocol: "hns_doh",
+                protocol: "user_configured_recursive_hns_doh",
                 server: "https://resolver.example/dns-query".to_owned(),
                 question_name: Some("denuoweb".to_owned()),
                 question_type: Some(RecordType::A.code()),
@@ -14940,7 +15526,7 @@ mod tests {
     }
 
     #[test]
-    fn security_path_distinguishes_third_party_and_actual_stateless_dane() {
+    fn security_path_distinguishes_user_configured_doh_and_actual_stateless_dane() {
         let input = GatewayHttpRequestInput {
             data_dir: "/tmp",
             method: "GET",
@@ -14952,7 +15538,7 @@ mod tests {
             body: &[],
         };
         let events = vec![DnsTraceEvent {
-            protocol: "hns_doh",
+            protocol: "user_configured_recursive_hns_doh",
             server: "https://resolver.example/dns-query".to_owned(),
             question_name: Some("_443._tcp.denuoweb".to_owned()),
             question_type: Some(RecordType::Tlsa.code()),
@@ -14970,7 +15556,7 @@ mod tests {
                 Some(Namespace::Hns),
                 &events,
             ),
-            Some("dane-third-party-doh"),
+            Some("dane-user-configured-recursive-hns-doh"),
         );
         assert_eq!(
             security_path_name(
@@ -15207,7 +15793,7 @@ mod tests {
         assert!(trace.contains(
             r#""p2pDnsRelay":{"attempted":true,"peer":"203.0.113.80:12038","serviceAdvertised":true,"retryCount":1,"error":null}"#
         ));
-        assert!(!trace.contains(r#""resolutionSource":"hns_doh""#));
+        assert!(!trace.contains(r#""resolutionSource":"user_configured_recursive_hns_doh""#));
     }
 
     #[test]
@@ -15306,6 +15892,11 @@ mod tests {
             Err(CanonicalStatusUnavailableReason::EvidenceUnavailable)
         );
 
+        assert_eq!(
+            canonical_hns_actual_transport_for_plan(&query, &plan, &DnsTraceRecorder::default()),
+            Ok(CanonicalResolutionTransport::LocalHnsProof)
+        );
+
         trace.push(DnsTraceEvent {
             protocol: "p2p_dns_relay",
             server: "203.0.113.80:12038".to_owned(),
@@ -15318,6 +15909,21 @@ mod tests {
         assert_eq!(
             canonical_hns_actual_transport_for_plan(&query, &plan, &trace),
             Ok(CanonicalResolutionTransport::HandshakeP2pDnsRelay)
+        );
+
+        let configured_trace = DnsTraceRecorder::default();
+        configured_trace.push(DnsTraceEvent {
+            protocol: "user_configured_recursive_hns_doh",
+            server: "https://hnsdoh.com/dns-query via 203.0.113.53".to_owned(),
+            question_name: Some(host.as_str().to_owned()),
+            question_type: Some(RecordType::A.code()),
+            status: "ok".to_owned(),
+            elapsed_ms: 3,
+            error: None,
+        });
+        assert_eq!(
+            canonical_hns_actual_transport_for_plan(&query, &plan, &configured_trace),
+            Ok(CanonicalResolutionTransport::UserConfiguredRecursiveHnsDoh)
         );
     }
 
@@ -15341,8 +15947,8 @@ mod tests {
         );
 
         let classification = ClassificationError::RootFailed {
-            hns: None,
-            icann: Some(RootFailure::new(
+            hns: RootResolutionState::Present,
+            icann: RootResolutionState::Failed(RootFailure::new(
                 Namespace::Icann,
                 query.clone(),
                 RootFailureKind::BogusDnssec,
@@ -15352,15 +15958,26 @@ mod tests {
         let failure = GatewayFailure::from(GatewayError::Resolver(
             ResolverError::NamespaceClassification(classification),
         ));
-        let CanonicalStatusAvailability::Available(status) = canonical_status_for_gateway_failure(
+        let CanonicalStatusAvailability::AvailableWithRootStates {
+            status,
+            root_states,
+        } = canonical_status_for_gateway_failure(
             &runtime,
             stamp,
             NetworkKind::Mainnet,
             &failure,
             &DnsTraceRecorder::default(),
-        ) else {
+        )
+        else {
             panic!("typed ICANN root failure must be representable");
         };
+        assert_eq!(
+            root_states,
+            CanonicalRootResolutionStates::new(
+                RootResolutionDisposition::Present,
+                RootResolutionDisposition::Failed,
+            )
+        );
         assert_eq!(
             status.actual_transport(),
             CanonicalResolutionTransport::ValidatingIcannDoh
@@ -15382,24 +15999,35 @@ mod tests {
 
         let hns_failure = GatewayFailure::from(GatewayError::Resolver(
             ResolverError::NamespaceClassification(ClassificationError::RootFailed {
-                hns: Some(RootFailure::new(
+                hns: RootResolutionState::Failed(RootFailure::new(
                     Namespace::Hns,
                     query.clone(),
                     RootFailureKind::StaleHnsAnchor,
                     None,
                 )),
-                icann: None,
+                icann: RootResolutionState::Absent,
             }),
         ));
-        let CanonicalStatusAvailability::Available(status) = canonical_status_for_gateway_failure(
+        let CanonicalStatusAvailability::AvailableWithRootStates {
+            status,
+            root_states,
+        } = canonical_status_for_gateway_failure(
             &runtime,
             stamp,
             NetworkKind::Mainnet,
             &hns_failure,
             &DnsTraceRecorder::default(),
-        ) else {
+        )
+        else {
             panic!("typed HNS root failure must be representable");
         };
+        assert_eq!(
+            root_states,
+            CanonicalRootResolutionStates::new(
+                RootResolutionDisposition::Failed,
+                RootResolutionDisposition::Absent,
+            )
+        );
         assert_eq!(
             status.actual_transport(),
             CanonicalResolutionTransport::Unavailable
@@ -15407,6 +16035,48 @@ mod tests {
         assert_eq!(
             status.hns_root_failure(),
             Some(RootFailureKind::StaleHnsAnchor)
+        );
+
+        let both_failed = GatewayFailure::from(GatewayError::Resolver(
+            ResolverError::NamespaceClassification(ClassificationError::RootFailed {
+                hns: RootResolutionState::Failed(RootFailure::new(
+                    Namespace::Hns,
+                    query.clone(),
+                    RootFailureKind::Transport,
+                    None,
+                )),
+                icann: RootResolutionState::Failed(RootFailure::new(
+                    Namespace::Icann,
+                    query.clone(),
+                    RootFailureKind::BogusDnssec,
+                    None,
+                )),
+            }),
+        ));
+        let CanonicalStatusAvailability::AvailableWithRootStates {
+            status,
+            root_states,
+        } = canonical_status_for_gateway_failure(
+            &runtime,
+            stamp,
+            NetworkKind::Mainnet,
+            &both_failed,
+            &DnsTraceRecorder::default(),
+        )
+        else {
+            panic!("two typed root failures must be representable");
+        };
+        assert_eq!(
+            root_states,
+            CanonicalRootResolutionStates::new(
+                RootResolutionDisposition::Failed,
+                RootResolutionDisposition::Failed,
+            )
+        );
+        assert_eq!(status.hns_root_failure(), Some(RootFailureKind::Transport));
+        assert_eq!(
+            status.icann_root_failure(),
+            Some(RootFailureKind::BogusDnssec)
         );
 
         let freshness = Freshness::new(now, now + 60).unwrap();
@@ -15697,6 +16367,27 @@ mod tests {
             })
         );
 
+        let local_proof_status = try_canonical_status_for_gateway_success(
+            &runtime,
+            stamp,
+            NetworkKind::Mainnet,
+            Some(&decision),
+            true,
+            &origin_request,
+            &DaneDecision::NoTlsa,
+            false,
+            &DnsTraceRecorder::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            local_proof_status.actual_transport(),
+            CanonicalResolutionTransport::LocalHnsProof
+        );
+        assert_eq!(
+            local_proof_status.decision_fingerprint(),
+            Some(expected_fingerprint)
+        );
+
         proxy.stop();
         cleanup_dir(&data_dir);
     }
@@ -15858,7 +16549,7 @@ mod tests {
         assert!(trace.contains(r#""estimatedTargetHeight":"#));
         assert!(trace.contains(r#""localChainStale":true"#));
         assert!(trace.contains(
-            r#""fallback":{"used":true,"type":"HNS_DOH","reason":"local_chain_not_current"}"#
+            r#""fallback":{"used":true,"type":"USER_CONFIGURED_RECURSIVE_HNS_DOH","reason":"local_chain_not_current"}"#
         ));
         assert!(trace.contains(
             r#""finalError":"resolver error: local HNS chain is not current enough to determine current name state""#
@@ -16028,7 +16719,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_delegated_resolver_uses_doh_transport_on_nameserver_transport_error() {
+    fn configured_doh_fallback_uses_recursive_transport_on_earlier_transport_error() {
         let answer = ResolutionAnswer {
             name: DnsName::from_ascii("nathan.woodburn").unwrap(),
             records: vec![address_record("nathan.woodburn", [103, 152, 197, 116])],
@@ -16052,14 +16743,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolved, answer);
-        assert_eq!(
-            marker.reason(),
-            Some("authoritative_nameserver_transport_failed")
-        );
+        assert_eq!(marker.reason(), Some("earlier_hns_transports_unavailable"));
     }
 
     #[test]
-    fn fallback_delegated_resolver_skips_primary_after_root_fallback() {
+    fn configured_doh_fallback_skips_primary_after_root_fallback() {
         use std::sync::atomic::AtomicUsize;
 
         let primary_calls = Arc::new(AtomicUsize::new(0));
@@ -16138,6 +16826,74 @@ mod tests {
                 .unwrap_err(),
             ResolverError::ProofUnavailable,
         );
+    }
+
+    #[test]
+    fn recursive_hns_doh_and_p2p_fallbacks_accept_only_typed_transport_unavailability() {
+        assert_eq!(
+            configured_doh_transport_fallback_reason(&ResolverError::DnsTransport(
+                "closed".to_owned()
+            )),
+            Some("earlier_hns_transports_unavailable")
+        );
+        assert_eq!(
+            configured_doh_transport_fallback_reason(&ResolverError::Port53InterceptionDetected),
+            Some("port53_interception_detected")
+        );
+
+        for error in [
+            ResolverError::DnsResponseCode(2),
+            ResolverError::InvalidDnsResponse,
+            ResolverError::DnssecFailed,
+            ResolverError::RelayDnssecFailed,
+            ResolverError::ProofUnavailable,
+            ResolverError::LocalChainNotCurrent,
+            ResolverError::ProofNameMismatch,
+        ] {
+            assert_eq!(configured_doh_transport_fallback_reason(&error), None);
+            assert!(!delegated_p2p_fallback_allowed(&error));
+        }
+    }
+
+    #[test]
+    fn configured_recursive_hns_doh_never_masks_terminal_resolution_errors() {
+        let request = ResolutionRequest {
+            qname: "terminal.relaytest".to_owned(),
+            qtype: RecordType::A.code(),
+        };
+
+        for terminal in [
+            (|| ResolverError::DnsResponseCode(2)) as fn() -> ResolverError,
+            || ResolverError::InvalidDnsResponse,
+            || ResolverError::DnssecFailed,
+            || ResolverError::RelayDnssecFailed,
+            || ResolverError::ProofUnavailable,
+            || ResolverError::LocalChainNotCurrent,
+            || ResolverError::ProofNameMismatch,
+        ] {
+            let fallback_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let marker = FallbackMarker::default();
+            let resolver = ConfiguredDohFallbackDelegatedResolver::new(
+                TestDelegatedResolver::error(terminal),
+                CountingAnswerDelegatedResolver {
+                    calls: Arc::clone(&fallback_calls),
+                    answer: ResolutionAnswer {
+                        name: DnsName::from_ascii("terminal.relaytest").unwrap(),
+                        records: vec![address_record("terminal.relaytest", [203, 0, 113, 48])],
+                        secure: true,
+                    },
+                },
+                marker.clone(),
+            );
+
+            assert!(
+                resolver
+                    .resolve_delegated(&request, &test_delegation("relaytest"))
+                    .is_err()
+            );
+            assert_eq!(fallback_calls.load(Ordering::Relaxed), 0);
+            assert!(!marker.used());
+        }
     }
 
     #[test]
@@ -16255,7 +17011,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_doh_follows_p2p_unavailability_and_keeps_distinct_marker() {
+    fn configured_doh_follows_p2p_unavailability_and_keeps_distinct_marker() {
         let answer = ResolutionAnswer {
             name: DnsName::from_ascii("legacy.relaytest").unwrap(),
             records: vec![address_record("legacy.relaytest", [203, 0, 113, 45])],
@@ -16288,14 +17044,11 @@ mod tests {
                 .unwrap(),
             answer,
         );
-        assert_eq!(
-            marker.reason(),
-            Some("authoritative_nameserver_transport_failed")
-        );
+        assert_eq!(marker.reason(), Some("earlier_hns_transports_unavailable"));
     }
 
     #[test]
-    fn relay_dnssec_failure_is_distinct_and_does_not_fall_through_to_legacy_doh() {
+    fn relay_dnssec_failure_is_distinct_and_does_not_fall_through_to_configured_doh() {
         let first_peer: SocketAddr = "203.0.113.80:12038".parse().unwrap();
         let alternate_peer: SocketAddr = "203.0.113.81:12038".parse().unwrap();
         let relay_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -16341,6 +17094,45 @@ mod tests {
             feedback.reported_peers(),
             vec![vec![first_peer], vec![alternate_peer]]
         );
+        assert!(!marker.used());
+    }
+
+    #[test]
+    fn invalid_p2p_response_does_not_fall_through_to_configured_doh() {
+        let p2p = P2pFallbackDelegatedResolver::new(
+            TestDelegatedResolver::error(|| {
+                ResolverError::DnsTransport("direct port 53 blocked".to_owned())
+            }),
+            TestDelegatedResolver::error(|| ResolverError::InvalidDnsResponse),
+        );
+        let fallback_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let marker = FallbackMarker::default();
+        let resolver = ConfiguredDohFallbackDelegatedResolver::new(
+            p2p,
+            CountingAnswerDelegatedResolver {
+                calls: Arc::clone(&fallback_calls),
+                answer: ResolutionAnswer {
+                    name: DnsName::from_ascii("invalid.relaytest").unwrap(),
+                    records: vec![address_record("invalid.relaytest", [203, 0, 113, 49])],
+                    secure: true,
+                },
+            },
+            marker.clone(),
+        );
+
+        assert_eq!(
+            resolver
+                .resolve_delegated(
+                    &ResolutionRequest {
+                        qname: "invalid.relaytest".to_owned(),
+                        qtype: RecordType::A.code(),
+                    },
+                    &test_delegation("relaytest"),
+                )
+                .unwrap_err(),
+            ResolverError::InvalidDnsResponse,
+        );
+        assert_eq!(fallback_calls.load(Ordering::Relaxed), 0);
         assert!(!marker.used());
     }
 
@@ -16411,6 +17203,57 @@ mod tests {
             icann_absence_state(AbsenceKind::DnssecAuthenticatedNoUsableEndpoint),
             "authenticatedAbsent",
         );
+    }
+
+    #[test]
+    fn indeterminate_namespace_trace_preserves_bounded_root_states() {
+        let query = OriginQuery::new(
+            CanonicalHost::parse("partial-state.example").unwrap(),
+            hns_namespace_resolution::OriginScheme::Https,
+            NonZeroU16::new(443),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let failed_hns = ClassificationError::RootFailed {
+            hns: RootResolutionState::Failed(RootFailure::new(
+                Namespace::Hns,
+                query.clone(),
+                RootFailureKind::Transport,
+                None,
+            )),
+            icann: RootResolutionState::Absent,
+        };
+        let trace = indeterminate_namespace_trace_json(&query, &failed_hns);
+        assert!(trace.contains(r#""hnsState":"failed","icannState":"absent""#));
+        assert!(trace.contains(
+            r#""hns":{"state":"failed","rcode":null,"denial":null,"failure":"Transport"}"#
+        ));
+        assert!(
+            trace.contains(
+                r#""icann":{"state":"absent","rcode":null,"denial":null,"failure":null}"#
+            )
+        );
+        assert!(!trace.contains("authenticatedAbsent"));
+        assert!(!trace.contains("insecureAbsent"));
+
+        let both_failed = ClassificationError::RootFailed {
+            hns: RootResolutionState::Failed(RootFailure::new(
+                Namespace::Hns,
+                query.clone(),
+                RootFailureKind::Transport,
+                None,
+            )),
+            icann: RootResolutionState::Failed(RootFailure::new(
+                Namespace::Icann,
+                query.clone(),
+                RootFailureKind::BogusDnssec,
+                None,
+            )),
+        };
+        let trace = indeterminate_namespace_trace_json(&query, &both_failed);
+        assert!(trace.contains(r#""hnsState":"failed","icannState":"failed""#));
+        assert!(trace.contains(r#""failure":"Transport""#));
+        assert!(trace.contains(r#""failure":"BogusDnssec""#));
+        assert!(!trace.contains(query.host().as_str()));
     }
 
     #[test]
@@ -17325,8 +18168,8 @@ mod tests {
         )
         .unwrap_err();
         let hns_namespace_resolution::ClassificationError::RootFailed {
-            hns: Some(failure),
-            icann: None,
+            hns: RootResolutionState::Failed(failure),
+            icann: RootResolutionState::Present,
         } = error
         else {
             panic!("ICANN presence must not hide unresolved HNS TLS policy");
@@ -18876,10 +19719,12 @@ mod tests {
 
         assert!(text.starts_with("HTTP/1.1 400 Bad Request\r\n"));
         assert!(text.ends_with("http://welcome/\n400 Bad Request\nrequest header is malformed\n"));
-        assert!(matches!(
-            parse_gateway_headers("X-Test: bad\0value\r\n"),
-            Err("request header is invalid")
-        ));
+        assert_eq!(
+            parse_gateway_headers("X-Test: bad\0value\r\n")
+                .err()
+                .as_deref(),
+            Some("request header is invalid")
+        );
         cleanup_dir(&path);
     }
 
@@ -18965,6 +19810,7 @@ mod tests {
             map_gateway_error_for_namespace(
                 Some(Namespace::Icann),
                 &GatewayError::NoResolvedAddress,
+                &DnsTraceRecorder::default(),
             ),
             (
                 502,
@@ -19027,6 +19873,68 @@ mod tests {
                 "HNS QUIC Transport Failed",
                 "Origin QUIC connection failed closed.",
             ),
+        );
+    }
+
+    #[test]
+    fn classification_transport_failure_requires_positive_probe_for_interception_detail() {
+        let query = OriginQuery::new(
+            CanonicalHost::parse("intercepted.example").unwrap(),
+            hns_namespace_resolution::OriginScheme::Https,
+            NonZeroU16::new(443),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let error = GatewayError::Resolver(ResolverError::NamespaceClassification(
+            ClassificationError::RootFailed {
+                hns: RootResolutionState::Failed(RootFailure::new(
+                    Namespace::Hns,
+                    query,
+                    RootFailureKind::Transport,
+                    None,
+                )),
+                icann: RootResolutionState::Absent,
+            },
+        ));
+        let generic = map_gateway_error(&error);
+        assert_eq!(
+            map_gateway_error_for_namespace(None, &error, &DnsTraceRecorder::default()),
+            generic
+        );
+
+        let inconclusive = DnsTraceRecorder::default();
+        inconclusive.push(DnsTraceEvent {
+            protocol: "dns_interception_probe",
+            server: "192.0.2.1:53".to_owned(),
+            question_name: Some(DNS_INTERCEPTION_PROBE_NAME.to_owned()),
+            question_type: Some(RecordType::A.code()),
+            status: "inconclusive".to_owned(),
+            elapsed_ms: 1,
+            error: Some("unrelated reply".to_owned()),
+        });
+        assert_eq!(
+            map_gateway_error_for_namespace(None, &error, &inconclusive),
+            generic
+        );
+
+        let detected = DnsTraceRecorder::default();
+        detected.push(DnsTraceEvent {
+            protocol: "dns_interception_probe",
+            server: "192.0.2.1:53".to_owned(),
+            question_name: Some(DNS_INTERCEPTION_PROBE_NAME.to_owned()),
+            question_type: Some(RecordType::A.code()),
+            status: "detected".to_owned(),
+            elapsed_ms: 1,
+            error: Some(
+                "received a matching DNS reply from a non-routable TEST-NET destination".to_owned(),
+            ),
+        });
+        assert_eq!(
+            map_gateway_error_for_namespace(None, &error, &detected),
+            (
+                502,
+                "HNS Port 53 Interception Detected",
+                "This network intercepted direct authoritative DNS and no authenticated alternate completed. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB). Users can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings; both retain local DNSSEC and DANE verification.",
+            )
         );
     }
 

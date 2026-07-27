@@ -1121,11 +1121,11 @@ where
                             &ds_rrset,
                         ) {
                             Ok(answer) => return Ok(answer),
-                            Err(error) => last_error = Some(error),
+                            Err(error) => retain_strongest_resolution_error(&mut last_error, error),
                         }
                     }
                 }
-                Err(error) => last_error = Some(error),
+                Err(error) => retain_strongest_resolution_error(&mut last_error, error),
             }
         }
 
@@ -1162,33 +1162,72 @@ where
                 ) {
                     Ok(answer) => return Ok(answer),
                     Err(ResolverError::Port53InterceptionDetected) => {
-                        last_error = Some(ResolverError::Port53InterceptionDetected);
+                        retain_strongest_resolution_error(
+                            &mut last_error,
+                            ResolverError::Port53InterceptionDetected,
+                        );
                         break;
                     }
-                    Err(error) => last_error = Some(error),
+                    Err(error) => retain_strongest_resolution_error(&mut last_error, error),
                 }
             }
         }
 
         if self.authoritative_doh_enabled && !self.prefer_authoritative_doh {
-            for endpoint in self.authoritative_doh_endpoints(delegation)? {
-                match resolve_delegated_from_doh_endpoint(
-                    &self.transport,
-                    &self.verifier,
-                    &endpoint,
-                    delegation,
-                    &request_name,
-                    qtype,
-                    &ds_rrset,
-                ) {
-                    Ok(answer) => return Ok(answer),
-                    Err(error) => last_error = Some(error),
+            match self.authoritative_doh_endpoints(delegation) {
+                Ok(endpoints) => {
+                    for endpoint in endpoints {
+                        match resolve_delegated_from_doh_endpoint(
+                            &self.transport,
+                            &self.verifier,
+                            &endpoint,
+                            delegation,
+                            &request_name,
+                            qtype,
+                            &ds_rrset,
+                        ) {
+                            Ok(answer) => return Ok(answer),
+                            Err(error) => retain_strongest_resolution_error(&mut last_error, error),
+                        }
+                    }
                 }
+                Err(error) => retain_strongest_resolution_error(&mut last_error, error),
             }
         }
 
         self.transport.probe_dns_interception();
         Err(last_error.unwrap_or(ResolverError::NoNameserverAddress))
+    }
+}
+
+fn retain_strongest_resolution_error(
+    current: &mut Option<ResolverError>,
+    candidate: ResolverError,
+) {
+    let candidate_priority = resolution_error_priority(&candidate);
+    if current
+        .as_ref()
+        .is_none_or(|error| candidate_priority >= resolution_error_priority(error))
+    {
+        *current = Some(candidate);
+    }
+}
+
+fn strongest_resolution_error(first: ResolverError, second: ResolverError) -> ResolverError {
+    let mut strongest = Some(first);
+    retain_strongest_resolution_error(&mut strongest, second);
+    strongest.expect("a seeded strongest resolution error must remain present")
+}
+
+fn resolution_error_priority(error: &ResolverError) -> u8 {
+    match error {
+        // Only these typed availability failures may reach a separately
+        // consented recursive fallback. Keep every authenticated-data,
+        // response-validity, proof, and policy failure stronger so a later
+        // transport failure cannot erase it.
+        ResolverError::DnsTransport(_) => 0,
+        ResolverError::Port53InterceptionDetected => 1,
+        _ => 2,
     }
 }
 
@@ -2468,16 +2507,24 @@ where
         {
             Err(ResolverError::Port53InterceptionDetected)
         }
-        Err(ResolverError::DnssecFailed) => resolve_delegated_from_server_target(
-            transport,
-            verifier,
-            server,
-            DnsQueryTarget::ServerTcp(server),
-            delegation,
-            request_name,
-            qtype,
-            ds_rrset,
-        ),
+        Err(ResolverError::DnssecFailed) => {
+            match resolve_delegated_from_server_target(
+                transport,
+                verifier,
+                server,
+                DnsQueryTarget::ServerTcp(server),
+                delegation,
+                request_name,
+                qtype,
+                ds_rrset,
+            ) {
+                Ok(answer) => Ok(answer),
+                Err(error) => Err(strongest_resolution_error(
+                    ResolverError::DnssecFailed,
+                    error,
+                )),
+            }
+        }
         result => result,
     }
 }
@@ -3658,14 +3705,16 @@ fn dns_query_target<T: DnsTransport>(
     let udp_response = match transport.exchange_udp(server, &query) {
         Ok(response) => response,
         Err(error) if dns_query_should_retry_tcp(&error) => {
-            return dns_query_tcp(transport, server, id, qname, qtype, &query);
+            return dns_query_tcp(transport, server, id, qname, qtype, &query)
+                .map_err(|tcp_error| strongest_resolution_error(error, tcp_error));
         }
         Err(error) => return Err(error),
     };
     let response = match parse_dns_response(id, qname, qtype, &udp_response) {
         Ok(response) => response,
         Err(error) if dns_query_should_retry_tcp(&error) => {
-            return dns_query_tcp(transport, server, id, qname, qtype, &query);
+            return dns_query_tcp(transport, server, id, qname, qtype, &query)
+                .map_err(|tcp_error| strongest_resolution_error(error, tcp_error));
         }
         Err(error) => return Err(error),
     };
@@ -4772,6 +4821,40 @@ mod tests {
     }
 
     #[test]
+    fn strongest_resolution_error_preserves_terminal_evidence_failures() {
+        let mut current = Some(ResolverError::DnssecFailed);
+        retain_strongest_resolution_error(
+            &mut current,
+            ResolverError::DnsTransport("later timeout".to_owned()),
+        );
+        assert_eq!(current, Some(ResolverError::DnssecFailed));
+
+        let mut current = Some(ResolverError::InvalidDnsResponse);
+        retain_strongest_resolution_error(&mut current, ResolverError::Port53InterceptionDetected);
+        assert_eq!(current, Some(ResolverError::InvalidDnsResponse));
+
+        let mut current = Some(ResolverError::ProofUnavailable);
+        retain_strongest_resolution_error(
+            &mut current,
+            ResolverError::DnsTransport("later refusal".to_owned()),
+        );
+        assert_eq!(current, Some(ResolverError::ProofUnavailable));
+    }
+
+    #[test]
+    fn strongest_resolution_error_prefers_confirmed_interception_over_transport_failure() {
+        let mut current = Some(ResolverError::DnsTransport("timeout".to_owned()));
+        retain_strongest_resolution_error(&mut current, ResolverError::Port53InterceptionDetected);
+        assert_eq!(current, Some(ResolverError::Port53InterceptionDetected));
+
+        retain_strongest_resolution_error(
+            &mut current,
+            ResolverError::DnsTransport("later refusal".to_owned()),
+        );
+        assert_eq!(current, Some(ResolverError::Port53InterceptionDetected));
+    }
+
+    #[test]
     fn dotted_name_is_icann() {
         assert_eq!(classify_name("example.com"), NameClass::Icann);
     }
@@ -5411,6 +5494,54 @@ mod tests {
         assert_eq!(transport.udp_calls.load(Ordering::SeqCst), 2);
         assert_eq!(transport.tcp_calls.load(Ordering::SeqCst), 0);
         assert_eq!(transport.doh_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn later_authoritative_doh_transport_failure_cannot_mask_direct_dnssec_failure() {
+        let pin = "36".repeat(32);
+        let delegation = HnsDelegation {
+            root_name: "denuoweb".to_owned(),
+            owner: DnsName::from_ascii("denuoweb").unwrap(),
+            records: vec![
+                ns_record("denuoweb", "ns1.denuoweb"),
+                glue4_record("ns1.denuoweb", [35, 212, 156, 128]),
+                ds_record("denuoweb"),
+                txt_record(
+                    "denuoweb",
+                    &format!(
+                        "hnsdns=1;ns=ns1.denuoweb.;transport=doh;doh=https://denuoweb:8443/dns-query;tlsa=3,1,1,{pin}"
+                    ),
+                ),
+            ],
+        };
+        let mut verifier = accepting_dnssec_verifier();
+        verifier.positive_valid = false;
+        let resolver = AuthoritativeDnssecResolver::new(
+            FailingPinnedDohTransport {
+                doh_calls: AtomicUsize::new(0),
+                udp_calls: AtomicUsize::new(0),
+                tcp_calls: AtomicUsize::new(0),
+            },
+            verifier,
+        );
+
+        assert_eq!(
+            resolver
+                .resolve_delegated(
+                    &ResolutionRequest {
+                        qname: "denuoweb".to_owned(),
+                        qtype: RecordType::A.code(),
+                    },
+                    &delegation,
+                )
+                .unwrap_err(),
+            ResolverError::DnssecFailed,
+        );
+
+        let (transport, _) = resolver.into_parts();
+        assert_eq!(transport.udp_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(transport.tcp_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(transport.doh_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

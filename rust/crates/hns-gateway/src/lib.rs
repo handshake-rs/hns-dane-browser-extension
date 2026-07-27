@@ -1109,8 +1109,9 @@ mod tests {
     use hns_dane::{DaneDecision, DaneError, TlsaMatching, TlsaSelector, TlsaUsage};
     use hns_namespace_resolution::{
         AbsenceKind, EvidenceProvenance, Freshness, HnsNetwork, IcannChainState, OriginPlanInput,
-        RootFailure, RootFailureKind, RootLookup, SelectionPolicy, ServiceBinding,
-        ServiceBindingInput, ValidatedAbsence, ValidatedOriginPlan, decide_namespace,
+        RootFailure, RootFailureKind, RootLookup, RootResolutionState, SelectionPolicy,
+        ServiceBinding, ServiceBindingInput, ValidatedAbsence, ValidatedOriginPlan,
+        decide_namespace,
     };
     use hns_resolver::{PreparedNamespaceResolution, ResolutionAnswer, Resolver};
     use hns_transport::{
@@ -1411,8 +1412,8 @@ mod tests {
 
         let query = prepared_icann_only("example.com").decision.query().clone();
         let classification = ClassificationError::RootFailed {
-            hns: None,
-            icann: Some(RootFailure::new(
+            hns: RootResolutionState::Absent,
+            icann: RootResolutionState::Failed(RootFailure::new(
                 Namespace::Icann,
                 query,
                 RootFailureKind::BogusDnssec,

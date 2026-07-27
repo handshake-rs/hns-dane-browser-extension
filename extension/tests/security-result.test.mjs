@@ -67,12 +67,27 @@ test("security UI uses fixed labels instead of inferring transport or validation
   assert.equal(transportLabel("directAuthoritativeUdp"), "Direct authoritative UDP");
   assert.equal(transportLabel("icannDoh"), "Validating ICANN DoH");
   assert.equal(transportLabel("handshakeP2pDnsRelay"), "Handshake P2P DNS Relay");
+  assert.equal(transportLabel("localHnsProof"), "Local verified HNS proof");
   assert.equal(transportLabel("futureTransport"), "Unavailable");
   assert.equal(stateLabel("notEvaluated"), "Not Evaluated");
   assert.equal(stateLabel("not_evaluated"), "Not evaluated");
   assert.equal(namespaceOutcomeLabel("bothDivergent"), "Both roots differ");
   assert.equal(namespaceLabel("icann"), "ICANN");
   assert.equal(namespaceReasonLabel("stickyBinding"), "sticky site binding");
+});
+
+test("security UI retains a successful proof-contained HNS main frame", () => {
+  const proofContained = result({
+    host: "shakeshift",
+    actualSelectedTransport: "localHnsProof",
+    localHnsProofState: "verified",
+    localDnssecState: "verified",
+    localTlsaState: "verified",
+    localDaneState: "verified"
+  });
+
+  assert.equal(currentSecurityResult(proofContained, runtime), proofContained);
+  assert.equal(transportLabel(proofContained.actualSelectedTransport), "Local verified HNS proof");
 });
 
 test("security UI rejects inconsistent namespace selection", () => {
@@ -157,7 +172,15 @@ test("security UI validates coherent five-way and indeterminate results", () => 
       namespaceSelectionReason: "unavailable",
       decisionFingerprint: null,
       hnsResolutionState: "failed",
-      icannResolutionState: "unknown"
+      icannResolutionState: "absent"
+    }),
+    result({
+      namespaceOutcome: "indeterminate",
+      selectedNamespace: null,
+      namespaceSelectionReason: "unavailable",
+      decisionFingerprint: null,
+      hnsResolutionState: "failed",
+      icannResolutionState: "failed"
     })
   ];
 

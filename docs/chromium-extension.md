@@ -26,12 +26,12 @@ malformed data, and resolver failure fail closed. TCP applications use
 
 The five canonical browser contracts are pinned to
 `handshake-rs/hns-dane-engine` revision
-`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`.
+`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`.
 
 ## Header currentness and UI
 
-The toolbar popup reports the global Handshake header chain separately from
-the latest page:
+The toolbar popup reports the latest page first and places the separate global
+Handshake Header chain panel beneath it:
 
 - **Validated header tip** is the highest locally proof-of-work-validated
   canonical header.
@@ -77,6 +77,12 @@ The extension requires an exact session/generation/policy/event match before
 rendering it. A newer observation without exact canonical evidence clears the
 older result and reports unavailable rather than synthesizing state.
 
+When the verified HNS name proof itself contains all origin data, a successful
+page has no delegated UDP/TCP/DoH/P2P DNS trace. Shared status records that
+case as `LocalHnsProof`, an honest non-network provenance that is never a
+transport-plan candidate. The popup renders it as `Local verified HNS proof`
+instead of discarding the otherwise complete main-frame result.
+
 ## Browser policy
 
 The options page has one experimental P2P DNS-relay requester checkbox:
@@ -93,6 +99,39 @@ HNSR is not offered in the UI. HNSR, P2P ODoH, unsupported privacy
 downgrades, and draft wire profiles remain unimplemented and fail closed.
 Historical public-HNS-DoH settings are removed without granting relay
 requester consent.
+
+The recursive HNS DoH recovery field is a new, independent opt-in. It is blank
+by default and historical resolver values are never migrated into it. The
+example `https://hnsdoh.com/dns-query` names the HNSDoH pool; Zorro is a
+listed pool node, not a separate documented HTTPS URL. The example is not
+prefilled or contacted automatically.
+
+For each proof-backed HNS delegation, Rust uses this order:
+
+1. direct authoritative UDP/TCP;
+2. proof-anchored owner authoritative DoH on HTTPS 443 when published;
+3. the requester-only P2P relay, if separately enabled;
+4. the configured recursive HNS DoH endpoint, if separately enabled; then
+5. fail closed.
+
+The configured endpoint is eligible only for `DnsTransport` or a typed,
+positively confirmed `Port53InterceptionDetected`. DNS response codes, invalid
+or malformed responses, DNSSEC failure (including relay DNSSEC failure), and
+missing or stale local chain/proof evidence never open it. Raw RFC 8484
+responses enter the ordinary local HNS DNSSEC, HTTPS/SVCB, TLSA, and DANE
+validation path; resolver AD is ignored.
+
+The configured hostname is resolved only through the built-in fixed-bootstrap
+validating ICANN DoH path, never system DNS. Rust connects to the resulting
+explicit public IP while WebPKI validates the configured endpoint hostname.
+When selected, its operator can observe HNS qnames and qtypes, request timing,
+and the user's source IP. Nothing is sent to such an operator while the field
+is blank.
+
+Site owners can avoid either user recovery setting by publishing
+proof-anchored authoritative DoH on HTTPS 443: an HNS `hnsdns=1` declaration
+with proven glue and a TLSA pin, or the supported authenticated
+`_dns.<NS>` SVCB form.
 
 ## Build
 
@@ -176,8 +215,10 @@ extension is disabled or uninstalled; orderly suspension also clears them.
   policy, PAC installation failure, or proxy restart clears proxy state.
 - Namespace fingerprints partition pools, TLS verification and resumption, and
   Alt-Svc state.
-- Selected HNS HTTPS never falls back to WebPKI or a public recursive HNS
-  resolver.
+- Selected HNS HTTPS never falls back to WebPKI. It never contacts a recursive
+  HNS resolver automatically; a newly and explicitly configured recovery
+  endpoint remains an untrusted transport whose bytes require local
+  DNSSEC/TLSA/DANE validation.
 - Selected ICANN HTTPS applies generic validating-DoH TLSA policy to every DNS
   host, not a hostname allowlist.
 - JavaScript never infers DNSSEC, TLSA, DANE, or namespace state from

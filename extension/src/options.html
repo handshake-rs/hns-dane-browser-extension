@@ -16,13 +16,50 @@
       </p>
 
       <form id="policy-form">
+        <div class="row resolver-row">
+          <span>
+            <strong>Recursive HNS DoH recovery</strong>
+            <small>
+              Optional last resort after direct authoritative DNS, owner-authenticated DoH, and
+              any opted-in P2P requester path are unavailable. Returned DNSSEC and DANE evidence
+              is still verified locally.
+            </small>
+          </span>
+          <div class="field-stack">
+            <input
+              id="recursive-hns-doh-url"
+              type="url"
+              inputmode="url"
+              maxlength="2048"
+              placeholder="https://hnsdoh.com/dns-query"
+              autocomplete="off"
+              spellcheck="false"
+              aria-describedby="recursive-hns-doh-privacy"
+            >
+            <button id="clear-recursive-hns-doh" type="button" class="secondary">Clear resolver</button>
+          </div>
+        </div>
+        <p id="recursive-hns-doh-privacy" class="warning">
+          Privacy: when selected, the operator sees HNS qnames and qtypes, request timing, and
+          your source IP. The browser sends nothing to a recursive HNS DoH operator while this
+          field is blank. The HNSDoH pool URL above is an example only and is never prefilled or
+          contacted automatically; Zorro is a listed pool node, not a separate documented URL.
+        </p>
+
         <label class="row check">
           <span>
             <strong>P2P DNS relay requester</strong>
-            <small>Opt in to consume proof-backed peer answers; this does not enable relay or output-node serving. DNSSEC and DANE are still verified locally.</small>
+            <small>Opt in to consume proof-backed peer answers, including recovery from confirmed port 53 interception. This requester-only switch does not enable relay or output-node serving; DNSSEC and DANE are still verified locally.</small>
           </span>
           <input id="p2p-dns-relay" type="checkbox">
         </label>
+        <p class="warning">
+          If your network intercepts port 53, enable this requester or configure the recursive
+          HNS DoH recovery URL above. Site owners can avoid user configuration by publishing
+          proof-anchored authoritative DoH on HTTPS 443: use an HNS <code>hnsdns=1</code>
+          declaration with proven glue plus a TLSA pin, or a supported authenticated
+          <code>_dns.&lt;NS&gt;</code> SVCB record.
+        </p>
 
         <label class="row">
           <span><strong>P2P ODoH</strong><small>Requester privacy mode.</small></span>

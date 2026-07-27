@@ -7,11 +7,11 @@ build. It does not claim that each entry is the newest upstream release.
 
 | Component | Configured version/source |
 | --- | --- |
-| Extension package | `0.5.1` |
-| Rust workspace | `0.5.1` |
+| Extension package | `0.5.2` |
+| Rust workspace | `0.5.2` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
-| Canonical browser contracts | `handshake-rs/hns-dane-engine` at `fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159` |
+| Canonical browser contracts | `handshake-rs/hns-dane-engine` at `7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5` |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
 | rcgen | `0.14.8` |

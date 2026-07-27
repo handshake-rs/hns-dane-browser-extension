@@ -9,7 +9,7 @@ ICANN resolution stack. Current mobile security claims belong to
 
 Five canonical contracts are pinned to
 `handshake-rs/hns-dane-engine` revision
-`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`:
+`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`:
 
 - session-bound browser request authority;
 - checked browser observability;
@@ -34,8 +34,9 @@ The HNS path trusts:
 5. delegated DNSSEC signatures and authenticated denial; and
 6. TLSA/DANE matching for selected HTTPS/WSS origins.
 
-Selected HNS HTTPS never falls back to WebPKI or a public recursive HNS
-resolver.
+Selected HNS HTTPS never falls back to WebPKI. It has no automatic public
+recursive resolver; an explicit user-configured recursive endpoint is an
+optional transport only and cannot replace local HNS trust validation.
 
 The locally validated canonical tip must also be current. A 144-block window
 is used only to retain proof-cache anchors across conservative
@@ -54,6 +55,23 @@ and continues through independently authenticated proof-pinned authoritative
 DoH. Ordinary direct transport failure may also continue to that endpoint. A
 timeout or inconclusive probe does not classify interception or authenticated
 absence.
+
+The complete delegated transport order is direct authoritative UDP/TCP,
+proof-anchored owner authoritative DoH, the independently opted-in
+requester-only P2P relay, and then an independently opted-in user-configured
+recursive HNS DoH endpoint. The final transport is eligible only for typed
+`DnsTransport` failure or positive `Port53InterceptionDetected`; DNS response
+codes, malformed replies, DNSSEC failure, relay DNSSEC failure, and
+missing/stale chain or proof evidence remain terminal.
+
+Configured endpoint hostnames are bootstrapped only through built-in
+fixed-address validating ICANN DoH. Connections use an explicit public IP and
+retain WebPKI hostname authentication, so the system resolver cannot select
+the endpoint. Returned RFC 8484 bytes remain untrusted until the local
+HNS-derived DS chain, DNSSEC denial/positive data, HTTPS/SVCB, TLSA, and DANE
+checks accept them. Resolver AD is never trust evidence. A blank setting sends
+nothing to a recursive HNS DoH operator, and historical resolver settings
+cannot revive the new consent.
 
 For HTTPS/SVCB, supported protocols in the effective RFC 9460 ALPN set are
 evaluated in `h3` → `h2` → `http/1.1` order; the HTTP/1.1 HTTPS default applies
@@ -155,6 +173,10 @@ and every output/provider role is disabled. HNSR and P2P ODoH are unimplemented
 and fail closed. Ordinary P2P TCP does not hide queries from the relay or
 network observers and must not be described as ODoH.
 
+The user-configured recursive HNS DoH setting is a separate opt-in and does
+not enable P2P requesting or any provider role. Its operator can observe
+qnames, qtypes, request timing, and source IP.
+
 ## Threats and responses
 
 | Threat | Response |
@@ -168,6 +190,8 @@ network observers and must not be described as ODoH.
 | Local process reaches proxy port | Per-generation proxy authentication and bounded framing |
 | Page forges security metadata | Strip internal headers; publish only native checked status |
 | Relay lies or sets AD | Treat response as untrusted and validate locally |
+| Configured recursive resolver lies or sets AD | Treat raw RFC 8484 bytes as untrusted and validate locally |
+| Configured resolver hostname is captured by local DNS | Bootstrap only through fixed-address validating ICANN DoH; connect by explicit public IP with WebPKI hostname validation |
 | One peer advertises an extreme height | Recent multi-address-group corroboration; raw maximum is diagnostic only |
 | No fresh peer target is available | Currentness is unknown and HNS admission fails closed |
 | Requester consent enables serving | Typed policy separation; all provider roles off |

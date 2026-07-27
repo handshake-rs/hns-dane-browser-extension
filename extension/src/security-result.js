@@ -4,6 +4,8 @@ const TRANSPORT_LABELS = Object.freeze({
   directAuthoritativeUdp: "Direct authoritative UDP",
   directAuthoritativeTcp: "Direct authoritative TCP",
   authenticatedAuthoritativeDoh: "Authenticated authoritative DoH",
+  userConfiguredRecursiveHnsDoh: "User-configured recursive HNS DoH",
+  localHnsProof: "Local verified HNS proof",
   icannDoh: "Validating ICANN DoH",
   handshakeP2pOdoh: "Handshake P2P ODoH",
   handshakeP2pDnsRelay: "Handshake P2P DNS Relay",

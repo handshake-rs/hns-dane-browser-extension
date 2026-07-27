@@ -4,6 +4,7 @@ const form = document.querySelector("#policy-form");
 const statusOutput = document.querySelector("#status");
 const diagnosticOutput = document.querySelector("#diagnostic-output");
 const fields = {
+  recursiveHnsDohUrl: document.querySelector("#recursive-hns-doh-url"),
   p2pDnsRelay: document.querySelector("#p2p-dns-relay"),
   p2pOdoh: document.querySelector("#p2p-odoh"),
   privacyDowngrade: document.querySelector("#privacy-downgrade"),
@@ -17,6 +18,11 @@ form.addEventListener("submit", (event) => {
 
 document.querySelector("#diagnostics").addEventListener("click", () => {
   void refreshDiagnostics();
+});
+
+document.querySelector("#clear-recursive-hns-doh").addEventListener("click", () => {
+  fields.recursiveHnsDohUrl.value = "";
+  void applyPolicy();
 });
 
 void initialize();
@@ -60,6 +66,7 @@ async function refreshDiagnostics() {
 
 function readPolicy() {
   return normalizePolicy({
+    recursiveHnsDohUrl: fields.recursiveHnsDohUrl.value,
     p2pDnsRelay: fields.p2pDnsRelay.checked,
     p2pOdoh: fields.p2pOdoh.value,
     privacyDowngrade: fields.privacyDowngrade.value,
@@ -68,6 +75,7 @@ function readPolicy() {
 }
 
 function renderPolicy(policy) {
+  fields.recursiveHnsDohUrl.value = policy.recursiveHnsDohUrl;
   fields.p2pDnsRelay.checked = policy.p2pDnsRelay;
   fields.p2pOdoh.value = policy.p2pOdoh;
   fields.privacyDowngrade.value = policy.privacyDowngrade;

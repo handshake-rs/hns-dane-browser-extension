@@ -16,7 +16,7 @@
 
 The Chromium adapter consumes these contracts from
 `handshake-rs/hns-dane-engine` at immutable revision
-`fe38e805ba9d8ba26d486c5c7aa67c87c8cf9159`:
+`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`:
 
 - runtime request authority;
 - checked browser observability;

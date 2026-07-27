@@ -15,9 +15,10 @@ use hns_browser_observability::{
 };
 use hns_chromium_platform_runtime::{
     BrowserProxy, BrowserProxyStatus, BrowserProxyStatusObserver, BrowserRuntime,
-    CanonicalBrowserObservationTuple, CanonicalStatusUnavailableReason, NetworkKind,
-    ResolutionMode, RuntimeConfiguration, RuntimePolicy, chromium_dane_pac_script,
-    diagnostics_json,
+    CanonicalBrowserObservationTuple, CanonicalRootResolutionStates,
+    CanonicalStatusUnavailableReason, NetworkKind, ResolutionMode, RootResolutionDisposition,
+    RuntimeConfiguration, RuntimePolicy, chromium_dane_pac_script, diagnostics_json,
+    normalize_configured_hns_doh_resolver,
 };
 use hns_loopback_proxy::LocalCertificateAuthority;
 use hns_resolution_policy::{
@@ -83,6 +84,10 @@ pub enum NativeHostError {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtensionPolicy {
+    /// New opt-in key. Historical public-recursive settings intentionally use
+    /// different tombstoned names and are never migrated into this field.
+    #[serde(default)]
+    pub recursive_hns_doh_url: String,
     #[serde(default)]
     pub p2p_dns_relay: bool,
     #[serde(default)]
@@ -98,6 +103,7 @@ pub struct ExtensionPolicy {
 impl Default for ExtensionPolicy {
     fn default() -> Self {
         Self {
+            recursive_hns_doh_url: String::new(),
             p2p_dns_relay: false,
             p2p_odoh: P2pOdohMode::Off,
             privacy_downgrade: PrivacyDowngradePolicy::FailClosed,
@@ -149,6 +155,8 @@ enum ChromiumDnsTransport {
     DirectAuthoritativeUdp,
     DirectAuthoritativeTcp,
     AuthenticatedAuthoritativeDoh,
+    UserConfiguredRecursiveHnsDoh,
+    LocalHnsProof,
     IcannDoh,
     HandshakeP2pOdoh,
     HandshakeP2pDnsRelay,
@@ -434,11 +442,12 @@ fn chromium_security_result(
         if canonical_status_matches_observation(canonical, tuple, context) {
             return CanonicalSecurityObservation::Available {
                 tuple,
-                result: Box::new(chromium_security_result_from_canonical(
+                result: Box::new(chromium_security_result_from_canonical_with_root_states(
                     status.host(),
                     status.status_code(),
                     status.is_likely_main_frame(),
                     canonical,
+                    status.canonical_root_resolution_states(),
                     diagnostic_final_error,
                 )),
             };
@@ -481,6 +490,7 @@ fn canonical_status_matches_observation(
         && canonical_network_name(canonical.network()) == context.network
 }
 
+#[cfg(test)]
 fn chromium_security_result_from_canonical(
     host: &str,
     status_code: u16,
@@ -488,8 +498,27 @@ fn chromium_security_result_from_canonical(
     canonical: &CanonicalBrowserStatus,
     diagnostic_final_error: Option<String>,
 ) -> ChromiumSecurityResult {
+    chromium_security_result_from_canonical_with_root_states(
+        host,
+        status_code,
+        main_frame,
+        canonical,
+        None,
+        diagnostic_final_error,
+    )
+}
+
+fn chromium_security_result_from_canonical_with_root_states(
+    host: &str,
+    status_code: u16,
+    main_frame: bool,
+    canonical: &CanonicalBrowserStatus,
+    partial_root_states: Option<CanonicalRootResolutionStates>,
+    diagnostic_final_error: Option<String>,
+) -> ChromiumSecurityResult {
     let actual_selected_transport = canonical_dns_transport(canonical.actual_transport());
-    let (hns_resolution_state, icann_resolution_state) = canonical_root_states(canonical);
+    let (hns_resolution_state, icann_resolution_state) =
+        canonical_root_states(canonical, partial_root_states);
     let evidence = canonical.evidence();
     let identities = canonical.identities();
     let chain_anchor = canonical.chain_anchor();
@@ -568,6 +597,10 @@ fn canonical_dns_transport(transport: ResolutionTransport) -> ChromiumDnsTranspo
         ResolutionTransport::HandshakeP2pOdoh => ChromiumDnsTransport::HandshakeP2pOdoh,
         ResolutionTransport::HandshakeP2pDnsRelay => ChromiumDnsTransport::HandshakeP2pDnsRelay,
         ResolutionTransport::ValidatingIcannDoh => ChromiumDnsTransport::IcannDoh,
+        ResolutionTransport::UserConfiguredRecursiveHnsDoh => {
+            ChromiumDnsTransport::UserConfiguredRecursiveHnsDoh
+        }
+        ResolutionTransport::LocalHnsProof => ChromiumDnsTransport::LocalHnsProof,
         ResolutionTransport::Unavailable => ChromiumDnsTransport::Unavailable,
     }
 }
@@ -576,6 +609,8 @@ fn canonical_nameserver_authority(transport: ChromiumDnsTransport) -> &'static s
     match transport {
         ChromiumDnsTransport::Unavailable => "unavailable",
         ChromiumDnsTransport::IcannDoh => "validatingIcannResolver",
+        ChromiumDnsTransport::UserConfiguredRecursiveHnsDoh => "userConfiguredRecursiveResolver",
+        ChromiumDnsTransport::LocalHnsProof => "localHnsProof",
         ChromiumDnsTransport::DirectAuthoritativeUdp
         | ChromiumDnsTransport::DirectAuthoritativeTcp
         | ChromiumDnsTransport::AuthenticatedAuthoritativeDoh
@@ -621,7 +656,16 @@ fn canonical_selection_reason_name(reason: Option<CanonicalSelectionReason>) -> 
     }
 }
 
-fn canonical_root_states(canonical: &CanonicalBrowserStatus) -> (&'static str, &'static str) {
+fn canonical_root_states(
+    canonical: &CanonicalBrowserStatus,
+    partial_root_states: Option<CanonicalRootResolutionStates>,
+) -> (&'static str, &'static str) {
+    if let Some(root_states) = partial_root_states {
+        return (
+            partial_root_state_name(root_states.hns()),
+            partial_root_state_name(root_states.icann()),
+        );
+    }
     match canonical.namespace_outcome() {
         Some(CanonicalOutcomeKind::HnsOnly) => ("securePresent", "absent"),
         Some(CanonicalOutcomeKind::IcannOnly) => ("authenticatedAbsent", "present"),
@@ -641,6 +685,14 @@ fn canonical_root_states(canonical: &CanonicalBrowserStatus) -> (&'static str, &
                 "unknown"
             },
         ),
+    }
+}
+
+fn partial_root_state_name(state: RootResolutionDisposition) -> &'static str {
+    match state {
+        RootResolutionDisposition::Present => "present",
+        RootResolutionDisposition::Absent => "absent",
+        RootResolutionDisposition::Failed => "failed",
     }
 }
 
@@ -1288,6 +1340,7 @@ impl NativeHostController {
                             "proxyAuthentication": true,
                             "perInstallLocalCa": true,
                             "chromiumSecurityResults": true,
+                            "userConfiguredRecursiveHnsDoh": true,
                             "p2pDnsRelay": true,
                             "p2pOdoh": false,
                             "hnsr": false
@@ -1540,9 +1593,18 @@ type ProtocolResult = Result<Value, (&'static str, String)>;
 fn runtime_policy(policy: &ExtensionPolicy) -> Result<RuntimePolicy, (&'static str, String)> {
     let shared_policy = shared_resolution_policy(policy)?;
     let transport_plan = TransportPlan::for_policy(shared_policy);
+    let configured_hns_doh = normalize_configured_hns_doh_resolver(Some(
+        &policy.recursive_hns_doh_url,
+    ))
+    .map_err(|error| {
+        (
+            "invalidPolicy",
+            format!("recursiveHnsDohUrl is invalid: {error}"),
+        )
+    })?;
     Ok(RuntimePolicy {
         resolution_mode: ResolutionMode::Strict,
-        hns_doh_resolver: None,
+        hns_doh_resolver: configured_hns_doh,
         experimental_p2p_dns_relay: transport_plan
             .contains(ResolutionTransport::HandshakeP2pDnsRelay),
         legacy_hns_doh_compatibility: false,
@@ -1577,6 +1639,15 @@ fn shared_resolution_policy(
             "experimental wire profiles are not implemented by this native host".to_owned(),
         ));
     }
+    let configured_hns_doh = normalize_configured_hns_doh_resolver(Some(
+        &policy.recursive_hns_doh_url,
+    ))
+    .map_err(|error| {
+        (
+            "invalidPolicy",
+            format!("recursiveHnsDohUrl is invalid: {error}"),
+        )
+    })?;
     let config = PolicyConfig {
         dns_relay_requester: if policy.p2p_dns_relay {
             DnsRelayRequesterPolicy::Auto
@@ -1586,6 +1657,7 @@ fn shared_resolution_policy(
         oblivious_dns: ObliviousDnsPolicy::Disabled,
         hnsr: HnsrPolicy::disabled(),
         authenticated_authoritative_doh: true,
+        user_configured_recursive_hns_doh: configured_hns_doh.is_some(),
         providers: ProviderPolicy {
             dns_relay: false,
             odoh_proxy: false,
@@ -1760,8 +1832,18 @@ mod tests {
         let NativeRequest::Start { policy, .. } = request else {
             panic!("start request expected");
         };
+        assert_eq!(policy.recursive_hns_doh_url, "");
         assert!(policy.p2p_dns_relay);
         assert_eq!(policy.p2p_odoh, P2pOdohMode::Off);
+
+        let request = serde_json::from_str::<NativeRequest>(
+            r#"{"command":"start","schemaVersion":1,"requestId":"x","policy":{"recursiveHnsDohUrl":"https://hnsdoh.com/dns-query"}}"#,
+        )
+        .unwrap();
+        let NativeRequest::Start { policy, .. } = request else {
+            panic!("start request expected");
+        };
+        assert_eq!(policy.recursive_hns_doh_url, "https://hnsdoh.com/dns-query");
     }
 
     #[test]
@@ -1836,6 +1918,32 @@ mod tests {
             ]
         );
         assert!(runtime_policy(&policy).unwrap().experimental_p2p_dns_relay);
+    }
+
+    #[test]
+    fn recursive_hns_doh_policy_is_blank_by_default_and_strictly_validated_by_rust() {
+        let default_runtime = runtime_policy(&ExtensionPolicy::default()).unwrap();
+        assert_eq!(default_runtime.hns_doh_resolver, None);
+
+        let configured = ExtensionPolicy {
+            recursive_hns_doh_url: " https://HNSDOH.COM:443/dns-query ".to_owned(),
+            ..ExtensionPolicy::default()
+        };
+        assert_eq!(
+            runtime_policy(&configured)
+                .unwrap()
+                .hns_doh_resolver
+                .as_deref(),
+            Some("https://hnsdoh.com/dns-query")
+        );
+
+        let invalid = ExtensionPolicy {
+            recursive_hns_doh_url: "http://hnsdoh.com/dns-query".to_owned(),
+            ..ExtensionPolicy::default()
+        };
+        let error = runtime_policy(&invalid).unwrap_err();
+        assert_eq!(error.0, "invalidPolicy");
+        assert!(error.1.contains("must use https"));
     }
 
     fn active_canonical_runtime(session_byte: u8) -> hns_browser_runtime::RuntimeSnapshot {
@@ -1971,6 +2079,62 @@ mod tests {
         assert_eq!(encoded["peerIdentity"], Value::Null);
         assert_eq!(encoded["chainAnchor"]["localBestHeight"], 42);
         assert_eq!(encoded["registryProfile"], "denuoV1");
+    }
+
+    #[test]
+    fn security_result_preserves_proof_contained_hns_success() {
+        let policy = canonical_policy(&ExtensionPolicy::default());
+        let mut input = hns_only_status_input(policy);
+        input.actual_transport = ResolutionTransport::LocalHnsProof;
+        let canonical = CanonicalBrowserStatus::new(input).unwrap();
+
+        let result =
+            chromium_security_result_from_canonical("shakeshift", 200, true, &canonical, None);
+        let encoded = serde_json::to_value(result).unwrap();
+
+        assert_eq!(encoded["host"], "shakeshift");
+        assert_eq!(encoded["actualSelectedTransport"], "localHnsProof");
+        assert_eq!(encoded["nameserverAuthority"], "localHnsProof");
+        assert_eq!(encoded["localHnsProofState"], "verified");
+        assert_eq!(encoded["canonicalStatus"], "available");
+    }
+
+    #[test]
+    fn indeterminate_result_uses_typed_partial_root_states_without_subtype_claims() {
+        let policy = canonical_policy(&ExtensionPolicy::default());
+        let mut input = hns_only_status_input(policy);
+        input.chain_anchor = None;
+        input.actual_transport = ResolutionTransport::Unavailable;
+        input.evidence = ValidationEvidence::not_attempted();
+        input.namespace_outcome = None;
+        input.hns_root_failure = Some(CanonicalRootFailureKind::Transport);
+        input.icann_root_failure = None;
+        input.selected_namespace = None;
+        input.selection_reason = None;
+        input.decision_fingerprint = None;
+        let canonical = CanonicalBrowserStatus::new(input).unwrap();
+
+        let encoded =
+            serde_json::to_value(chromium_security_result_from_canonical_with_root_states(
+                "intercepted.example",
+                502,
+                true,
+                &canonical,
+                Some(CanonicalRootResolutionStates::new(
+                    RootResolutionDisposition::Failed,
+                    RootResolutionDisposition::Absent,
+                )),
+                None,
+            ))
+            .unwrap();
+
+        assert_eq!(encoded["namespaceOutcome"], "indeterminate");
+        assert_eq!(encoded["hnsResolutionState"], "failed");
+        assert_eq!(encoded["icannResolutionState"], "absent");
+        assert_eq!(encoded["hnsRootFailure"], "transport");
+        assert_eq!(encoded["icannRootFailure"], Value::Null);
+        assert_ne!(encoded["icannResolutionState"], "authenticatedAbsent");
+        assert_ne!(encoded["icannResolutionState"], "insecureAbsent");
     }
 
     #[test]

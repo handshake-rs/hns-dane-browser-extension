@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.5.2 - 2026-07-26
+
+### Changed
+
+- Pinned the canonical browser-runtime, observability, ICANN-DANE,
+  namespace-resolution, and resolution-policy contracts to
+  `handshake-rs/hns-dane-engine` revision
+  `7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`.
+- Added a new blank-by-default `recursiveHnsDohUrl` consent boundary. A
+  user-configured endpoint is generation-bound and is attempted only after
+  direct authoritative UDP/TCP, proof-anchored owner authoritative DoH, and
+  any separately opted-in requester-only P2P relay are unavailable.
+- Bootstrapped configured resolver hostnames only through fixed-address
+  validating ICANN DoH, then connected to an explicit public address while
+  retaining WebPKI validation for the configured hostname. No configured
+  endpoint is prefilled or contacted while the setting is blank.
+
+### Fixed
+
+- Preserved each complete hostname's bounded HNS and ICANN
+  present/absent/failed dispositions when dual-root classification fails,
+  without retaining or reconstructing successful origin plans.
+- Reported a typed HNS port-53 interception failure when the HNS root has a
+  transport failure and the same request contains a positive TEST-NET canary;
+  missing or inconclusive probes remain generic and fail closed.
+- Limited configured-recursive and P2P recovery to typed transport
+  unavailability or confirmed interception. DNS response codes, malformed
+  replies, bogus DNSSEC, relay DNSSEC failure, and missing or stale proof/chain
+  state remain terminal and cannot be masked by a later transport.
+- Preserved successful proof-contained HNS main-frame results with the honest
+  non-network `LocalHnsProof` provenance instead of dropping their details for
+  lack of a delegated-DNS trace. The popup now shows the latest main frame
+  before the complete Header chain panel.
+
+### Security
+
+- Kept configured recursive RFC 8484 responses inside the local HNS
+  DNSSEC/TLSA/DANE validation path and ignored resolver AD as trust evidence.
+  Historical public-recursive values are tombstoned rather than migrated.
+- Added explicit UI disclosure that a configured operator can observe qnames,
+  qtypes, timing, and source IP. P2P requester consent remains independent
+  from every relay/output-provider role.
+
 ## 0.5.1 - 2026-07-26
 
 ### Added
