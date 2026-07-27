@@ -77,6 +77,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.source.count("contents: write"), 1)
         self.assertIn("actions/upload-artifact@", self.source)
         self.assertIn("actions/download-artifact@", self.source)
+        self.assertIn("GH_REPO: ${{ github.repository }}", self.source)
         self.assertIn("sha256sum --check", self.source)
         self.assertIn("verify_exact_remote_assets", self.source)
         self.assertIn(
