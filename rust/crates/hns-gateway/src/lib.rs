@@ -408,7 +408,7 @@ where
         request: &GatewayRequest,
     ) -> Result<GatewayConnectDisposition, GatewayFailure> {
         self.authorize(request).map_err(GatewayFailure::from)?;
-        let (resolution, origin_request, namespace_decision) =
+        let (resolution, mut origin_request, namespace_decision) =
             self.resolve_origin_request(request, &[OriginProtocol::Http11, OriginProtocol::Http2])?;
         let Some(decision) = namespace_decision else {
             return Ok(GatewayConnectDisposition::Intercept);
@@ -429,15 +429,56 @@ where
                 ));
             }
         }
-        let transport = self
+        // The plan retains the complete authenticated A/AAAA endpoint set.
+        // Keep only addresses allowed by browser origin policy, without ever
+        // consulting system DNS, then let the transport try the equivalent
+        // candidates under one aggregate connection-time budget.
+        let mut candidate_requests = Vec::new();
+        for endpoint in plan.endpoints() {
+            if endpoint.port() != origin_request.port {
+                return Err(GatewayFailure::with_namespace_decision(
+                    GatewayError::Resolver(ResolverError::InvalidDnsResponse),
+                    decision,
+                ));
+            }
+            let connect_host = endpoint.ip().to_string();
+            if self.validate_origin_address(&connect_host).is_err() {
+                // Non-public candidates remain part of the authenticated
+                // namespace fingerprint, but browser policy forbids opening
+                // them unless the gateway was explicitly configured to do so.
+                continue;
+            }
+            let mut candidate_request = origin_request.clone();
+            candidate_request.connect_host = Some(connect_host);
+            candidate_requests.push(candidate_request);
+        }
+        if candidate_requests.is_empty() {
+            return Err(GatewayFailure::with_namespace_decision(
+                GatewayError::NonPublicOriginAddress,
+                decision,
+            ));
+        }
+        let selected = self
             .transport
-            .open_webpki_passthrough(&origin_request)
+            .open_webpki_passthrough_candidates(&candidate_requests)
             .map_err(|error| {
                 GatewayFailure::with_namespace_decision(
                     GatewayError::Transport(error),
                     decision.clone(),
                 )
             })?;
+        let selected_peer = selected.transport.peer_addr;
+        origin_request = candidate_requests
+            .iter()
+            .find(|candidate| explicit_origin_socket_addr(candidate) == Some(selected_peer))
+            .cloned()
+            .ok_or_else(|| {
+                GatewayFailure::with_namespace_decision(
+                    GatewayError::Transport(TransportError::InvalidRequest),
+                    decision.clone(),
+                )
+            })?;
+        let transport = selected.transport;
         Ok(GatewayConnectDisposition::WebPkiPassthrough(Box::new(
             GatewayWebPkiPassthrough {
                 resolution,
@@ -596,10 +637,15 @@ where
             .selected_plan()
             .ok_or(ResolverError::NamespaceUnavailable)?;
         let selected_answer = selected_answer.ok_or(ResolverError::NamespaceUnavailable)?;
-        let endpoint = *plan
+        let endpoint = plan
             .endpoints()
-            .first()
-            .ok_or(GatewayError::NoResolvedAddress)?;
+            .iter()
+            .copied()
+            .find(|endpoint| {
+                self.validate_origin_address(&endpoint.ip().to_string())
+                    .is_ok()
+            })
+            .ok_or(GatewayError::NonPublicOriginAddress)?;
 
         let mut origin_request = request.origin.clone();
         origin_request.connect_host = Some(endpoint.ip().to_string());
@@ -788,6 +834,11 @@ fn normalize_host(host: &str) -> String {
 
 fn is_tls_origin_scheme(scheme: &str) -> bool {
     scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("wss")
+}
+
+fn explicit_origin_socket_addr(request: &OriginRequest) -> Option<SocketAddr> {
+    let address = request.connect_host.as_deref()?.parse::<IpAddr>().ok()?;
+    Some(SocketAddr::new(address, request.port))
 }
 
 fn namespace_origin_query(
@@ -1346,9 +1397,93 @@ mod tests {
 
             *self.last_passthrough_request.lock().unwrap() = Some(request.clone());
             Ok(OriginWebPkiPassthrough {
+                peer_addr: explicit_origin_socket_addr(request).unwrap(),
                 reader: Box::new(Cursor::new(Vec::<u8>::new())),
                 writer: Box::new(Cursor::new(Vec::<u8>::new())),
                 shutdown: Arc::new(NoopShutdown),
+            })
+        }
+    }
+
+    struct EndpointRetryTransport {
+        fail_host: String,
+        fail_with_io: bool,
+        attempts: Mutex<Vec<OriginRequest>>,
+    }
+
+    impl OriginTransport for EndpointRetryTransport {
+        fn fetch(&self, _request: &OriginRequest) -> Result<OriginResponse, TransportError> {
+            Err(TransportError::UnsupportedTransport)
+        }
+
+        fn open_webpki_passthrough(
+            &self,
+            request: &OriginRequest,
+        ) -> Result<OriginWebPkiPassthrough, TransportError> {
+            struct NoopShutdown;
+
+            impl hns_transport::OriginPassthroughShutdown for NoopShutdown {
+                fn shutdown(&self) {}
+            }
+
+            self.attempts.lock().unwrap().push(request.clone());
+            if request.connect_host.as_deref() == Some(self.fail_host.as_str()) {
+                return if self.fail_with_io {
+                    Err(TransportError::Io("endpoint unavailable".to_owned()))
+                } else {
+                    Err(TransportError::InvalidRequest)
+                };
+            }
+            Ok(OriginWebPkiPassthrough {
+                peer_addr: explicit_origin_socket_addr(request).unwrap(),
+                reader: Box::new(Cursor::new(Vec::<u8>::new())),
+                writer: Box::new(Cursor::new(Vec::<u8>::new())),
+                shutdown: Arc::new(NoopShutdown),
+            })
+        }
+
+        fn open_webpki_passthrough_candidates(
+            &self,
+            requests: &[OriginRequest],
+        ) -> Result<hns_transport::SelectedOriginWebPkiPassthrough, TransportError> {
+            let mut last_io_error = None;
+            for request in requests {
+                match self.open_webpki_passthrough(request) {
+                    Ok(transport) => {
+                        return Ok(hns_transport::SelectedOriginWebPkiPassthrough { transport });
+                    }
+                    Err(error @ TransportError::Io(_)) => last_io_error = Some(error),
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(last_io_error.unwrap_or(TransportError::InvalidRequest))
+        }
+    }
+
+    struct UnauthenticatedPeerTransport;
+
+    impl OriginTransport for UnauthenticatedPeerTransport {
+        fn fetch(&self, _request: &OriginRequest) -> Result<OriginResponse, TransportError> {
+            Err(TransportError::UnsupportedTransport)
+        }
+
+        fn open_webpki_passthrough_candidates(
+            &self,
+            _requests: &[OriginRequest],
+        ) -> Result<hns_transport::SelectedOriginWebPkiPassthrough, TransportError> {
+            struct NoopShutdown;
+
+            impl hns_transport::OriginPassthroughShutdown for NoopShutdown {
+                fn shutdown(&self) {}
+            }
+
+            Ok(hns_transport::SelectedOriginWebPkiPassthrough {
+                transport: OriginWebPkiPassthrough {
+                    peer_addr: "8.8.8.8:443".parse().unwrap(),
+                    reader: Box::new(Cursor::new(Vec::<u8>::new())),
+                    writer: Box::new(Cursor::new(Vec::<u8>::new())),
+                    shutdown: Arc::new(NoopShutdown),
+                },
             })
         }
     }
@@ -1438,6 +1573,13 @@ mod tests {
     }
 
     fn prepared_icann_webpki(host: &str) -> PreparedNamespaceResolution {
+        prepared_icann_webpki_with_endpoints(host, vec!["1.1.1.1:443".parse().unwrap()])
+    }
+
+    fn prepared_icann_webpki_with_endpoints(
+        host: &str,
+        endpoints: Vec<SocketAddr>,
+    ) -> PreparedNamespaceResolution {
         let host = CanonicalHost::parse(host).unwrap();
         let capabilities = ProtocolCapabilities::new(true, true, false).unwrap();
         let query = OriginQuery::new(
@@ -1467,7 +1609,7 @@ mod tests {
             terminal_target: host.clone(),
             endpoint_alias_path: Vec::new(),
             endpoint_target: host,
-            endpoints: vec!["1.1.1.1:443".parse().unwrap()],
+            endpoints,
             service,
             tls_policy: TlsTrustPolicy::WebPkiAuthenticatedAbsence,
             tlsa_records: Vec::new(),
@@ -1624,6 +1766,128 @@ mod tests {
                 .lock()
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn browser_connect_retries_all_selected_public_endpoints_after_io_failure() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            PreparedResolver {
+                prepared: prepared_icann_webpki_with_endpoints(
+                    "example.com",
+                    vec![
+                        "8.8.8.8:443".parse().unwrap(),
+                        "1.1.1.1:443".parse().unwrap(),
+                        "127.0.0.1:443".parse().unwrap(),
+                    ],
+                ),
+                record_calls: Arc::new(AtomicUsize::new(0)),
+            },
+            EndpointRetryTransport {
+                fail_host: "1.1.1.1".to_owned(),
+                fail_with_io: true,
+                attempts: Mutex::new(Vec::new()),
+            },
+        )
+        .unwrap();
+
+        let disposition = gateway
+            .open_browser_connect_with_failure_context(&request("example.com", "example.com"))
+            .unwrap();
+        let GatewayConnectDisposition::WebPkiPassthrough(passthrough) = disposition else {
+            panic!("second selected endpoint must preserve browser TLS");
+        };
+        let attempts = gateway.transport().attempts.lock().unwrap();
+
+        assert_eq!(
+            attempts
+                .iter()
+                .map(|attempt| attempt.connect_host.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["1.1.1.1", "8.8.8.8"]
+        );
+        assert!(attempts.iter().all(|attempt| {
+            attempt
+                .connect_host
+                .as_deref()
+                .unwrap()
+                .parse::<IpAddr>()
+                .is_ok()
+        }));
+        assert_eq!(attempts[0].host, attempts[1].host);
+        assert_eq!(attempts[0].port, attempts[1].port);
+        assert_eq!(attempts[0].tls, attempts[1].tls);
+        assert!(attempts[0].tls.namespace_fingerprint.is_some());
+        assert_eq!(
+            passthrough.origin_request.connect_host.as_deref(),
+            Some("8.8.8.8")
+        );
+    }
+
+    #[test]
+    fn browser_connect_does_not_retry_non_io_policy_failure() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            PreparedResolver {
+                prepared: prepared_icann_webpki_with_endpoints(
+                    "example.com",
+                    vec![
+                        "8.8.8.8:443".parse().unwrap(),
+                        "1.1.1.1:443".parse().unwrap(),
+                    ],
+                ),
+                record_calls: Arc::new(AtomicUsize::new(0)),
+            },
+            EndpointRetryTransport {
+                fail_host: "1.1.1.1".to_owned(),
+                fail_with_io: false,
+                attempts: Mutex::new(Vec::new()),
+            },
+        )
+        .unwrap();
+
+        let failure = gateway
+            .open_browser_connect_with_failure_context(&request("example.com", "example.com"))
+            .err()
+            .expect("transport invariant failure must remain terminal");
+
+        assert!(matches!(
+            failure.error(),
+            GatewayError::Transport(TransportError::InvalidRequest)
+        ));
+        assert_eq!(gateway.transport().attempts.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn browser_connect_rejects_transport_peer_outside_authenticated_endpoint_set() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            PreparedResolver {
+                prepared: prepared_icann_webpki_with_endpoints(
+                    "example.com",
+                    vec!["1.1.1.1:443".parse().unwrap()],
+                ),
+                record_calls: Arc::new(AtomicUsize::new(0)),
+            },
+            UnauthenticatedPeerTransport,
+        )
+        .unwrap();
+
+        let failure = gateway
+            .open_browser_connect_with_failure_context(&request("example.com", "example.com"))
+            .err()
+            .expect("the connected peer must belong to the authenticated endpoint set");
+
+        assert!(matches!(
+            failure.error(),
+            GatewayError::Transport(TransportError::InvalidRequest)
+        ));
+        assert_eq!(
+            failure
+                .namespace_decision()
+                .and_then(NamespaceDecision::selected_namespace),
+            Some(Namespace::Icann)
         );
     }
 

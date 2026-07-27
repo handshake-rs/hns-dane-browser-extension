@@ -24,6 +24,9 @@ rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 cpSync("extension/manifest.json", `${output}/manifest.json`);
 cpSync("extension/src", `${output}/src`, { recursive: true });
+cpSync("extension/assets", `${output}/assets`, { recursive: true });
+cpSync("LICENSE", `${output}/LICENSE`);
+cpSync("docs/privacy-policy.md", `${output}/PRIVACY.md`);
 cpSync(
   "extension/THIRD_PARTY_NOTICES.txt",
   `${output}/THIRD_PARTY_NOTICES.txt`
@@ -35,6 +38,16 @@ writeFileSync(
       schemaVersion: 1,
       package: "hns-dane-browser-extension",
       version: manifest.version,
+      sourceRepository:
+        "https://github.com/handshake-rs/hns-dane-browser-extension",
+      sourceTag: `v${manifest.version}`,
+      license: "PolyForm-Noncommercial-1.0.0",
+      licenseFile: "LICENSE",
+      privacyPolicy:
+        "https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md",
+      support:
+        "https://github.com/handshake-rs/hns-dane-browser-extension/issues",
+      donations: "https://github.com/sponsors/denuoweb",
       nativeHost: "com.denuoweb.hns_dane_browser",
       pacAuthority: "hns-browser-runtime",
       localCaRequired: true,

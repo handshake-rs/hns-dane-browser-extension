@@ -7,6 +7,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$script_dir/../.." && pwd)"
 native_host="$repository_root/rust/target/release/hns-chromium-native-host"
 notice_source="$repository_root/extension/THIRD_PARTY_NOTICES.txt"
+license_source="$repository_root/LICENSE"
 extension_ids=()
 browsers=()
 
@@ -75,6 +76,10 @@ done
   echo "Third-party notices are missing: $notice_source" >&2
   exit 1
 }
+[[ -s "$license_source" ]] || {
+  echo "Product license is missing: $license_source" >&2
+  exit 1
+}
 
 case "$(uname -s)" in
   Linux)
@@ -102,6 +107,7 @@ certificate_path="$data_dir/chromium-ca/hns-dane-browser-local-ca.pem"
 install -d -m 700 "$install_root" "$install_root/bin" "$install_root/licenses" "$data_dir"
 install -m 700 "$native_host" "$installed_host"
 install -m 644 "$notice_source" "$install_root/licenses/THIRD_PARTY_NOTICES.txt"
+install -m 644 "$license_source" "$install_root/licenses/LICENSE"
 
 manifest_arguments=(--print-host-manifest)
 for extension_id in "${extension_ids[@]}"; do

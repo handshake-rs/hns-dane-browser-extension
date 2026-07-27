@@ -85,8 +85,8 @@ pub use hns_transport::DEFAULT_MAX_REQUEST_BODY_BYTES;
 use hns_transport::{
     BrowserTlsDecision, OriginPassthroughShutdown, OriginProtocol, OriginRequest, OriginResponse,
     OriginResponseHead, OriginTransport, OriginTunnel, OriginWebPkiPassthrough, ReadWrite,
-    TcpHttpTransport, TlsCertificateInspection, TlsValidation, TlsaOwner, TlsaRecordSource,
-    TlsaTransport, TransportError,
+    SelectedOriginWebPkiPassthrough, TcpHttpTransport, TlsCertificateInspection, TlsValidation,
+    TlsaOwner, TlsaRecordSource, TlsaTransport, TransportError,
 };
 use hns_urkel::UrkelProofVerifier;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -3008,6 +3008,7 @@ impl OriginTransport for AuthorityOriginTransport {
             self.stamp,
         ));
         Ok(OriginWebPkiPassthrough {
+            peer_addr: passthrough.peer_addr,
             reader: Box::new(AuthorityBoundPassthroughReader {
                 inner: passthrough.reader,
                 lease: Arc::clone(&lease),
@@ -3017,6 +3018,36 @@ impl OriginTransport for AuthorityOriginTransport {
                 lease,
             }),
             shutdown: passthrough.shutdown,
+        })
+    }
+
+    fn open_webpki_passthrough_candidates(
+        &self,
+        requests: &[OriginRequest],
+    ) -> Result<SelectedOriginWebPkiPassthrough, TransportError> {
+        self.require_current()?;
+        let mut before_dial = || self.require_current();
+        let selected = self
+            .inner
+            .open_webpki_passthrough_candidates_with_guard(requests, &mut before_dial)?;
+        self.require_current()?;
+        let lease = Arc::new(AuthorityPassthroughLease::new(
+            Arc::clone(&self.authority),
+            self.stamp,
+        ));
+        Ok(SelectedOriginWebPkiPassthrough {
+            transport: OriginWebPkiPassthrough {
+                peer_addr: selected.transport.peer_addr,
+                reader: Box::new(AuthorityBoundPassthroughReader {
+                    inner: selected.transport.reader,
+                    lease: Arc::clone(&lease),
+                }),
+                writer: Box::new(AuthorityBoundPassthroughWriter {
+                    inner: selected.transport.writer,
+                    lease,
+                }),
+                shutdown: selected.transport.shutdown,
+            },
         })
     }
 
@@ -3460,6 +3491,7 @@ impl ProxyBackend for RuntimeProxyBackend {
         );
         require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
         let hns_transport::OriginWebPkiPassthrough {
+            peer_addr: _,
             reader,
             writer,
             shutdown,
@@ -6975,7 +7007,7 @@ impl ConfiguredRecursiveHnsDohTransport {
         let mut last_error = None;
         for address in addresses {
             let started = Instant::now();
-            let response = self.http.fetch(&configured_doh_origin_request(
+            let response = self.http.fetch_rfc8484_post(&configured_doh_origin_request(
                 &self.endpoint,
                 address,
                 wire_query.clone(),
@@ -8308,7 +8340,7 @@ fn fetch_icann_doh_message(
     let mut last_error = None;
     for bootstrap in bootstrap_addresses {
         let started = Instant::now();
-        let response = http.fetch(&doh_origin_request(
+        let response = http.fetch_rfc8484_post(&doh_origin_request(
             endpoint,
             Some(bootstrap.to_string()),
             body.to_vec(),
@@ -11801,6 +11833,7 @@ fn run_sync_once(
             .unwrap_or_else(|| CurrentnessTargetSource::Unknown.as_str()),
         target_peer_groups: peer_target.peer_groups,
         target_evidence_expired: peer_target.evidence_expired,
+        target_evidence_valid_until_unix: peer_target.evidence_valid_until_unix,
         resource_cache_entries,
         resource_cache_bytes,
         resource_cache_evicted,
@@ -11878,6 +11911,7 @@ struct PeerTargetAssessment {
     height: Option<u32>,
     peer_groups: usize,
     evidence_expired: bool,
+    evidence_valid_until_unix: Option<u64>,
 }
 
 fn assess_peer_target(
@@ -11916,17 +11950,29 @@ fn assess_peer_target(
     }
 
     let peer_groups = by_group.len();
-    let mut heights = by_group
-        .into_values()
-        .map(|(_, height)| height)
+    let observations = by_group.into_values().collect::<Vec<_>>();
+    let mut heights = observations
+        .iter()
+        .map(|(_, height)| *height)
         .collect::<Vec<_>>();
     heights.sort_unstable();
     let height = (heights.len() >= LOCAL_CHAIN_TARGET_MIN_PEER_GROUPS)
         .then(|| heights[(heights.len() - 1) / 2]);
+    let evidence_valid_until_unix = height.map(|_| {
+        let mut expirations = observations
+            .iter()
+            .map(|(observed_at, _)| {
+                observed_at.saturating_add(LOCAL_CHAIN_TARGET_OBSERVATION_MAX_AGE_SECONDS)
+            })
+            .collect::<Vec<_>>();
+        expirations.sort_unstable();
+        expirations[peer_groups - LOCAL_CHAIN_TARGET_MIN_PEER_GROUPS]
+    });
     PeerTargetAssessment {
         height,
         peer_groups,
         evidence_expired: height.is_none() && evidence_expired,
+        evidence_valid_until_unix,
     }
 }
 
@@ -12343,6 +12389,7 @@ fn read_sync_status(data_dir: &str, network: NetworkKind) -> Result<NativeSyncSt
             .unwrap_or_else(|| CurrentnessTargetSource::Unknown.as_str()),
         target_peer_groups: peer_target.peer_groups,
         target_evidence_expired: peer_target.evidence_expired,
+        target_evidence_valid_until_unix: peer_target.evidence_valid_until_unix,
         resource_cache_entries,
         resource_cache_bytes,
         resource_cache_evicted: 0,
@@ -12510,6 +12557,7 @@ pub struct SyncStatus {
     pub target_source: &'static str,
     pub target_peer_groups: usize,
     pub target_evidence_expired: bool,
+    pub target_evidence_valid_until_unix: Option<u64>,
     pub resource_cache_entries: usize,
     pub resource_cache_bytes: usize,
     pub resource_cache_evicted: usize,
@@ -12547,6 +12595,7 @@ impl SyncStatus {
             target_source: CurrentnessTargetSource::Unknown.as_str(),
             target_peer_groups: 0,
             target_evidence_expired: false,
+            target_evidence_valid_until_unix: None,
             resource_cache_entries: 0,
             resource_cache_bytes: 0,
             resource_cache_evicted: 0,
@@ -12579,6 +12628,7 @@ impl SyncStatus {
             target_source: CurrentnessTargetSource::Unknown.as_str(),
             target_peer_groups: 0,
             target_evidence_expired: false,
+            target_evidence_valid_until_unix: None,
             resource_cache_entries: 0,
             resource_cache_bytes: 0,
             resource_cache_evicted: 0,
@@ -12608,6 +12658,10 @@ impl SyncStatus {
             .lag_blocks
             .map(|lag| lag.to_string())
             .unwrap_or_else(|| "null".to_owned());
+        let target_evidence_valid_until_unix = self
+            .target_evidence_valid_until_unix
+            .map(|deadline| deadline.to_string())
+            .unwrap_or_else(|| "null".to_owned());
         let error = self
             .error
             .as_ref()
@@ -12621,7 +12675,7 @@ impl SyncStatus {
             .join(",");
 
         format!(
-            r#"{{"network":"{}","status":"{}","attempted":{},"successful":{},"accepted":{},"failed":{},"peerCount":{},"peerGroups":{},"bestHeight":{},"bestPeerHeight":{},"estimatedTipHeight":{},"effectiveTargetHeight":{},"lagBlocks":{},"freshness":"{}","freshnessThresholdBlocks":{},"targetSource":"{}","targetPeerGroups":{},"targetEvidenceExpired":{},"resourceCacheEntries":{},"resourceCacheBytes":{},"resourceCacheEvicted":{},"error":{},"failures":[{}]}}"#,
+            r#"{{"network":"{}","status":"{}","attempted":{},"successful":{},"accepted":{},"failed":{},"peerCount":{},"peerGroups":{},"bestHeight":{},"bestPeerHeight":{},"estimatedTipHeight":{},"effectiveTargetHeight":{},"lagBlocks":{},"freshness":"{}","freshnessThresholdBlocks":{},"targetSource":"{}","targetPeerGroups":{},"targetEvidenceExpired":{},"targetEvidenceValidUntilUnix":{},"resourceCacheEntries":{},"resourceCacheBytes":{},"resourceCacheEvicted":{},"error":{},"failures":[{}]}}"#,
             self.network.as_str(),
             self.status,
             self.attempted,
@@ -12640,6 +12694,7 @@ impl SyncStatus {
             self.target_source,
             self.target_peer_groups,
             self.target_evidence_expired,
+            target_evidence_valid_until_unix,
             self.resource_cache_entries,
             self.resource_cache_bytes,
             self.resource_cache_evicted,
@@ -13621,6 +13676,107 @@ mod tests {
         assert_eq!(probe_calls.load(Ordering::Acquire), baseline + 1);
 
         authority.revoke_proxy(1);
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn webpki_endpoint_retry_stops_before_dial_when_authority_is_revoked() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct RevokeBeforeSecondDialProbe {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl CanonicalTransportReadinessProbe for RevokeBeforeSecondDialProbe {
+            fn verify(&self, _plan: &CanonicalTransportPlan) -> std::io::Result<()> {
+                let call = self.calls.fetch_add(1, Ordering::AcqRel);
+                if call < 3 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::new(
+                        ErrorKind::ConnectionAborted,
+                        "test authority revocation before the second endpoint dial",
+                    ))
+                }
+            }
+        }
+
+        let data_dir = temp_dir_path("webpki-endpoint-authority-revocation");
+        let base = data_dir.join("hns");
+        std::fs::create_dir_all(&base).unwrap();
+        let anchor_height = store_best_header_for_network_with_tree_root(
+            &base,
+            NetworkKind::Mainnet,
+            Hash::new([0x76; 32]),
+        );
+        SqliteResourceValueProvider::open(base.join("resources.sqlite")).unwrap();
+        store_peer_height(&base, anchor_height.0);
+        let proxy_session = ProxySessionId::generate().unwrap();
+        let session = CanonicalRuntimeSessionId::new(*proxy_session.as_bytes()).unwrap();
+        let policy = canonical_policy_snapshot(&RuntimePolicy::compatibility(), 1).unwrap();
+        let probe_calls = Arc::new(AtomicUsize::new(0));
+        let authority = Arc::new(
+            CanonicalAuthority::new_with_transport_readiness(
+                session,
+                policy,
+                base,
+                NetworkKind::Mainnet,
+                Arc::new(RevokeBeforeSecondDialProbe {
+                    calls: Arc::clone(&probe_calls),
+                }),
+            )
+            .unwrap(),
+        );
+        authority.prepare_proxy(1).unwrap();
+        authority.activate_proxy(1).unwrap();
+        let stamp = authority.admit(1).unwrap();
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let transport = AuthorityOriginTransport::new(
+            TcpHttpTransport::new(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                hns_transport::TransportLimits::default(),
+            ),
+            Arc::clone(&authority),
+            stamp,
+        );
+        let mut unavailable = OriginRequest {
+            method: "GET".to_owned(),
+            scheme: "https".to_owned(),
+            host: "example.com".to_owned(),
+            connect_host: Some(Ipv4Addr::new(127, 0, 0, 2).to_string()),
+            port: address.port(),
+            path_and_query: "/".to_owned(),
+            protocol: OriginProtocol::Http11,
+            tls: TlsValidation::default(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        unavailable.tls.dnssec_secure = true;
+        unavailable.tls.namespace_fingerprint = Some("selected-icann".to_owned());
+        unavailable.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+        let mut guarded = unavailable.clone();
+        guarded.connect_host = Some(Ipv4Addr::LOCALHOST.to_string());
+
+        let failure = transport
+            .open_webpki_passthrough_candidates(&[unavailable, guarded])
+            .err()
+            .expect("revoked authority must stop before the second endpoint dial");
+
+        assert!(matches!(failure, TransportError::Io(_)));
+        assert_eq!(probe_calls.load(Ordering::Acquire), 4);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            ErrorKind::WouldBlock,
+            "the endpoint selected after revocation must never be dialed"
+        );
+        assert_eq!(
+            authority.runtime.lock().unwrap().authority_state(),
+            CanonicalAuthorityState::Degraded
+        );
+
         cleanup_dir(&data_dir);
     }
 
@@ -15840,6 +15996,7 @@ mod tests {
         assert_eq!(target.height, Some(101));
         assert_eq!(target.peer_groups, 3);
         assert!(!target.evidence_expired);
+        assert_eq!(target.evidence_valid_until_unix, Some(11_190));
     }
 
     #[test]
@@ -15860,6 +16017,7 @@ mod tests {
         assert_eq!(mixed.height, Some(101));
         assert_eq!(mixed.peer_groups, 3);
         assert!(!mixed.evidence_expired);
+        assert_eq!(mixed.evidence_valid_until_unix, Some(11_190));
 
         for address in ["1.1.1.1:12038", "8.8.8.8:12038", "9.9.9.9:12038"] {
             let address = address.parse().unwrap();
@@ -15873,6 +16031,37 @@ mod tests {
         assert_eq!(expired.height, None);
         assert_eq!(expired.peer_groups, 0);
         assert!(expired.evidence_expired);
+        assert_eq!(expired.evidence_valid_until_unix, None);
+    }
+
+    #[test]
+    fn peer_target_deadline_is_when_the_fresh_quorum_will_be_lost() {
+        let now = 10_000;
+        let mut peers = PeerManager::default();
+        for (address, height, observed_at) in [
+            ("1.1.1.1:12038", 100, now - 100),
+            ("8.8.8.8:12038", 101, now - 90),
+            ("9.9.9.9:12038", 102, now - 80),
+            ("208.67.222.222:12038", 103, now - 70),
+        ] {
+            peers.record_success(address.parse().unwrap(), Height(height), observed_at);
+        }
+
+        let target = assess_peer_target(&peers, &hns_core::network::mainnet(), now);
+        let valid_until = now - 90 + LOCAL_CHAIN_TARGET_OBSERVATION_MAX_AGE_SECONDS;
+        assert_eq!(target.peer_groups, 4);
+        assert_eq!(target.evidence_valid_until_unix, Some(valid_until));
+
+        let boundary = assess_peer_target(&peers, &hns_core::network::mainnet(), valid_until);
+        assert!(boundary.height.is_some());
+        assert_eq!(boundary.peer_groups, 3);
+        assert_eq!(boundary.evidence_valid_until_unix, Some(valid_until));
+
+        let expired = assess_peer_target(&peers, &hns_core::network::mainnet(), valid_until + 1);
+        assert_eq!(expired.height, None);
+        assert_eq!(expired.peer_groups, 2);
+        assert!(expired.evidence_expired);
+        assert_eq!(expired.evidence_valid_until_unix, None);
     }
 
     #[test]
@@ -15895,6 +16084,7 @@ mod tests {
         assert_eq!(target.height, None);
         assert_eq!(target.peer_groups, 0);
         assert!(!target.evidence_expired);
+        assert_eq!(target.evidence_valid_until_unix, None);
     }
 
     #[test]
@@ -15936,6 +16126,7 @@ mod tests {
             target_source: "unknown",
             target_peer_groups: 0,
             target_evidence_expired: false,
+            target_evidence_valid_until_unix: None,
             resource_cache_entries: 0,
             resource_cache_bytes: 0,
             resource_cache_evicted: 0,
@@ -15959,6 +16150,7 @@ mod tests {
         assert!(json.contains(r#""targetSource":"unknown""#));
         assert!(json.contains(r#""targetPeerGroups":0"#));
         assert!(json.contains(r#""targetEvidenceExpired":false"#));
+        assert!(json.contains(r#""targetEvidenceValidUntilUnix":null"#));
         assert!(json.contains(r#""error":"all 1 attempted sync peers failed; see failures""#,));
         assert!(json.contains(
             r#""failures":[{"address":"127.0.0.1:12038","stage":"connect","error":"connection \"closed\"\n"}]"#,

@@ -32,6 +32,10 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     assert.equal(responses[1].eventSequence, 2);
     assert.equal(responses[1].result.headerSync.network, "regtest");
     assert.equal(responses[1].result.headerSync.bestHeight, 0);
+    assert.equal(
+      responses[1].result.headerSync.targetEvidenceValidUntilUnix,
+      null
+    );
     assert.equal(responses[1].result.headerSyncUnavailableReason, null);
     assert.equal(responses[2].requestId, "shutdown-1");
     assert.equal(responses[2].eventSequence, 3);

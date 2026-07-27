@@ -14,6 +14,9 @@ document
   .querySelector("#sync-headers")
   .addEventListener("click", () => void syncHeadersNow());
 document.querySelector("#settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+document.querySelector("#setup").addEventListener("click", () => {
+  void chrome.tabs.create({ url: chrome.runtime.getURL("src/setup.html") });
+});
 void refresh();
 
 async function retry() {

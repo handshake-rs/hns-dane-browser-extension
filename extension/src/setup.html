@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Set up HNS DANE Browser</title>
+    <link rel="stylesheet" href="ui.css">
+  </head>
+  <body>
+    <main class="panel wide">
+      <header class="brand-lockup">
+        <img src="../assets/icons/icon-128.png" alt="">
+        <div>
+          <p class="eyebrow">RUST-VERIFIED HANDSHAKE</p>
+          <h1>Set up HNS DANE Browser</h1>
+          <p class="lede">
+            The extension is the browser control surface. A matching local Rust native host
+            performs dual-root resolution, DNSSEC, TLSA/DANE, and the authenticated loopback
+            proxy.
+          </p>
+        </div>
+      </header>
+
+      <p class="warning">
+        Browsing remains blocked until the native host and its per-user local CA are installed.
+        The CA is used only when Rust must terminate TLS to enforce HNS or ICANN DANE. Defined
+        ICANN WebPKI fallback stays end-to-end in Chromium and shows the site's real certificate.
+      </p>
+
+      <div class="setup-grid">
+        <section class="setup-card">
+          <h2>1. Download</h2>
+          <p>
+            Download the native-host bundle matching extension version
+            <code id="extension-version">shown after installation</code>. Store packages do
+            not and cannot embed this executable.
+          </p>
+          <p class="link-stack">
+            <a id="version-downloads" href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Native-host downloads for this version</a>
+            <a href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Latest release (fallback only)</a>
+          </p>
+        </section>
+
+        <section class="setup-card">
+          <h2>2. Register this ID</h2>
+          <p>The installer must receive this exact store-specific extension ID:</p>
+          <p id="extension-id" class="extension-id"><code>shown after installation</code></p>
+          <p>
+            Run the bundle's installer with <code>--extension-id</code> on Linux/macOS or
+            <code>-ExtensionId</code> on Windows, and select Chrome, Chromium, Edge, Brave,
+            Vivaldi, Opera, or all installed browsers.
+          </p>
+        </section>
+
+        <section class="setup-card">
+          <h2>3. Install trust</h2>
+          <p>
+            Close the selected browsers, run the user-level installer, then reopen the browser.
+            Linux requires <code>certutil</code>. macOS and Windows use the current user's trust
+            store. No administrator-wide installation is required.
+          </p>
+        </section>
+
+        <section class="setup-card">
+          <h2>4. Verify and remove</h2>
+          <p>
+            Open the toolbar popup and confirm “Rust security path active” and “DANE local CA:
+            Installed.” The supplied uninstaller removes native registration, the exact CA,
+            runtime data, and cached chain state.
+          </p>
+        </section>
+      </div>
+
+      <section class="project-links">
+        <h2>Project, privacy, and support</h2>
+        <p>
+          <a href="https://github.com/handshake-rs/hns-dane-browser-extension" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
+          <a href="https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">PolyForm Noncommercial license</a>
+          <a href="https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+          <a href="https://github.com/handshake-rs/hns-dane-browser-extension/issues" target="_blank" rel="noopener noreferrer">Support and bug reports</a>
+          <a href="https://github.com/sponsors/denuoweb" target="_blank" rel="noopener noreferrer">GitHub Sponsors</a>
+          <a href="handshake:hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh?label=Denuo%20Web%20Handshake%20Browser&amp;message=Handshake%20Browser%20donation">Donate HNS</a>
+        </p>
+        <p>
+          Optional HNS donation:
+          <code>hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh</code>.
+          Donations do not unlock features.
+        </p>
+      </section>
+
+      <p class="section-detail">
+        Supported desktop systems: Linux, macOS, and Windows. ChromeOS and mobile Chromium do not
+        support this native-host installation; Android and iOS are separate products.
+      </p>
+    </main>
+    <script type="module" src="setup.js"></script>
+  </body>
+</html>

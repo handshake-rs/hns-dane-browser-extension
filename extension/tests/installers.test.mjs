@@ -95,6 +95,10 @@ test("Linux installer and complete uninstaller are isolated and symmetric", () =
       ),
       /^HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES\n/
     );
+    assert.match(
+      readFileSync(join(installRoot, "licenses/LICENSE"), "utf8"),
+      /^Required Notice: Copyright 2026 Denuo Web, LLC\.\n/
+    );
     assert.match(readFileSync(certutilLog, "utf8"), / -A /);
 
     const installedHost = join(installRoot, "bin/hns-chromium-native-host");
@@ -150,6 +154,8 @@ test("Windows scripts cover all browser registries, CA trust, and removal", () =
   }
   assert.match(install, /certutil\.exe -user -addstore Root/);
   assert.match(install, /THIRD_PARTY_NOTICES\.txt/);
+  assert.match(install, /ProductLicenseSource/);
+  assert.match(install, /LicenseDirectory 'LICENSE'/);
   assert.match(uninstall, /certutil\.exe -user -delstore Root/);
   assert.match(uninstall, /Remove-Item .* -Recurse -Force/);
 });

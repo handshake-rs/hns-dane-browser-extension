@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
   validating ICANN DoH, then connected to an explicit public address while
   retaining WebPKI validation for the configured hostname. No configured
   endpoint is prefilled or contacted while the setting is blank.
+- Added the shared HNS DANE icon, first-install native-host setup, exact
+  source/license/privacy/support/donation links, store listing copy and
+  artwork for Chrome/Brave/Vivaldi, Edge, Opera, and Chromium, and tagged
+  GitHub Release packaging for browser-neutral and native-host artifacts.
 
 ### Fixed
 
@@ -57,6 +61,25 @@ All notable changes to this project will be documented in this file.
   pumped raw CONNECT tunnel and displays the origin certificate. Socket-open,
   invariant, canonical-status, registry, cancellation, and unexpected backend
   failures are pre-TLS denials and cannot downgrade back to the local CA.
+- Retried selected ICANN WebPKI CONNECTs across bounded, rotating batches of
+  authenticated public A/AAAA endpoints under one aggregate timeout. Each
+  socket's actual peer must match the retained endpoint set, and canonical
+  authority is rechecked before every dial.
+- Advanced WebPKI endpoint rotation by one when the complete endpoint plan
+  fits in a single batch, so repeated tunnels do not retry the same failed
+  first address.
+- Retried internally constructed RFC 8484 POSTs once on a fresh exact-IP
+  connection when an idle pooled ICANN or configured-recursive DoH socket is
+  stale. Generic POST requests remain non-replayable.
+- Scheduled header synchronization from the native quorum-evidence deadline,
+  two minutes before the last three independent peer groups can expire.
+  The existing health alarm remains the safety check. Routine stale or unknown
+  state retains the ten-minute attempt floor, while a failed or manual attempt
+  near a known deadline gets bounded one-minute retries through two minutes
+  after expiry so it cannot suppress the only pre-expiry refresh opportunity.
+- Prevented a retained urgent window from postponing an already-due routine
+  refresh after a wall-clock rollback; retained deadline context can now only
+  accelerate maintenance.
 
 ### Security
 

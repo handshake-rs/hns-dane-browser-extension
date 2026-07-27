@@ -52,10 +52,15 @@ resolution fails closed.
 
 `Sync headers now` performs one explicit synchronization without rotating the
 proxy generation or changing policy. A failed sync is reported in the header
-section and does not disable an otherwise active proxy. Background sync is
-stale-aware and limited to one attempt per ten-minute target interval; the
-five-minute runtime health check reads local status only, and opening the popup
-does not contact peers.
+section and does not disable an otherwise active proxy. Rust reports the last
+Unix second through which the current independent-peer quorum remains valid,
+and the extension schedules one sync two minutes before that point. The
+existing five-minute local runtime health check is the safety path; there is
+no second periodic peer poll. Routine stale or unknown state retains a
+ten-minute retry floor. If an automatic or manual attempt fails around a known
+quorum deadline, the extension retains that deadline across worker restarts
+and retries at most once per minute through two minutes after expiry. Opening
+the popup does not contact peers.
 
 ## Security-result boundary
 
@@ -264,6 +269,12 @@ extension is disabled or uninstalled; orderly suspension also clears them.
   DNSSEC/TLSA/DANE validation.
 - Selected ICANN HTTPS applies generic validating-DoH TLSA policy to every DNS
   host, not a hostname allowlist.
+- ICANN WebPKI passthrough dials bounded rotating batches drawn only from the
+  authenticated public endpoint set, rechecks authority before each dial, and
+  verifies the socket's actual peer address before publication.
+- Internal ICANN and configured-recursive RFC 8484 POSTs may retry once on a
+  fresh exact-IP connection after a stale idle pooled socket; generic POSTs
+  remain non-replayable.
 - JavaScript never infers DNSSEC, TLSA, DANE, or namespace state from
   browser-visible headers.
 - Policy storage is updated only after native acceptance and an active proxy

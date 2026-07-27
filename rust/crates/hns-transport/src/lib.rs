@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
@@ -36,6 +37,8 @@ const ALT_SVC_FAILURE_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 const TUNNEL_IO_TIMEOUT: Duration = Duration::from_millis(250);
 const CONTROLLED_IO_CANCELLED: &str = "controlled transport operation cancelled";
 const CONTROLLED_IO_DEADLINE_EXCEEDED: &str = "controlled transport deadline exceeded";
+const DNS_MESSAGE_MEDIA_TYPE: &str = "application/dns-message";
+const MAX_WEBPKI_ENDPOINT_ATTEMPTS_PER_OPEN: usize = 8;
 pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 pub const DEFAULT_MAX_RESPONSE_BODY_BYTES: usize = 8 * 1024 * 1024;
@@ -170,6 +173,42 @@ pub trait OriginTransport {
         Err(TransportError::UnsupportedTransport)
     }
 
+    /// Opens one of several equivalent, already-resolved WebPKI endpoints.
+    ///
+    /// Implementations that support multiple candidates must enforce one
+    /// aggregate connection budget and return the actual connected peer.
+    /// Default implementations support exactly one request so adding address
+    /// fallback can never accidentally multiply a transport's timeout.
+    fn open_webpki_passthrough_candidates(
+        &self,
+        requests: &[OriginRequest],
+    ) -> Result<SelectedOriginWebPkiPassthrough, TransportError> {
+        let mut before_dial = || Ok(());
+        self.open_webpki_passthrough_candidates_with_guard(requests, &mut before_dial)
+    }
+
+    /// Candidate opener with a guard run immediately before every socket dial.
+    ///
+    /// Authority wrappers use this boundary to stop a retry batch as soon as
+    /// its request stamp is revoked. The default remains fail closed for more
+    /// than one candidate.
+    fn open_webpki_passthrough_candidates_with_guard(
+        &self,
+        requests: &[OriginRequest],
+        before_dial: &mut dyn FnMut() -> Result<(), TransportError>,
+    ) -> Result<SelectedOriginWebPkiPassthrough, TransportError> {
+        let [request] = requests else {
+            return Err(TransportError::UnsupportedTransport);
+        };
+        before_dial()?;
+        let transport = self.open_webpki_passthrough(request)?;
+        let expected_peer = explicit_request_socket_addr(request)?;
+        if transport.peer_addr != expected_peer {
+            return Err(TransportError::InvalidRequest);
+        }
+        Ok(SelectedOriginWebPkiPassthrough { transport })
+    }
+
     fn fetch_to_writer(
         &self,
         request: &OriginRequest,
@@ -191,9 +230,16 @@ impl<T: Read + Write + Send> ReadWrite for T {}
 /// upload direction must never serialize a large origin download behind a
 /// polling read. Both halves must use bounded I/O waits.
 pub struct OriginWebPkiPassthrough {
+    /// Peer address read from the connected socket, never copied from DNS.
+    pub peer_addr: SocketAddr,
     pub reader: Box<dyn Read + Send>,
     pub writer: Box<dyn Write + Send>,
     pub shutdown: Arc<dyn OriginPassthroughShutdown>,
+}
+
+/// Raw WebPKI tunnel selected from an authenticated candidate set.
+pub struct SelectedOriginWebPkiPassthrough {
+    pub transport: OriginWebPkiPassthrough,
 }
 
 /// Out-of-band close used to wake both passthrough directions on
@@ -356,6 +402,7 @@ pub struct TcpHttpTransport {
     limits: TransportLimits,
     root_store: Arc<RootCertStore>,
     state: Arc<Mutex<TransportState>>,
+    webpki_candidate_rotation: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Default)]
@@ -365,6 +412,23 @@ struct TransportState {
     tls_resumption: HashMap<String, Resumption>,
     alt_svc: HashMap<AltSvcKey, AltSvcEndpoint>,
     blocked_alt_svc: HashMap<AltSvcKey, Instant>,
+}
+
+enum WebPkiPassthroughOpenError {
+    Connect(TransportError),
+    Terminal(TransportError),
+}
+
+impl WebPkiPassthroughOpenError {
+    fn into_transport_error(self) -> TransportError {
+        match self {
+            Self::Connect(error) | Self::Terminal(error) => error,
+        }
+    }
+
+    fn is_connect_failure(&self) -> bool {
+        matches!(self, Self::Connect(_))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -433,6 +497,7 @@ impl Default for TcpHttpTransport {
             limits: TransportLimits::default(),
             root_store: Arc::new(default_root_store()),
             state: Arc::new(Mutex::new(TransportState::default())),
+            webpki_candidate_rotation: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -503,6 +568,7 @@ impl TcpHttpTransport {
             limits,
             root_store: Arc::new(default_root_store()),
             state: Arc::new(Mutex::new(TransportState::default())),
+            webpki_candidate_rotation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -518,6 +584,7 @@ impl TcpHttpTransport {
             limits,
             root_store: Arc::new(root_store),
             state: Arc::new(Mutex::new(TransportState::default())),
+            webpki_candidate_rotation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -529,6 +596,58 @@ impl TcpHttpTransport {
         &self,
         request: &OriginRequest,
     ) -> Result<OriginWebPkiPassthrough, TransportError> {
+        self.open_explicit_webpki_passthrough_with_timeout(request, self.connect_timeout)
+            .map_err(WebPkiPassthroughOpenError::into_transport_error)
+    }
+
+    fn open_explicit_webpki_passthrough_with_timeout(
+        &self,
+        request: &OriginRequest,
+        connect_timeout: Duration,
+    ) -> Result<OriginWebPkiPassthrough, WebPkiPassthroughOpenError> {
+        let connect_ip = self
+            .validate_explicit_webpki_passthrough_request(request)
+            .map_err(WebPkiPassthroughOpenError::Terminal)?;
+        if connect_timeout.is_zero() {
+            return Err(WebPkiPassthroughOpenError::Connect(TransportError::Io(
+                "browser WebPKI endpoint connect deadline exceeded".to_owned(),
+            )));
+        }
+        let expected_peer = SocketAddr::new(connect_ip, request.port);
+        let writer = TcpStream::connect_timeout(&expected_peer, connect_timeout)
+            .map_err(|error| WebPkiPassthroughOpenError::Connect(io_error(error)))?;
+        let peer_addr = writer
+            .peer_addr()
+            .map_err(|error| WebPkiPassthroughOpenError::Terminal(io_error(error)))?;
+        if peer_addr != expected_peer {
+            return Err(WebPkiPassthroughOpenError::Terminal(
+                TransportError::InvalidRequest,
+            ));
+        }
+        writer
+            .set_read_timeout(Some(TUNNEL_IO_TIMEOUT))
+            .map_err(|error| WebPkiPassthroughOpenError::Terminal(io_error(error)))?;
+        writer
+            .set_write_timeout(Some(TUNNEL_IO_TIMEOUT))
+            .map_err(|error| WebPkiPassthroughOpenError::Terminal(io_error(error)))?;
+        let reader = writer
+            .try_clone()
+            .map_err(|error| WebPkiPassthroughOpenError::Terminal(io_error(error)))?;
+        let shutdown = writer
+            .try_clone()
+            .map_err(|error| WebPkiPassthroughOpenError::Terminal(io_error(error)))?;
+        Ok(OriginWebPkiPassthrough {
+            peer_addr,
+            reader: Box::new(reader),
+            writer: Box::new(writer),
+            shutdown: Arc::new(TcpPassthroughShutdown(shutdown)),
+        })
+    }
+
+    fn validate_explicit_webpki_passthrough_request(
+        &self,
+        request: &OriginRequest,
+    ) -> Result<IpAddr, TransportError> {
         validate_request_common(request, self.limits)?;
         validate_browser_tls_decision(&request.tls)?;
         if !matches!(
@@ -548,29 +667,80 @@ impl TcpHttpTransport {
         {
             return Err(TransportError::InvalidRequest);
         }
-        let connect_ip = request
+        request
             .connect_host
             .as_deref()
             .and_then(|host| host.parse::<IpAddr>().ok())
-            .ok_or(TransportError::InvalidRequest)?;
-        let writer = TcpStream::connect_timeout(
-            &SocketAddr::new(connect_ip, request.port),
-            self.connect_timeout,
-        )
-        .map_err(io_error)?;
-        writer
-            .set_read_timeout(Some(TUNNEL_IO_TIMEOUT))
-            .map_err(io_error)?;
-        writer
-            .set_write_timeout(Some(TUNNEL_IO_TIMEOUT))
-            .map_err(io_error)?;
-        let reader = writer.try_clone().map_err(io_error)?;
-        let shutdown = writer.try_clone().map_err(io_error)?;
-        Ok(OriginWebPkiPassthrough {
-            reader: Box::new(reader),
-            writer: Box::new(writer),
-            shutdown: Arc::new(TcpPassthroughShutdown(shutdown)),
-        })
+            .ok_or(TransportError::InvalidRequest)
+    }
+
+    fn open_explicit_webpki_passthrough_candidates(
+        &self,
+        requests: &[OriginRequest],
+        before_dial: &mut dyn FnMut() -> Result<(), TransportError>,
+    ) -> Result<SelectedOriginWebPkiPassthrough, TransportError> {
+        let template = requests.first().ok_or(TransportError::InvalidRequest)?;
+        for candidate in requests {
+            let mut expected = template.clone();
+            expected.connect_host = candidate.connect_host.clone();
+            if candidate != &expected {
+                return Err(TransportError::InvalidRequest);
+            }
+            // Validate every candidate before opening any socket. A later
+            // malformed request must not be hidden by an earlier success.
+            self.validate_explicit_webpki_passthrough_request(candidate)?;
+        }
+
+        let attempt_count = requests.len().min(MAX_WEBPKI_ENDPOINT_ATTEMPTS_PER_OPEN);
+        // Advance one position when the whole plan fits in a single batch.
+        // Advancing by `attempt_count` in that case is zero modulo the
+        // candidate count and would retry the same dead first endpoint on
+        // every browser tunnel. Larger plans retain disjoint bounded batches.
+        let rotation_stride = if attempt_count == requests.len() {
+            1
+        } else {
+            attempt_count
+        };
+        let rotation = self.webpki_candidate_rotation.fetch_add(
+            u64::try_from(rotation_stride).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        let candidate_count_u64 = u64::try_from(requests.len()).unwrap_or(u64::MAX);
+        let start = usize::try_from(rotation % candidate_count_u64).unwrap_or(0);
+        let attempt_indices = bounded_candidate_indices(requests.len(), start);
+        let deadline = Instant::now()
+            .checked_add(self.connect_timeout)
+            .ok_or_else(|| TransportError::Io("invalid WebPKI connect deadline".to_owned()))?;
+        let mut last_connect_error = None;
+        for (attempt_offset, candidate_index) in attempt_indices.iter().copied().enumerate() {
+            before_dial()?;
+            let Some(remaining) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+            else {
+                break;
+            };
+            let connect_timeout = apportioned_connect_timeout(
+                remaining,
+                attempt_indices.len().saturating_sub(attempt_offset),
+                self.connect_timeout,
+            );
+            let candidate = requests
+                .get(candidate_index)
+                .ok_or(TransportError::InvalidRequest)?;
+            match self.open_explicit_webpki_passthrough_with_timeout(candidate, connect_timeout) {
+                Ok(transport) => {
+                    return Ok(SelectedOriginWebPkiPassthrough { transport });
+                }
+                Err(error) if error.is_connect_failure() => {
+                    last_connect_error = Some(error.into_transport_error());
+                }
+                Err(error) => return Err(error.into_transport_error()),
+            }
+        }
+        Err(last_connect_error.unwrap_or_else(|| {
+            TransportError::Io("browser WebPKI endpoint connect deadline exceeded".to_owned())
+        }))
     }
 
     /// Performs one HTTP/1.1 request to an explicit IP address while enforcing
@@ -658,6 +828,22 @@ impl TcpHttpTransport {
         }
     }
 
+    /// Executes one internally constructed RFC 8484 DNS POST.
+    ///
+    /// DNS queries are replay-safe, so this narrowly scoped path may retry
+    /// once on a fresh exact-IP connection when an idle pooled HTTP/1.1
+    /// connection has gone stale. Generic POST requests continue through
+    /// [`OriginTransport::fetch`] and remain non-replayable.
+    pub fn fetch_rfc8484_post(
+        &self,
+        request: &OriginRequest,
+    ) -> Result<OriginResponse, TransportError> {
+        if !is_exact_ip_rfc8484_post(request) {
+            return Err(TransportError::InvalidRequest);
+        }
+        self.fetch_https_http11_with_pool_retry(request, true)
+    }
+
     fn fetch_unpromoted_to_writer(
         &self,
         request: &OriginRequest,
@@ -733,8 +919,20 @@ impl TcpHttpTransport {
         &self,
         request: &OriginRequest,
     ) -> Result<OriginResponse, TransportError> {
+        self.fetch_https_http11_with_pool_retry(request, false)
+    }
+
+    fn fetch_https_http11_with_pool_retry(
+        &self,
+        request: &OriginRequest,
+        replay_stale_rfc8484_post: bool,
+    ) -> Result<OriginResponse, TransportError> {
         let mut body = Vec::new();
-        let head = self.fetch_https_http11_to_writer(request, &mut body)?;
+        let head = self.fetch_https_http11_to_writer_with_pool_retry(
+            request,
+            &mut body,
+            replay_stale_rfc8484_post,
+        )?;
         Ok(OriginResponse {
             status: head.status,
             headers: head.headers,
@@ -748,6 +946,15 @@ impl TcpHttpTransport {
         &self,
         request: &OriginRequest,
         body: &mut dyn Write,
+    ) -> Result<OriginResponseHead, TransportError> {
+        self.fetch_https_http11_to_writer_with_pool_retry(request, body, false)
+    }
+
+    fn fetch_https_http11_to_writer_with_pool_retry(
+        &self,
+        request: &OriginRequest,
+        body: &mut dyn Write,
+        replay_stale_rfc8484_post: bool,
     ) -> Result<OriginResponseHead, TransportError> {
         validate_request(request, self.limits)?;
         let key = self.http11_pool_key(request);
@@ -775,7 +982,12 @@ impl TcpHttpTransport {
                     return Ok(head);
                 }
                 Err(error)
-                    if attempted_body.written > 0 || !is_safe_retry_method(&request.method) =>
+                    if !may_retry_stale_pooled_request(
+                        request,
+                        &error,
+                        attempted_body.written,
+                        replay_stale_rfc8484_post,
+                    ) =>
                 {
                     return Err(error);
                 }
@@ -1453,6 +1665,22 @@ impl OriginTransport for TcpHttpTransport {
         request: &OriginRequest,
     ) -> Result<OriginWebPkiPassthrough, TransportError> {
         self.open_explicit_webpki_passthrough(request)
+    }
+
+    fn open_webpki_passthrough_candidates(
+        &self,
+        requests: &[OriginRequest],
+    ) -> Result<SelectedOriginWebPkiPassthrough, TransportError> {
+        let mut before_dial = || Ok(());
+        self.open_explicit_webpki_passthrough_candidates(requests, &mut before_dial)
+    }
+
+    fn open_webpki_passthrough_candidates_with_guard(
+        &self,
+        requests: &[OriginRequest],
+        before_dial: &mut dyn FnMut() -> Result<(), TransportError>,
+    ) -> Result<SelectedOriginWebPkiPassthrough, TransportError> {
+        self.open_explicit_webpki_passthrough_candidates(requests, before_dial)
     }
 
     fn fetch_to_writer(
@@ -2281,6 +2509,55 @@ fn is_safe_retry_method(method: &str) -> bool {
     matches_ignore_ascii_case(method, &["GET", "HEAD", "OPTIONS", "TRACE"])
 }
 
+fn may_retry_stale_pooled_request(
+    request: &OriginRequest,
+    error: &TransportError,
+    response_body_bytes_written: usize,
+    replay_stale_rfc8484_post: bool,
+) -> bool {
+    if response_body_bytes_written != 0 {
+        return false;
+    }
+    if is_safe_retry_method(&request.method) {
+        return true;
+    }
+    replay_stale_rfc8484_post
+        && is_exact_ip_rfc8484_post(request)
+        && matches!(
+            error,
+            TransportError::Io(_) | TransportError::Tls(_) | TransportError::MalformedResponse
+        )
+}
+
+fn is_exact_ip_rfc8484_post(request: &OriginRequest) -> bool {
+    request.method.eq_ignore_ascii_case("POST")
+        && request.scheme.eq_ignore_ascii_case("https")
+        && request.protocol == OriginProtocol::Http11
+        && request
+            .connect_host
+            .as_deref()
+            .is_some_and(|host| host.parse::<IpAddr>().is_ok())
+        && request.body.len() >= 12
+        && has_exactly_one_header_value(request, "content-type", DNS_MESSAGE_MEDIA_TYPE)
+        && has_exactly_one_header_value(request, "accept", DNS_MESSAGE_MEDIA_TYPE)
+}
+
+fn has_exactly_one_header_value(
+    request: &OriginRequest,
+    expected_name: &str,
+    expected_value: &str,
+) -> bool {
+    let mut values = request
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case(expected_name))
+        .map(|(_, value)| value.trim());
+    values
+        .next()
+        .is_some_and(|value| value.eq_ignore_ascii_case(expected_value))
+        && values.next().is_none()
+}
+
 fn matches_ignore_ascii_case(value: &str, candidates: &[&str]) -> bool {
     candidates
         .iter()
@@ -2861,6 +3138,42 @@ fn controlled_deadline_error() -> TransportError {
     TransportError::Io(CONTROLLED_IO_DEADLINE_EXCEEDED.to_owned())
 }
 
+fn apportioned_connect_timeout(
+    remaining: Duration,
+    remaining_candidates: usize,
+    configured_timeout: Duration,
+) -> Duration {
+    let divisor = u32::try_from(remaining_candidates)
+        .unwrap_or(u32::MAX)
+        .max(1);
+    let fair_share = remaining / divisor;
+    fair_share
+        .max(Duration::from_millis(1))
+        .min(remaining)
+        .min(configured_timeout)
+}
+
+fn bounded_candidate_indices(candidate_count: usize, start: usize) -> Vec<usize> {
+    if candidate_count == 0 {
+        return Vec::new();
+    }
+    let attempt_count = candidate_count.min(MAX_WEBPKI_ENDPOINT_ATTEMPTS_PER_OPEN);
+    let start = start % candidate_count;
+    (start..candidate_count)
+        .chain(0..start)
+        .take(attempt_count)
+        .collect()
+}
+
+fn explicit_request_socket_addr(request: &OriginRequest) -> Result<SocketAddr, TransportError> {
+    let address = request
+        .connect_host
+        .as_deref()
+        .and_then(|host| host.parse::<IpAddr>().ok())
+        .ok_or(TransportError::InvalidRequest)?;
+    Ok(SocketAddr::new(address, request.port))
+}
+
 fn io_error(error: std::io::Error) -> TransportError {
     TransportError::Io(error.to_string())
 }
@@ -2981,6 +3294,7 @@ mod tests {
         request.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
 
         let mut tunnel = transport.open_webpki_passthrough(&request).unwrap();
+        assert_eq!(tunnel.peer_addr, address);
         tunnel.writer.write_all(b"ping").unwrap();
         tunnel.writer.flush().unwrap();
         let mut response = [0_u8; 4];
@@ -2988,6 +3302,202 @@ mod tests {
 
         assert_eq!(&response, b"pong");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn webpki_passthrough_candidates_retry_connect_failure_and_report_actual_peer() {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let _accepted = listener.accept().unwrap();
+        });
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+        let mut unavailable = request(address);
+        unavailable.scheme = "https".to_owned();
+        unavailable.connect_host = Some(Ipv4Addr::new(127, 0, 0, 2).to_string());
+        unavailable.tls.dnssec_secure = true;
+        unavailable.tls.namespace_fingerprint = Some("selected-icann".to_owned());
+        unavailable.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+        let mut available = unavailable.clone();
+        available.connect_host = Some(Ipv4Addr::LOCALHOST.to_string());
+
+        let selected = transport
+            .open_webpki_passthrough_candidates(&[unavailable, available])
+            .unwrap();
+
+        assert_eq!(selected.transport.peer_addr, address);
+        drop(selected.transport);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn webpki_candidate_rotation_advances_when_the_whole_plan_fits_one_batch() {
+        use std::sync::atomic::AtomicUsize;
+
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let _accepted = listener.accept().unwrap();
+            }
+        });
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+        let mut unavailable = request(address);
+        unavailable.scheme = "https".to_owned();
+        unavailable.connect_host = Some(Ipv4Addr::new(127, 0, 0, 2).to_string());
+        unavailable.tls.dnssec_secure = true;
+        unavailable.tls.namespace_fingerprint = Some("selected-icann".to_owned());
+        unavailable.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+        let mut available = unavailable.clone();
+        available.connect_host = Some(Ipv4Addr::LOCALHOST.to_string());
+        let candidates = [unavailable, available];
+
+        let first_guard_calls = AtomicUsize::new(0);
+        let mut first_guard = || {
+            first_guard_calls.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        };
+        let first = transport
+            .open_webpki_passthrough_candidates_with_guard(&candidates, &mut first_guard)
+            .unwrap();
+        assert_eq!(first.transport.peer_addr, address);
+        assert_eq!(first_guard_calls.load(Ordering::Acquire), 2);
+        drop(first.transport);
+
+        let second_guard_calls = AtomicUsize::new(0);
+        let mut second_guard = || {
+            second_guard_calls.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        };
+        let second = transport
+            .open_webpki_passthrough_candidates_with_guard(&candidates, &mut second_guard)
+            .unwrap();
+        assert_eq!(second.transport.peer_addr, address);
+        assert_eq!(
+            second_guard_calls.load(Ordering::Acquire),
+            1,
+            "the next open must rotate directly to the previously viable endpoint"
+        );
+        drop(second.transport);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn webpki_candidate_budget_rotates_bounded_batches_with_viable_timeouts() {
+        let configured = Duration::from_secs(10);
+        assert_eq!(bounded_candidate_indices(32, 0), (0..8).collect::<Vec<_>>());
+        assert_eq!(
+            bounded_candidate_indices(32, 8),
+            (8..16).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            bounded_candidate_indices(32, 24),
+            (24..32).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            bounded_candidate_indices(32, 32),
+            (0..8).collect::<Vec<_>>()
+        );
+
+        let mut remaining = configured;
+        for remaining_candidates in (1..=MAX_WEBPKI_ENDPOINT_ATTEMPTS_PER_OPEN).rev() {
+            let attempt = apportioned_connect_timeout(remaining, remaining_candidates, configured);
+            assert!(!attempt.is_zero());
+            assert!(attempt <= remaining);
+            remaining -= attempt;
+        }
+
+        assert!(remaining.is_zero());
+        assert_eq!(
+            apportioned_connect_timeout(
+                configured,
+                MAX_WEBPKI_ENDPOINT_ATTEMPTS_PER_OPEN,
+                configured
+            ),
+            Duration::from_millis(1_250)
+        );
+    }
+
+    #[test]
+    fn webpki_candidate_guard_stops_before_the_next_dial_after_revocation() {
+        use std::sync::atomic::AtomicUsize;
+
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+        let mut unavailable = request(address);
+        unavailable.scheme = "https".to_owned();
+        unavailable.connect_host = Some(Ipv4Addr::new(127, 0, 0, 2).to_string());
+        unavailable.tls.dnssec_secure = true;
+        unavailable.tls.namespace_fingerprint = Some("selected-icann".to_owned());
+        unavailable.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+        let mut available = unavailable.clone();
+        available.connect_host = Some(Ipv4Addr::LOCALHOST.to_string());
+        let guard_calls = AtomicUsize::new(0);
+        let mut authority_guard = || {
+            if guard_calls.fetch_add(1, Ordering::AcqRel) == 0 {
+                Ok(())
+            } else {
+                Err(TransportError::Io(
+                    "canonical browser authority revoked in-flight work".to_owned(),
+                ))
+            }
+        };
+
+        let failure = transport
+            .open_webpki_passthrough_candidates_with_guard(
+                &[unavailable, available],
+                &mut authority_guard,
+            )
+            .err()
+            .expect("revoked authority must stop the retry batch");
+
+        assert!(matches!(failure, TransportError::Io(_)));
+        assert_eq!(guard_calls.load(Ordering::Acquire), 2);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            ErrorKind::WouldBlock,
+            "the guarded second endpoint must never be dialed"
+        );
+    }
+
+    #[test]
+    fn webpki_retry_classification_excludes_post_connect_setup_io() {
+        let connect = WebPkiPassthroughOpenError::Connect(TransportError::Io("connect".to_owned()));
+        let setup = WebPkiPassthroughOpenError::Terminal(TransportError::Io("setup".to_owned()));
+
+        assert!(connect.is_connect_failure());
+        assert!(!setup.is_connect_failure());
+    }
+
+    #[test]
+    fn webpki_passthrough_candidates_reject_non_equivalent_requests_before_connecting() {
+        let transport = TcpHttpTransport::default();
+        let mut first = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 443)));
+        first.scheme = "https".to_owned();
+        first.tls.dnssec_secure = true;
+        first.tls.namespace_fingerprint = Some("selected-icann".to_owned());
+        first.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+        let mut different_origin = first.clone();
+        different_origin.host = "different.example".to_owned();
+
+        assert!(matches!(
+            transport.open_webpki_passthrough_candidates(&[first, different_origin]),
+            Err(TransportError::InvalidRequest)
+        ));
     }
 
     #[test]
@@ -3320,6 +3830,95 @@ mod tests {
         assert!(transport.fetch(&post).is_err());
 
         assert!(!retry_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    }
+
+    #[test]
+    fn rfc8484_post_retries_once_after_a_stale_pooled_connection() {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["example.com".to_owned()]).unwrap();
+        let cert_der = cert.der().to_vec();
+        let key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
+        let config = Arc::new(
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![CertificateDer::from(cert_der.clone())], key_der)
+                .unwrap(),
+        );
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (first_closed_tx, first_closed_rx) = mpsc::channel();
+        let (requests_tx, requests_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let connection = ServerConnection::new(Arc::clone(&config)).unwrap();
+            let mut stream = StreamOwned::new(connection, stream);
+            let first = read_test_http_request(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .unwrap();
+            stream.flush().unwrap();
+            drop(stream);
+            first_closed_tx.send(()).unwrap();
+
+            let (stream, _) = listener.accept().unwrap();
+            let connection = ServerConnection::new(config).unwrap();
+            let mut stream = StreamOwned::new(connection, stream);
+            let second = read_test_http_request(&mut stream);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nfresh",
+                )
+                .unwrap();
+            stream.flush().unwrap();
+            requests_tx.send(vec![first, second]).unwrap();
+        });
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+        let mut dns_post = request(address);
+        dns_post.method = "POST".to_owned();
+        dns_post.scheme = "https".to_owned();
+        dns_post.path_and_query = "/dns-query".to_owned();
+        dns_post.tls = TlsValidation::hns_strict(true, vec![tlsa_spki_exact(&cert_der)]);
+        dns_post.headers = vec![
+            ("Accept".to_owned(), DNS_MESSAGE_MEDIA_TYPE.to_owned()),
+            ("Content-Type".to_owned(), DNS_MESSAGE_MEDIA_TYPE.to_owned()),
+        ];
+        dns_post.body = vec![0_u8; 12];
+
+        assert_eq!(transport.fetch_rfc8484_post(&dns_post).unwrap().body, b"ok");
+        first_closed_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            transport.fetch_rfc8484_post(&dns_post).unwrap().body,
+            b"fresh"
+        );
+
+        let requests = requests_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|request| {
+            String::from_utf8_lossy(request).starts_with("POST /dns-query HTTP/1.1\r\n")
+        }));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn rfc8484_post_retry_api_rejects_generic_post() {
+        let transport = TcpHttpTransport::default();
+        let mut post = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 443)));
+        post.method = "POST".to_owned();
+        post.scheme = "https".to_owned();
+        post.body = vec![0_u8; 12];
+
+        assert_eq!(
+            transport.fetch_rfc8484_post(&post),
+            Err(TransportError::InvalidRequest)
+        );
     }
 
     #[test]
@@ -4475,6 +5074,29 @@ mod tests {
                 break;
             }
         }
+        request
+    }
+
+    fn read_test_http_request(stream: &mut impl Read) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+        let head = String::from_utf8_lossy(&request);
+        let content_length = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        let current = request.len();
+        request.resize(current + content_length, 0);
+        stream.read_exact(&mut request[current..]).unwrap();
         request
     }
 

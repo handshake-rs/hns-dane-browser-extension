@@ -153,6 +153,12 @@ jobs:
       - name: Build the Chromium extension
         run: npm run build:extension
 
+      - name: Test deterministic release packaging
+        run: |
+          python3 -m unittest -v \
+            tests/test_release_packaging.py \
+            tests/test_release_workflow.py
+
   required:
     name: Required CI
     needs: [policy, rust, extension]

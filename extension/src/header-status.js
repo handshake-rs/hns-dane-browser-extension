@@ -25,7 +25,9 @@ export function currentHeaderSync(candidate) {
     (candidate.targetPeerGroups !== undefined &&
       !optionalHeight(candidate.targetPeerGroups)) ||
     (candidate.targetEvidenceExpired !== undefined &&
-      typeof candidate.targetEvidenceExpired !== "boolean")
+      typeof candidate.targetEvidenceExpired !== "boolean") ||
+    (candidate.targetEvidenceValidUntilUnix !== undefined &&
+      !optionalUnixSeconds(candidate.targetEvidenceValidUntilUnix))
   ) {
     return null;
   }
@@ -51,6 +53,9 @@ export function authoritativeHeaderSync(candidate) {
     sync.freshnessThresholdBlocks !== REQUIRED_FRESHNESS_THRESHOLD_BLOCKS ||
     !isHeight(sync.targetPeerGroups) ||
     typeof sync.targetEvidenceExpired !== "boolean" ||
+    (sync.freshness === "unknown"
+      ? sync.targetEvidenceValidUntilUnix !== null
+      : !isUnixSeconds(sync.targetEvidenceValidUntilUnix)) ||
     (sync.freshness !== "unknown" &&
       sync.targetPeerGroups < REQUIRED_TARGET_PEER_GROUPS)
   ) {
@@ -138,7 +143,8 @@ function validFreshness(candidate) {
     return (
       candidate.effectiveTargetHeight == null &&
       candidate.lagBlocks == null &&
-      candidate.targetSource === "unknown"
+      candidate.targetSource === "unknown" &&
+      candidate.targetEvidenceValidUntilUnix == null
     );
   }
   if (
@@ -147,6 +153,8 @@ function validFreshness(candidate) {
     candidate.effectiveTargetHeight == null ||
     candidate.lagBlocks == null ||
     candidate.targetSource !== "corroboratedPeers" ||
+    (candidate.targetEvidenceValidUntilUnix !== undefined &&
+      !isUnixSeconds(candidate.targetEvidenceValidUntilUnix)) ||
     candidate.targetEvidenceExpired === true
   ) {
     return false;
@@ -203,6 +211,14 @@ function formatCount(value) {
 
 function optionalHeight(value) {
   return value == null || isHeight(value);
+}
+
+function optionalUnixSeconds(value) {
+  return value == null || isUnixSeconds(value);
+}
+
+function isUnixSeconds(value) {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 function isHeight(value) {

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HNS DANE Browser recovery settings</title>
+    <link rel="stylesheet" href="store-capture.css">
+  </head>
+  <body>
+    <main class="capture-shell">
+      <section class="capture-copy">
+        <p class="eyebrow">EXPLICIT RECOVERY CONTROLS</p>
+        <h1>Direct authority first. Alternate transports only by consent.</h1>
+        <p class="lede">
+          A detected port-53 interception can be recovered through a
+          requester-only P2P relay or a resolver URL the user chooses. Returned
+          bytes still require local proof, DNSSEC, TLSA, and DANE checks.
+        </p>
+        <span class="capture-badge">No output-node or relay-serving role</span>
+      </section>
+
+      <section class="capture-settings" aria-label="Representative extension settings">
+        <p class="eyebrow">RUST-VERIFIED HANDSHAKE</p>
+        <h1>Extension settings</h1>
+        <p class="lede">Changes create a fresh authenticated proxy generation.</p>
+
+        <div class="row resolver-row">
+          <span>
+            <strong>Recursive HNS DoH recovery</strong>
+            <small>Optional last resort after direct and owner-authenticated paths.</small>
+          </span>
+          <div class="field-stack">
+            <input type="url" placeholder="https://hnsdoh.com/dns-query" aria-label="Recursive HNS DoH recovery">
+            <button type="button" class="secondary">Clear resolver</button>
+          </div>
+        </div>
+        <p class="warning">
+          Blank by default. When selected, the resolver operator can observe HNS
+          qnames, qtypes, timing, and the user's source IP.
+        </p>
+
+        <label class="row check">
+          <span>
+            <strong>P2P DNS relay requester</strong>
+            <small>Opt in to consume proof-backed peer answers. This does not enable serving.</small>
+          </span>
+          <input type="checkbox">
+        </label>
+
+        <label class="row">
+          <span><strong>Privacy downgrade</strong><small>Behavior when privacy transport fails.</small></span>
+          <select aria-label="Privacy downgrade"><option>Fail closed</option></select>
+        </label>
+        <div class="actions">
+          <button type="button">Apply and restart</button>
+          <button type="button" class="secondary">Refresh diagnostics</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

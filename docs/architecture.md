@@ -93,8 +93,16 @@ its own persisted timestamp; proof retrieval, relay use, and ordinary
 transport liveness cannot refresh it. The raw maximum advertised height and a
 genesis-time schedule estimate are shown only as diagnostics. No corroborated
 target produces `Unknown`, which is non-admissible for HNS resolution.
-Background synchronization is stale-aware and rate-limited to a ten-minute
-attempt interval; an explicit toolbar action can request one immediate sync.
+The native status includes the last Unix second through which a quorum remains
+valid, derived from the remaining independent observations. The extension
+schedules one synchronization two minutes before that point and reuses the
+existing five-minute local health alarm as a safety path, rather than adding
+another periodic peer poll. Failed attempts in routine stale or unknown state
+remain rate-limited to a ten-minute retry interval. Only around a previously
+authenticated quorum deadline, failed automatic or manual attempts use a
+bounded one-minute retry cadence from the two-minute lead window through two
+minutes after expiry. An explicit toolbar action can still request one
+immediate sync.
 
 ## ICANN DANE
 
@@ -118,6 +126,14 @@ closed outcomes:
 Status names this path `DANE via ICANN DoH`. Bogus DNSSEC is not absence.
 Typed DANE failure is preserved across HTTP/1.1, HTTP/2, HTTP/3, CONNECT, and
 WebSocket paths rather than inferred from error strings.
+
+ICANN WebPKI CONNECT uses only public numeric endpoints retained in that
+decision. It tries a bounded rotating batch under one aggregate connect
+timeout, rechecks canonical authority before every dial, and verifies the
+socket's actual peer against the authenticated endpoint set. Internally
+constructed HTTP/1.1 RFC 8484 POSTs may retry once on a fresh exact-IP
+connection after a stale idle pooled socket fails; ordinary POSTs remain
+non-replayable.
 
 Secure ICANN TLSA and every selected HNS HTTPS/WSS plan stay on the intercept
 path because Rust must inspect the certificate and enforce DANE. Authenticated

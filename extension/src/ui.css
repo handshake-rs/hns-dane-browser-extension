@@ -26,6 +26,18 @@ body {
   width: 360px;
 }
 
+.brand-lockup {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 20px;
+  align-items: center;
+}
+
+.brand-lockup img {
+  width: 96px;
+  height: 96px;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: #69d6a5;
@@ -129,6 +141,7 @@ button.secondary {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 22px;
 }
@@ -177,4 +190,57 @@ dd {
   max-width: 190px;
   text-align: right;
   overflow-wrap: anywhere;
+}
+
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin: 22px 0;
+}
+
+.setup-card {
+  padding: 18px;
+  border: 1px solid #274238;
+  border-radius: 10px;
+  background: rgba(8, 16, 13, 0.72);
+}
+
+.setup-card h2 {
+  margin-top: 0;
+}
+
+.setup-card p,
+.setup-card li,
+.project-links p {
+  color: #aec4ba;
+  line-height: 1.5;
+}
+
+.setup-card code,
+.extension-id {
+  overflow-wrap: anywhere;
+}
+
+.project-links p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.link-stack {
+  display: grid;
+  gap: 6px;
+}
+
+a {
+  color: #69d6a5;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #eef8f3;
+  outline-offset: 2px;
 }

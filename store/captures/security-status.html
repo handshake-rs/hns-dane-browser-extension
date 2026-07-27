@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HNS DANE Browser security status</title>
+    <link rel="stylesheet" href="store-capture.css">
+  </head>
+  <body>
+    <main class="capture-shell">
+      <section class="capture-copy">
+        <p class="eyebrow">REPRESENTATIVE LIVE STATUS</p>
+        <h1>See which namespace and security path the browser selected.</h1>
+        <p class="lede">
+          Rust reports dual-root HNS/ICANN classification, local proof state,
+          DNSSEC, TLSA/DANE, browser-owned WebPKI fallback, and the validated
+          Handshake header anchor.
+        </p>
+        <span class="capture-badge">Fail closed on bogus or indeterminate evidence</span>
+      </section>
+
+      <section class="panel popup capture-popup" aria-label="Representative extension popup">
+        <p class="eyebrow">HNS SECURITY PATH</p>
+        <h1>Rust security path active</h1>
+        <p class="lede">HNS only for shakeshift; HNS is active.</p>
+        <dl>
+          <div><dt>Runtime generation</dt><dd>2</dd></div>
+          <div><dt>Policy generation</dt><dd>2</dd></div>
+          <div><dt>DANE local CA</dt><dd>Installed</dd></div>
+        </dl>
+        <h2>Latest browser main frame</h2>
+        <dl>
+          <div><dt>Origin</dt><dd>shakeshift</dd></div>
+          <div><dt>Page proof anchor</dt><dd>#339,988</dd></div>
+          <div><dt>Namespace result</dt><dd>HNS only</dd></div>
+          <div><dt>Selected namespace</dt><dd>HNS</dd></div>
+          <div><dt>Selection reason</dt><dd>Only HNS exists</dd></div>
+          <div><dt>HNS resolution</dt><dd>Present</dd></div>
+          <div><dt>ICANN resolution</dt><dd>Absent</dd></div>
+          <div><dt>DNS transport</dt><dd>Authoritative DNS</dd></div>
+          <div><dt>HNS proof</dt><dd>Verified</dd></div>
+          <div><dt>DNSSEC</dt><dd>Secure</dd></div>
+          <div><dt>TLSA</dt><dd>Present</dd></div>
+          <div><dt>DANE</dt><dd>Matched</dd></div>
+        </dl>
+        <h2>Header chain</h2>
+        <p class="section-detail">Current means within 2 blocks of the corroborated peer target.</p>
+        <dl>
+          <div><dt>Validated header tip</dt><dd>#339,988</dd></div>
+          <div><dt>Corroborated target</dt><dd>#339,988</dd></div>
+          <div><dt>Target peer groups</dt><dd>12</dd></div>
+          <div><dt>Lag</dt><dd>0 blocks</dd></div>
+          <div><dt>Chain state</dt><dd>Current</dd></div>
+        </dl>
+      </section>
+    </main>
+  </body>
+</html>

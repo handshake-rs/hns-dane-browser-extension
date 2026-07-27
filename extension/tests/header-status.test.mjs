@@ -22,6 +22,7 @@ function headerSync(overrides = {}) {
     targetSource: "corroboratedPeers",
     targetPeerGroups: 3,
     targetEvidenceExpired: false,
+    targetEvidenceValidUntilUnix: 1_753_400_000,
     error: null,
     ...overrides
   };
@@ -99,7 +100,8 @@ test("unknown freshness requires an unconfirmed target and lag", () => {
     effectiveTargetHeight: null,
     lagBlocks: null,
     freshness: "unknown",
-    targetSource: "unknown"
+    targetSource: "unknown",
+    targetEvidenceValidUntilUnix: null
   });
 
   assert.equal(currentHeaderSync(unknown), unknown);
@@ -118,6 +120,7 @@ test("native lifecycle envelope rejects old hosts without authoritative freshnes
   delete legacy.targetSource;
   delete legacy.targetPeerGroups;
   delete legacy.targetEvidenceExpired;
+  delete legacy.targetEvidenceValidUntilUnix;
 
   assert.equal(validHeaderSyncEnvelope({ headerSync: legacy }), false);
   assert.equal(validHeaderSyncEnvelope({}), false);
@@ -140,6 +143,15 @@ test("native lifecycle rejects weak freshness policy or insufficient corroborati
     authoritativeHeaderSync(headerSync({ targetPeerGroups: 2 })),
     null
   );
+  assert.equal(
+    authoritativeHeaderSync(
+      headerSync({ targetEvidenceValidUntilUnix: null })
+    ),
+    null
+  );
+  const oldNative = headerSync();
+  delete oldNative.targetEvidenceValidUntilUnix;
+  assert.equal(authoritativeHeaderSync(oldNative), null);
   assert.equal(
     authoritativeHeaderSync(
       headerSync({

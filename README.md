@@ -112,11 +112,20 @@ npm run check:extension
 See [Chromium Extension and Native Host](docs/chromium-extension.md) for build,
 installation, trust, recovery, and removal instructions.
 
+Store submission copy, reviewer disclosures, permission justifications, and
+shared Chrome/Edge/Opera artwork are maintained in [`store/`](store/README.md).
+Tagged GitHub Releases provide the browser-neutral extension ZIP and matching
+native-host bundles; Chrome Web Store distribution also serves Brave and
+Vivaldi, while Edge and Opera can use their own catalog listings.
+See the [Chromium release process](docs/release.md) for the immutable-tag,
+multi-platform build, checksum, signing-status, and catalog-ID boundaries.
+
 ## Support and license
 
 Donations are optional and do not unlock features.
 
-- HNS donation address:
+- [GitHub Sponsors](https://github.com/sponsors/denuoweb)
+- [Donate HNS](handshake:hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh?label=Denuo%20Web%20Handshake%20Browser&message=Handshake%20Browser%20donation):
   `hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh`
 
 This repository is source-available under the PolyForm Noncommercial License

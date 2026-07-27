@@ -3,9 +3,11 @@ import {
   NativeClient
 } from "./native-client.js";
 import {
-  AUTOMATIC_HEADER_SYNC_MIN_INTERVAL_MS,
-  automaticHeaderSyncAllowed,
-  needsAutomaticHeaderSync
+  automaticHeaderSyncDueAt,
+  headerSyncUrgentRetryWindow,
+  needsAutomaticHeaderSync,
+  nextAutomaticHeaderSyncAttemptAt,
+  normalizedHeaderSyncUrgentRetryWindow
 } from "./header-sync-schedule.js";
 import {
   DEFAULT_POLICY,
@@ -30,11 +32,12 @@ import {
 const NATIVE_HOST = "com.denuoweb.hns_dane_browser";
 const HEALTH_ALARM = "hns-runtime-health";
 const RECONNECT_ALARM = "hns-runtime-reconnect";
-const HEADER_SYNC_ALARM = "hns-header-sync";
+const HEADER_SYNC_DEADLINE_ALARM = "hns-header-sync-deadline";
+const LEGACY_HEADER_SYNC_ALARM = "hns-header-sync";
 const HEALTH_PERIOD_MINUTES = 5;
-const HEADER_SYNC_PERIOD_MINUTES =
-  AUTOMATIC_HEADER_SYNC_MIN_INTERVAL_MS / (60 * 1000);
 const HEADER_SYNC_LAST_ATTEMPT_KEY = "headerSyncLastAttemptAt";
+const HEADER_SYNC_URGENT_RETRY_WINDOW_KEY =
+  "headerSyncUrgentRetryWindow";
 const NAVIGATION_RECEIPTS_STORAGE_KEY = "navigationSecurityReceipts";
 const MAX_NATIVE_CONNECT_SECURITY_DECISIONS = 32;
 const client = new NativeClient(chrome, NATIVE_HOST);
@@ -44,6 +47,8 @@ let headerSyncOperation = null;
 let headerMaintenanceOperation = null;
 let lastHeaderSyncAttemptAt = null;
 let lastHeaderSyncAttemptLoaded = false;
+let retainedHeaderSyncUrgentRetryWindow = null;
+let retainedHeaderSyncUrgentRetryWindowLoaded = false;
 let navigationReceiptStore = null;
 let navigationReceiptQueue = Promise.resolve();
 let credentials = null;
@@ -80,7 +85,12 @@ client.onDisconnect(() => {
   chrome.alarms.create(RECONNECT_ALARM, { delayInMinutes: 1 });
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === "install") {
+    void chrome.tabs.create({
+      url: chrome.runtime.getURL("src/setup.html")
+    });
+  }
   void migrateAndRecover();
 });
 
@@ -100,10 +110,10 @@ chrome.runtime.onSuspendCanceled.addListener(() => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
-    void refreshNativeStatus();
+    void maintainHeaderFreshness(true).catch(() => {});
   } else if (alarm.name === RECONNECT_ALARM) {
     void recover();
-  } else if (alarm.name === HEADER_SYNC_ALARM) {
+  } else if (alarm.name === HEADER_SYNC_DEADLINE_ALARM) {
     void maintainHeaderFreshness(true).catch(() => {});
   }
 });
@@ -188,9 +198,7 @@ registerNavigationLifecycle(chrome, {
 });
 
 chrome.alarms.create(HEALTH_ALARM, { periodInMinutes: HEALTH_PERIOD_MINUTES });
-chrome.alarms.create(HEADER_SYNC_ALARM, {
-  periodInMinutes: HEADER_SYNC_PERIOD_MINUTES
-});
+void chrome.alarms.clear(LEGACY_HEADER_SYNC_ALARM);
 void recover();
 
 async function migrateAndRecover() {
@@ -229,6 +237,7 @@ function recover() {
 }
 
 async function startRuntime(policyOverride) {
+  void chrome.alarms.clear(HEADER_SYNC_DEADLINE_ALARM);
   setStatus({
     state: "starting",
     reason: null,
@@ -382,9 +391,25 @@ function maintainHeaderFreshness(refreshStatus) {
   headerMaintenanceOperation = (async () => {
     if (publicStatus.state !== "active") return publicStatus;
     const status = refreshStatus ? await refreshNativeStatus() : publicStatus;
-    if (!needsAutomaticHeaderSync(status.headerSync)) return status;
+    if (!needsAutomaticHeaderSync(status.headerSync)) {
+      scheduleHeaderSyncDeadline(status.headerSync);
+      await clearSupersededHeaderSyncUrgentRetryWindow(status.headerSync);
+      return status;
+    }
     const lastAttemptAt = await loadLastHeaderSyncAttempt();
-    if (!automaticHeaderSyncAllowed(lastAttemptAt)) return status;
+    const retainedUrgentWindow =
+      await loadRetainedHeaderSyncUrgentRetryWindow();
+    const now = Date.now();
+    const allowedAt = nextAutomaticHeaderSyncAttemptAt(
+      status.headerSync,
+      lastAttemptAt,
+      retainedUrgentWindow,
+      now
+    );
+    if (allowedAt != null && allowedAt > now) {
+      scheduleHeaderSyncDeadline(status.headerSync, allowedAt);
+      return status;
+    }
     return synchronizeHeaders();
   })().finally(() => {
     headerMaintenanceOperation = null;
@@ -398,6 +423,7 @@ function synchronizeHeaders() {
     return Promise.reject(new Error("header sync requires an active native runtime"));
   }
 
+  const attemptedAgainstHeaderSync = publicStatus.headerSync;
   setStatus({
     headerSyncInProgress: true,
     headerSyncError: null,
@@ -444,7 +470,20 @@ function synchronizeHeaders() {
         headerSyncInProgress: false,
         headerSyncError: boundedError(syncError)
       });
+      await scheduleHeaderSyncRetry(
+        publicStatus.headerSync,
+        attemptedAgainstHeaderSync
+      );
       throw syncError;
+    }
+    if (needsAutomaticHeaderSync(publicStatus.headerSync)) {
+      await scheduleHeaderSyncRetry(
+        publicStatus.headerSync,
+        attemptedAgainstHeaderSync
+      );
+    } else {
+      await clearRetainedHeaderSyncUrgentRetryWindow();
+      scheduleHeaderSyncDeadline(publicStatus.headerSync);
     }
     return publicStatus;
   })().finally(() => {
@@ -453,17 +492,153 @@ function synchronizeHeaders() {
   return headerSyncOperation;
 }
 
-async function loadLastHeaderSyncAttempt() {
-  if (lastHeaderSyncAttemptLoaded) return lastHeaderSyncAttemptAt;
-  const stored = await storageGet([HEADER_SYNC_LAST_ATTEMPT_KEY]);
-  const candidate = stored[HEADER_SYNC_LAST_ATTEMPT_KEY];
+async function scheduleHeaderSyncRetry(candidate, attemptedAgainst) {
   const now = Date.now();
+  const attemptedWindow = headerSyncUrgentRetryWindow(attemptedAgainst);
+  if (attemptedWindow && attemptedWindow.endsAt >= now) {
+    await rememberHeaderSyncUrgentRetryWindow(attemptedWindow);
+  }
+  const retainedUrgentWindow =
+    await loadRetainedHeaderSyncUrgentRetryWindow();
+  const allowedAt = nextAutomaticHeaderSyncAttemptAt(
+    candidate,
+    lastHeaderSyncAttemptAt,
+    retainedUrgentWindow,
+    now
+  );
+  scheduleHeaderSyncDeadline(
+    candidate,
+    allowedAt == null ? now : allowedAt
+  );
+}
+
+async function clearSupersededHeaderSyncUrgentRetryWindow(candidate) {
+  const currentWindow = headerSyncUrgentRetryWindow(candidate);
+  if (!currentWindow) return;
+  const retainedWindow =
+    await loadRetainedHeaderSyncUrgentRetryWindow();
+  if (
+    retainedWindow &&
+    (retainedWindow.network !== currentWindow.network ||
+      retainedWindow.endsAt < currentWindow.endsAt)
+  ) {
+    await clearRetainedHeaderSyncUrgentRetryWindow();
+  }
+}
+
+function scheduleHeaderSyncDeadline(candidate, notBefore = Date.now()) {
+  if (publicStatus.state !== "active") {
+    void chrome.alarms.clear(HEADER_SYNC_DEADLINE_ALARM);
+    return;
+  }
+  const now = Date.now();
+  const dueAt = automaticHeaderSyncDueAt(candidate);
+  const floor =
+    Number.isSafeInteger(notBefore) && notBefore >= now ? notBefore : now;
+  const requestedAt =
+    Number.isSafeInteger(dueAt) && dueAt >= 0 ? dueAt : now;
+  chrome.alarms.create(HEADER_SYNC_DEADLINE_ALARM, {
+    when: Math.max(now + 1000, floor, requestedAt)
+  });
+}
+
+async function loadLastHeaderSyncAttempt() {
+  const now = Date.now();
+  if (lastHeaderSyncAttemptLoaded) {
+    if (
+      Number.isSafeInteger(lastHeaderSyncAttemptAt) &&
+      lastHeaderSyncAttemptAt > now
+    ) {
+      lastHeaderSyncAttemptAt = null;
+      try {
+        await storageSet({ [HEADER_SYNC_LAST_ATTEMPT_KEY]: null });
+      } catch {
+        // The normalized in-memory value still restores forward progress.
+      }
+    }
+    return lastHeaderSyncAttemptAt;
+  }
+  let stored = {};
+  try {
+    stored = await storageGet([HEADER_SYNC_LAST_ATTEMPT_KEY]);
+  } catch {
+    // Missing storage cannot suppress a necessary maintenance attempt.
+  }
+  const candidate = stored[HEADER_SYNC_LAST_ATTEMPT_KEY];
   lastHeaderSyncAttemptAt =
     Number.isSafeInteger(candidate) && candidate >= 0 && candidate <= now
       ? candidate
       : null;
   lastHeaderSyncAttemptLoaded = true;
+  if (Number.isSafeInteger(candidate) && candidate > now) {
+    try {
+      await storageSet({ [HEADER_SYNC_LAST_ATTEMPT_KEY]: null });
+    } catch {
+      // The normalized in-memory value still restores forward progress.
+    }
+  }
   return lastHeaderSyncAttemptAt;
+}
+
+async function loadRetainedHeaderSyncUrgentRetryWindow() {
+  const now = Date.now();
+  let shouldClearStoredWindow = false;
+  if (!retainedHeaderSyncUrgentRetryWindowLoaded) {
+    let stored = {};
+    try {
+      stored = await storageGet([HEADER_SYNC_URGENT_RETRY_WINDOW_KEY]);
+    } catch {
+      // Missing storage falls back to the general fail-closed schedule.
+    }
+    const storedWindow = stored[HEADER_SYNC_URGENT_RETRY_WINDOW_KEY];
+    retainedHeaderSyncUrgentRetryWindow =
+      normalizedHeaderSyncUrgentRetryWindow(
+        storedWindow,
+        now
+      );
+    shouldClearStoredWindow =
+      storedWindow != null && retainedHeaderSyncUrgentRetryWindow == null;
+    retainedHeaderSyncUrgentRetryWindowLoaded = true;
+  } else {
+    const priorWindow = retainedHeaderSyncUrgentRetryWindow;
+    retainedHeaderSyncUrgentRetryWindow =
+      normalizedHeaderSyncUrgentRetryWindow(
+        priorWindow,
+        now
+      );
+    shouldClearStoredWindow =
+      priorWindow != null && retainedHeaderSyncUrgentRetryWindow == null;
+  }
+  if (shouldClearStoredWindow) {
+    try {
+      await storageSet({ [HEADER_SYNC_URGENT_RETRY_WINDOW_KEY]: null });
+    } catch {
+      // An expired window is already absent from the in-memory scheduler.
+    }
+  }
+  return retainedHeaderSyncUrgentRetryWindow;
+}
+
+async function rememberHeaderSyncUrgentRetryWindow(window) {
+  const normalized = normalizedHeaderSyncUrgentRetryWindow(window);
+  if (!normalized) return;
+  retainedHeaderSyncUrgentRetryWindow = normalized;
+  retainedHeaderSyncUrgentRetryWindowLoaded = true;
+  try {
+    await storageSet({ [HEADER_SYNC_URGENT_RETRY_WINDOW_KEY]: normalized });
+  } catch {
+    // The in-memory window still bounds urgent retries for this worker.
+  }
+}
+
+async function clearRetainedHeaderSyncUrgentRetryWindow() {
+  retainedHeaderSyncUrgentRetryWindow = null;
+  retainedHeaderSyncUrgentRetryWindowLoaded = true;
+  try {
+    await storageSet({ [HEADER_SYNC_URGENT_RETRY_WINDOW_KEY]: null });
+  } catch {
+    // The in-memory window is already cleared.
+  }
 }
 
 async function recordHeaderSyncAttempt(attemptedAt) {

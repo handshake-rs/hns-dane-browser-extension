@@ -2,8 +2,14 @@
 
 Last updated: 2026-07-26
 
+HNS DANE Browser Extension is published by Denuo Web, LLC. Privacy and
+support questions can be sent to `info@denuoweb.com`. Do not post personal
+information to the public issue tracker.
+
 The HNS DANE Browser Extension does not operate a telemetry, analytics,
-advertising, or browsing-history service.
+advertising, or browsing-history service. Denuo Web does not sell personal or
+sensitive data. Donations are optional, do not unlock features, and do not
+change how browsing data is handled.
 
 ## Local data
 
@@ -29,8 +35,12 @@ state and intermediaries, not page bodies.
 
 Ordinary DNS HTTP(S)/WS(S) hosts are resolved independently through HNS and
 ICANN by the Rust native host. ICANN resolution and TLSA discovery use the
-configured validating ICANN DoH service. That resolver can observe queried
-ICANN names and the caller's network address.
+built-in validating Cloudflare DNS-over-HTTPS endpoint at
+`cloudflare-dns.com`, bootstrapped through the documented `1.1.1.1` and
+`1.0.0.1` address families without system DNS. Cloudflare can observe queried
+hostnames and record types, request timing, protocol metadata, and the
+caller's network address. Denuo Web does not operate Cloudflare's resolver or
+control its logging and retention.
 
 HNS names are not sent automatically to a public recursive HNS resolver. After
 local header and proof validation, Rust tries direct delegated authority and
@@ -51,6 +61,11 @@ validation, and its AD bit is not trusted.
 
 The browser setting controls requester behavior only. This product advertises
 no opaque relay or output-node/provider service.
+
+Websites the user visits receive ordinary connection and request data needed
+to serve the page, which can include the caller's network address, requested
+URL, headers, cookies, and content the user submits. Denuo Web does not proxy
+that traffic through a developer-operated browsing service.
 
 ## Retention and removal
 
@@ -79,6 +94,11 @@ registrations, exact per-install trust anchor, native executable, CA key
 material, marker, chain/cache state, and runtime data. Browser-managed
 extension storage is removed according to the browser's extension-removal
 behavior.
+
+Users can clear the configured recursive resolver, disable the P2P requester,
+remove the extension, or run the complete uninstaller at any time. No
+developer-operated account or server-side profile exists, so Denuo Web holds
+no account record or synced browsing history to delete.
 
 ## Scope
 

@@ -1,0 +1,83 @@
+@import url("../../extension/src/ui.css");
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+.capture-shell {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) auto;
+  gap: 64px;
+  align-items: center;
+  width: 1280px;
+  height: 800px;
+  padding: 48px 86px;
+  background:
+    radial-gradient(circle at 72% 18%, rgba(36, 143, 99, 0.28), transparent 28rem),
+    linear-gradient(135deg, #06171f, #0b1512 54%, #0d6e5b);
+}
+
+.capture-copy {
+  max-width: 570px;
+}
+
+.capture-copy h1 {
+  font-size: 50px;
+  line-height: 1.04;
+}
+
+.capture-copy .lede {
+  max-width: 540px;
+  font-size: 20px;
+  line-height: 1.5;
+}
+
+.capture-popup,
+.capture-settings {
+  border: 1px solid #3a6654;
+  border-radius: 14px;
+  background: #0b1512;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.capture-popup {
+  height: 704px;
+  overflow: hidden;
+}
+
+.capture-popup h2 {
+  margin-top: 20px;
+}
+
+.capture-popup dl {
+  gap: 7px;
+  font-size: 12px;
+}
+
+.capture-popup .section-detail {
+  min-height: 0;
+}
+
+.capture-settings {
+  box-sizing: border-box;
+  width: 620px;
+  padding: 28px;
+}
+
+.capture-settings .row {
+  grid-template-columns: 1fr 210px;
+}
+
+.capture-badge {
+  display: inline-block;
+  margin: 10px 0;
+  padding: 8px 12px;
+  border: 1px solid #69d6a5;
+  border-radius: 999px;
+  color: #69d6a5;
+  font-weight: 800;
+}

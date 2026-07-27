@@ -16,6 +16,7 @@ $HostName = 'com.denuoweb.hns_dane_browser'
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $ScriptDirectory '..\..'))
 $NoticeSource = Join-Path $RepositoryRoot 'extension\THIRD_PARTY_NOTICES.txt'
+$ProductLicenseSource = Join-Path $RepositoryRoot 'LICENSE'
 if (-not $NativeHost) {
     $NativeHost = Join-Path $RepositoryRoot 'rust\target\release\hns-chromium-native-host.exe'
 }
@@ -30,6 +31,9 @@ if (-not (Test-Path -LiteralPath $NativeHost -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $NoticeSource -PathType Leaf)) {
     throw "Third-party notices are missing: $NoticeSource"
 }
+if (-not (Test-Path -LiteralPath $ProductLicenseSource -PathType Leaf)) {
+    throw "Product license is missing: $ProductLicenseSource"
+}
 
 $DataDirectory = Join-Path $InstallRoot 'data'
 $BinaryDirectory = Join-Path $InstallRoot 'bin'
@@ -39,6 +43,7 @@ $ManifestPath = Join-Path $InstallRoot "$HostName.json"
 New-Item -ItemType Directory -Force -Path $DataDirectory, $BinaryDirectory, $LicenseDirectory | Out-Null
 Copy-Item -LiteralPath $NativeHost -Destination $InstalledHost -Force
 Copy-Item -LiteralPath $NoticeSource -Destination (Join-Path $LicenseDirectory 'THIRD_PARTY_NOTICES.txt') -Force
+Copy-Item -LiteralPath $ProductLicenseSource -Destination (Join-Path $LicenseDirectory 'LICENSE') -Force
 
 $ManifestArguments = @('--print-host-manifest')
 foreach ($Id in $ExtensionId) {

@@ -1,0 +1,547 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate tag and inspect release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      canonical-extension-id: ${{ steps.validate.outputs.canonical-extension-id }}
+      extension-id: ${{ steps.validate.outputs.extension-id }}
+      release-state: ${{ steps.release.outputs.state }}
+      version: ${{ steps.validate.outputs.version }}
+      source-date-epoch: ${{ steps.validate.outputs.source-date-epoch }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate release identity and version
+        id: validate
+        env:
+          CONFIGURED_CATALOG_ID: ${{ vars.CHROMIUM_EXTENSION_ID }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          canonical_extension_id="$(
+            jq -er '.canonicalId' release/extension-identity.json
+          )"
+          extension_id="${CONFIGURED_CATALOG_ID:-$canonical_extension_id}"
+          if [[ ! "$canonical_extension_id" =~ ^[a-p]{32}$ ||
+                ! "$extension_id" =~ ^[a-p]{32}$ ]]; then
+            echo "::error::CHROMIUM_EXTENSION_ID, when set, must be the exact 32-character catalog ID."
+            exit 1
+          fi
+          if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GitHub supplied an invalid source commit."
+            exit 1
+          fi
+
+          bash scripts/check-version-consistency.sh
+          version="$(jq -er '.version' extension/manifest.json)"
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match extension manifest version $version."
+            exit 1
+          fi
+          tag_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if [[ "$tag_commit" != "$SOURCE_COMMIT" ]]; then
+            echo "::error::Checked-out source $SOURCE_COMMIT does not match tag commit $tag_commit."
+            exit 1
+          fi
+          default_branch_ref="refs/remotes/origin/$DEFAULT_BRANCH"
+          if [[ -z "$DEFAULT_BRANCH" ]] ||
+            ! git show-ref --verify --quiet "$default_branch_ref"; then
+            echo "::error::Unable to resolve the repository default branch."
+            exit 1
+          fi
+          default_branch_commit="$(git rev-parse "${default_branch_ref}^{commit}")"
+          if [[ "$SOURCE_COMMIT" != "$default_branch_commit" ]]; then
+            echo "::error::Release tag must point to the exact current $DEFAULT_BRANCH tip ($default_branch_commit)."
+            exit 1
+          fi
+          source_date_epoch="$(git show -s --format=%ct "$SOURCE_COMMIT")"
+          if [[ ! "$source_date_epoch" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unable to derive a deterministic source timestamp."
+            exit 1
+          fi
+          {
+            echo "canonical-extension-id=$canonical_extension_id"
+            echo "extension-id=$extension_id"
+            echo "version=$version"
+            echo "source-date-epoch=$source_date_epoch"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Inspect any existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            is_draft="$(
+              gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'
+            )"
+            if [[ "$is_draft" == true ]]; then
+              state="draft"
+            else
+              release_body="$(
+                gh release view "$RELEASE_TAG" --json body --jq '.body'
+              )"
+              if ! grep -Fq \
+                "https://github.com/${REPOSITORY}/commit/${SOURCE_COMMIT}" \
+                <<<"$release_body"; then
+                echo "::error::Published release source does not match the current tag commit."
+                exit 1
+              fi
+              state="published"
+            fi
+          else
+            state="absent"
+          fi
+          echo "state=$state" >>"$GITHUB_OUTPUT"
+
+  quality:
+    name: Portable release gates
+    needs: prepare
+    if: ${{ needs.prepare.outputs.release-state != 'published' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Install pinned release tools
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.92.0 \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy
+          cargo +1.92.0 install cargo-deny --version 0.19.9 --locked
+
+      - name: Run the complete portable release gate
+        run: bash scripts/check.sh
+
+  extension:
+    name: Package browser-neutral MV3 extension
+    needs: prepare
+    if: ${{ needs.prepare.outputs.release-state != 'published' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Build and validate deterministic release packaging
+        run: |
+          set -euo pipefail
+          npm run lint:extension
+          npm run build:extension
+          python3 -m unittest -v \
+            tests/test_release_packaging.py \
+            tests/test_release_workflow.py
+
+      - name: Package the MV3 extension
+        env:
+          EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source-date-epoch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/package-release.py extension \
+            --output-dir dist/release \
+            --source-date-epoch "$SOURCE_DATE_EPOCH" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-tag "$RELEASE_TAG" \
+            --extension-id "$EXTENSION_ID"
+          asset="dist/release/hns-dane-browser-extension-v${VERSION}-mv3.zip"
+          store_asset="dist/release/hns-dane-browser-extension-v${VERSION}-mv3-store.zip"
+          test -s "$asset"
+          test -s "${asset}.sha256"
+          test -s "$store_asset"
+          test -s "${store_asset}.sha256"
+
+      - name: Retain the extension release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-extension
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  native:
+    name: Native host (${{ matrix.platform }}-${{ matrix.architecture }})
+    needs: prepare
+    if: ${{ needs.prepare.outputs.release-state != 'published' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            architecture: x64
+            runner: ubuntu-24.04
+            rust-target: x86_64-unknown-linux-musl
+            musl-cc: x86_64-linux-musl-gcc
+            binary-suffix: ""
+            python: python3
+          - platform: linux
+            architecture: arm64
+            runner: ubuntu-24.04-arm
+            rust-target: aarch64-unknown-linux-musl
+            musl-cc: aarch64-linux-musl-gcc
+            binary-suffix: ""
+            python: python3
+          - platform: windows
+            architecture: x64
+            runner: windows-2025
+            rust-target: x86_64-pc-windows-msvc
+            binary-suffix: ".exe"
+            python: python
+          - platform: windows
+            architecture: arm64
+            runner: windows-11-arm
+            rust-target: aarch64-pc-windows-msvc
+            binary-suffix: ".exe"
+            python: python
+          - platform: macos
+            architecture: x64
+            runner: macos-15-intel
+            rust-target: x86_64-apple-darwin
+            binary-suffix: ""
+            python: python3
+          - platform: macos
+            architecture: arm64
+            runner: macos-15
+            rust-target: aarch64-apple-darwin
+            binary-suffix: ""
+            python: python3
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install the static Linux linker
+        if: ${{ matrix.platform == 'linux' }}
+        shell: bash
+        env:
+          MUSL_CC: ${{ matrix.musl-cc }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes musl-tools
+          if ! command -v "$MUSL_CC" >/dev/null 2>&1; then
+            sudo ln -s "$(command -v musl-gcc)" "/usr/local/bin/$MUSL_CC"
+          fi
+
+      - name: Install the pinned Rust target
+        shell: pwsh
+        env:
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustup toolchain install 1.92.0 --profile minimal --target $env:RUST_TARGET
+
+      - name: Build the native host
+        shell: pwsh
+        env:
+          MUSL_CC: ${{ matrix.musl-cc }}
+          PLATFORM: ${{ matrix.platform }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PLATFORM -eq 'linux') {
+            $targetEnvironment = $env:RUST_TARGET.ToUpperInvariant().Replace('-', '_')
+            Set-Item -Path "Env:CARGO_TARGET_${targetEnvironment}_LINKER" -Value $env:MUSL_CC
+            $ccEnvironment = $env:RUST_TARGET.Replace('-', '_')
+            Set-Item -Path "Env:CC_${ccEnvironment}" -Value $env:MUSL_CC
+          }
+          cargo +1.92.0 build --locked --release `
+            --manifest-path rust/Cargo.toml `
+            -p hns-chromium-native-host `
+            --target $env:RUST_TARGET
+
+      - name: Verify the static Linux native host
+        if: ${{ matrix.platform == 'linux' }}
+        shell: bash
+        env:
+          CANONICAL_EXTENSION_ID: ${{ needs.prepare.outputs.canonical-extension-id }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          set -euo pipefail
+          native_host="rust/target/$RUST_TARGET/release/hns-chromium-native-host"
+          file "$native_host"
+          if readelf --program-headers "$native_host" | grep -q 'INTERP'; then
+            echo "::error::The generic Linux release binary contains a dynamic program interpreter."
+            exit 1
+          fi
+          if readelf --dynamic "$native_host" | grep -q '(NEEDED)'; then
+            echo "::error::The generic Linux release binary is dynamically linked."
+            exit 1
+          fi
+          "$native_host" \
+            --print-host-manifest \
+            --extension-id "$CANONICAL_EXTENSION_ID" >/dev/null
+
+      - name: Package the native host
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          BINARY_SUFFIX: ${{ matrix.binary-suffix }}
+          EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          PLATFORM: ${{ matrix.platform }}
+          PYTHON_COMMAND: ${{ matrix.python }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source-date-epoch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nativeHost = "rust/target/$env:RUST_TARGET/release/hns-chromium-native-host$env:BINARY_SUFFIX"
+          & $env:PYTHON_COMMAND scripts/package-release.py native `
+            --output-dir dist/release `
+            --source-date-epoch $env:SOURCE_DATE_EPOCH `
+            --source-commit $env:SOURCE_COMMIT `
+            --source-tag $env:RELEASE_TAG `
+            --extension-id $env:EXTENSION_ID `
+            --platform $env:PLATFORM `
+            --architecture $env:ARCHITECTURE `
+            --rust-target $env:RUST_TARGET `
+            --native-host $nativeHost
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Native-host packaging failed.'
+          }
+          $extension = if ($env:PLATFORM -eq 'windows') { 'zip' } else { 'tar.gz' }
+          $asset = "dist/release/hns-dane-browser-native-host-v$env:VERSION-$env:PLATFORM-$env:ARCHITECTURE.$extension"
+          if (-not (Test-Path -LiteralPath $asset -PathType Leaf) -or
+              -not (Test-Path -LiteralPath "$asset.sha256" -PathType Leaf)) {
+            throw 'Native-host release artifacts are missing.'
+          }
+
+      - name: Retain the native-host release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-native-${{ matrix.platform }}-${{ matrix.architecture }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Verify assets and publish release
+    needs: [prepare, quality, extension, native]
+    if: ${{ always() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Verify every build before publication
+        env:
+          EXTENSION_RESULT: ${{ needs.extension.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          RELEASE_STATE: ${{ needs.prepare.outputs.release-state }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_STATE" == published ]]; then
+            exit 0
+          fi
+          if [[ "$QUALITY_RESULT" != success ||
+                "$EXTENSION_RESULT" != success ||
+                "$NATIVE_RESULT" != success ]]; then
+            echo "::error::Release was not published because one or more packaging jobs did not succeed."
+            exit 1
+          fi
+
+      - name: Retrieve the read-only build artifacts
+        if: ${{ needs.prepare.outputs.release-state != 'published' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: dist/release
+          merge-multiple: true
+
+      - name: Verify exact assets and publish
+        env:
+          CANONICAL_EXTENSION_ID: ${{ needs.prepare.outputs.canonical-extension-id }}
+          EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_STATE: ${{ needs.prepare.outputs.release-state }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          archives=(
+            "hns-dane-browser-extension-v${VERSION}-mv3.zip"
+            "hns-dane-browser-extension-v${VERSION}-mv3-store.zip"
+            "hns-dane-browser-native-host-v${VERSION}-linux-x64.tar.gz"
+            "hns-dane-browser-native-host-v${VERSION}-linux-arm64.tar.gz"
+            "hns-dane-browser-native-host-v${VERSION}-windows-x64.zip"
+            "hns-dane-browser-native-host-v${VERSION}-windows-arm64.zip"
+            "hns-dane-browser-native-host-v${VERSION}-macos-x64.tar.gz"
+            "hns-dane-browser-native-host-v${VERSION}-macos-arm64.tar.gz"
+          )
+          build_assets=()
+          for archive in "${archives[@]}"; do
+            build_assets+=("$archive" "${archive}.sha256")
+          done
+          release_assets=("${build_assets[@]}" "SHA256SUMS")
+
+          verify_exact_remote_assets() {
+            local release_json
+            local remote_names
+            release_json="$(gh release view "$RELEASE_TAG" --json assets)"
+            remote_names="$(jq -r '.assets[].name' <<<"$release_json" | LC_ALL=C sort)"
+            if ! diff -u \
+              <(printf '%s\n' "${release_assets[@]}" | LC_ALL=C sort) \
+              <(printf '%s\n' "$remote_names"); then
+              echo "::error::Release assets do not exactly match the expected archive, sidecar, and aggregate-checksum set."
+              return 1
+            fi
+            while IFS=$'\t' read -r name size; do
+              if [[ ! "$size" =~ ^[1-9][0-9]*$ ]]; then
+                echo "::error::Release asset is empty: $name"
+                return 1
+              fi
+            done < <(
+              jq -r '.assets[] | [.name, .size] | @tsv' <<<"$release_json"
+            )
+          }
+
+          if [[ "$RELEASE_STATE" == published ]]; then
+            verify_exact_remote_assets
+            exit 0
+          fi
+
+          if find dist/release -mindepth 1 -maxdepth 1 ! -type f | grep -q .; then
+            echo "::error::Downloaded release artifact contains an unexpected non-file entry."
+            exit 1
+          fi
+          local_names="$(
+            find dist/release -mindepth 1 -maxdepth 1 -type f \
+              -printf '%f\n' |
+              LC_ALL=C sort
+          )"
+          if ! diff -u \
+            <(printf '%s\n' "${build_assets[@]}" | LC_ALL=C sort) \
+            <(printf '%s\n' "$local_names"); then
+            echo "::error::Downloaded build artifacts are missing files or contain stale unexpected files."
+            exit 1
+          fi
+
+          (
+            cd dist/release
+            for archive in "${archives[@]}"; do
+              sha256sum --check "${archive}.sha256"
+            done
+            sha256sum "${archives[@]}" >SHA256SUMS
+          )
+
+          notes_file="$(mktemp)"
+          trap 'rm -f -- "$notes_file"' EXIT
+          cat >"$notes_file" <<EOF
+          HNS DANE Browser ${VERSION} provides a keyless first-submission store
+          package, a canonical-ID Manifest V3 package for GitHub/unpacked use, and
+          native-host bundles for Linux, Windows, and macOS on x64 and arm64.
+
+          Canonical release/default extension ID: \`${CANONICAL_EXTENSION_ID}\`.
+          Native registration ID selected for this release: \`${EXTENSION_ID}\`.
+          Store catalogs can assign a different ID; verify the catalog ID in the
+          browser before registering it. The installers accept repeated exact IDs.
+
+          Source commit: https://github.com/${REPOSITORY}/commit/${SOURCE_COMMIT}
+          License: https://github.com/${REPOSITORY}/blob/${RELEASE_TAG}/LICENSE
+          Installation: each native-host archive contains platform-specific
+          install and uninstall instructions, the license, and third-party notices.
+          HNS donation: handshake:hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh?label=Denuo%20Web%20Handshake%20Browser&message=Handshake%20Browser%20donation
+          GitHub Sponsors: https://github.com/sponsors/denuoweb
+
+          Linux bundles are statically linked with musl. Automated Windows bundles
+          are unsigned. Automated macOS bundles are unsigned and not notarized
+          until project signing credentials exist.
+
+          Verify every downloaded artifact against SHA256SUMS before installing.
+          EOF
+
+          if [[ "$RELEASE_STATE" == absent ]]; then
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --verify-tag \
+              --title "HNS DANE Browser $VERSION" \
+              --notes-file "$notes_file"
+          elif [[ "$RELEASE_STATE" == draft ]]; then
+            gh release edit "$RELEASE_TAG" \
+              --title "HNS DANE Browser $VERSION" \
+              --notes-file "$notes_file"
+          else
+            echo "::error::Unsupported release state: $RELEASE_STATE"
+            exit 1
+          fi
+
+          upload_paths=()
+          for asset in "${build_assets[@]}"; do
+            upload_paths+=("dist/release/$asset")
+          done
+          upload_paths+=("dist/release/SHA256SUMS")
+          gh release upload "$RELEASE_TAG" "${upload_paths[@]}" --clobber
+          verify_exact_remote_assets
+          gh release edit "$RELEASE_TAG" --draft=false
+
+          is_draft="$(
+            gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'
+          )"
+          if [[ "$is_draft" != false ]]; then
+            echo "::error::GitHub did not publish the fully verified release."
+            exit 1
+          fi

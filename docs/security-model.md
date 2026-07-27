@@ -47,7 +47,14 @@ and the ideal ten-minute schedule estimate remain diagnostics. Missing or
 expired corroboration is `Unknown`, not current, and fails closed for HNS
 admission. Header-height evidence has its own persisted observation timestamp;
 proof retrieval, DNS-relay traffic, and unrelated transport success cannot
-refresh it or promote a version-packet height.
+refresh it or promote a version-packet height. Native status derives the last
+Unix second through which at least three independent observations remain, and
+the extension requests synchronization two minutes before that point. Failed
+attempts retain a bounded one-minute urgent retry window through two minutes
+after that known deadline; unrelated stale or unknown state remains on the
+ten-minute attempt floor.
+Missing or expired evidence still fails closed; the deadline is scheduling
+metadata, not an extension of its validity.
 
 Direct authoritative UDP/TCP 53 remains first when usable. A positive matching
 TEST-NET canary reply stops futile TCP and remaining direct-server attempts
@@ -95,12 +102,14 @@ every selected ICANN origin. This is `DANE via ICANN DoH`.
 
 Securely present ICANN TLSA remains on the local Rust TLS-termination path so
 Rust can enforce DANE. The two defined WebPKI outcomes take a different path:
-the proxy opens the exact public IP selected by the retained namespace plan
-and carries Chromium's TLS bytes over a raw CONNECT tunnel. Chromium therefore
-performs the end-to-end WebPKI handshake and displays the origin's actual
-certificate chain; the local CA is neither presented nor issued for that
-connection. A selected-WebPKI origin-connect failure is terminal at CONNECT
-and cannot fall back to local TLS.
+the proxy tries a bounded rotating batch of exact public IPs from the retained
+namespace plan under one aggregate timeout and carries Chromium's TLS bytes
+over the selected raw CONNECT tunnel. Canonical authority is rechecked before
+each dial, and the socket-reported peer must match the authenticated endpoint
+set. Chromium therefore performs the end-to-end WebPKI handshake and displays
+the origin's actual certificate chain; the local CA is neither presented nor
+issued for that connection. A selected-WebPKI origin-connect failure is
+terminal at CONNECT and cannot fall back to local TLS.
 
 The raw tunnel owns independent bounded reader and writer halves so an idle
 upload cannot throttle a download, and vice versa. It cannot move bytes before

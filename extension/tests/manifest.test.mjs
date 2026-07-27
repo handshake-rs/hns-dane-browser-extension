@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const manifest = JSON.parse(readFileSync("extension/manifest.json", "utf8"));
 const worker = readFileSync("extension/src/service-worker.js", "utf8");
@@ -9,6 +9,8 @@ const options = readFileSync("extension/src/options.html", "utf8");
 const optionsScript = readFileSync("extension/src/options.js", "utf8");
 const popup = readFileSync("extension/src/popup.html", "utf8");
 const popupScript = readFileSync("extension/src/popup.js", "utf8");
+const setup = readFileSync("extension/src/setup.html", "utf8");
+const setupScript = readFileSync("extension/src/setup.js", "utf8");
 
 test("manifest is MV3 with native messaging, mandatory proxy, and auth permissions", () => {
   assert.equal(manifest.manifest_version, 3);
@@ -24,6 +26,14 @@ test("manifest is MV3 with native messaging, mandatory proxy, and auth permissio
   ]) {
     assert.ok(manifest.permissions.includes(permission), permission);
   }
+  for (const size of ["16", "32", "48", "128"]) {
+    assert.equal(manifest.icons[size], `assets/icons/icon-${size}.png`);
+    assert.equal(
+      manifest.action.default_icon[size],
+      `assets/icons/icon-${size}.png`
+    );
+    assert.ok(existsSync(`extension/assets/icons/icon-${size}.png`), size);
+  }
 });
 
 test("service worker installs only Rust-generated mandatory PAC and fails closed without CA", () => {
@@ -38,7 +48,7 @@ test("service worker installs only Rust-generated mandatory PAC and fails closed
 test("health checks preserve a live generation and reconnect only after failure", () => {
   assert.match(
     worker,
-    /alarm\.name === HEALTH_ALARM\)[\s\S]*?refreshNativeStatus\(\)[\s\S]*?alarm\.name === RECONNECT_ALARM\)[\s\S]*?recover\(\)/
+    /alarm\.name === HEALTH_ALARM\)[\s\S]*?maintainHeaderFreshness\(true\)[\s\S]*?alarm\.name === RECONNECT_ALARM\)[\s\S]*?recover\(\)/
   );
   assert.doesNotMatch(
     worker,
@@ -114,4 +124,36 @@ test("the unpacked Chromium build carries the generated dependency notices", () 
     buildScript,
     /extension\/THIRD_PARTY_NOTICES\.txt[\s\S]*output.*THIRD_PARTY_NOTICES\.txt/
   );
+  assert.match(buildScript, /cpSync\("LICENSE", `\$\{output\}\/LICENSE`\)/);
+  assert.match(
+    buildScript,
+    /docs\/privacy-policy\.md[\s\S]*output.*PRIVACY\.md/
+  );
+  assert.match(buildScript, /sourceRepository/);
+  assert.match(buildScript, /github\.com\/sponsors\/denuoweb/);
+});
+
+test("first install opens a complete native-host setup and project disclosure", () => {
+  assert.match(
+    worker,
+    /details\.reason === "install"[\s\S]*?chrome\.runtime\.getURL\("src\/setup\.html"\)/
+  );
+  assert.match(setup, /native Rust native host|local Rust native host/);
+  assert.match(setup, /per-user local CA/);
+  assert.match(setup, /releases\/latest/);
+  assert.match(setup, /handshake-rs\/hns-dane-browser-extension/);
+  assert.match(setup, /blob\/main\/LICENSE/);
+  assert.match(setup, /blob\/main\/docs\/privacy-policy\.md/);
+  assert.match(setup, /github\.com\/sponsors\/denuoweb/);
+  assert.match(setup, /Donations do not unlock features/);
+  assert.match(setup, /ChromeOS and mobile Chromium do not/);
+  assert.match(setupScript, /\^\[a-p\]\{32\}\$/);
+  assert.match(setupScript, /runtime\?\.getManifest\?\.\(\)/);
+  assert.match(
+    setupScript,
+    /releases\/tag\/v\$\{extensionVersion\}/
+  );
+  assert.match(setup, /Latest release \(fallback only\)/);
+  assert.match(popup, /id="setup"/);
+  assert.match(popupScript, /src\/setup\.html/);
 });
