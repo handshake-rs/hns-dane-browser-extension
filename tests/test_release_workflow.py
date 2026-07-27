@@ -191,6 +191,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--linux-runtime", self.source)
         self.assertIn("-C target-feature=+crt-static", self.source)
         self.assertIn("dumpbin.exe", self.source)
+        self.assertIn(
+            "Get-Command dumpbin.exe -ErrorAction SilentlyContinue",
+            self.source,
+        )
+        self.assertIn("vswhere.exe", self.source)
+        self.assertIn(r"**\Hostarm64\arm64\dumpbin.exe", self.source)
+        self.assertIn(
+            r"VC\Tools\MSVC\**\bin\Host*\*\dumpbin.exe",
+            self.source,
+        )
         self.assertIn("VCRUNTIME|MSVCP|UCRTBASE|api-ms-win-crt", self.source)
         self.assertIn("otool -L", self.source)
         self.assertIn("/System/Library/* | /usr/lib/*", self.source)

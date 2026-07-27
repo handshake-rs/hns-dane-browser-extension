@@ -391,6 +391,7 @@ jobs:
         if: ${{ matrix.platform == 'windows' }}
         shell: pwsh
         env:
+          ARCHITECTURE: ${{ matrix.architecture }}
           BINARY_SUFFIX: ${{ matrix.binary-suffix }}
           NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
           SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
@@ -398,7 +399,38 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $nativeHost = "rust/target/$env:NATIVE_RUST_TARGET/release/hns-chromium-native-host$env:BINARY_SUFFIX"
           $setup = "rust/target/$env:SETUP_RUST_TARGET/release/hns-dane-browser-setup$env:BINARY_SUFFIX"
-          $dumpbin = (Get-Command dumpbin.exe -ErrorAction Stop).Source
+          $dumpbinCommand = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+          $dumpbin = if ($null -ne $dumpbinCommand) {
+            $dumpbinCommand.Source
+          } else {
+            $vswhereCandidates = @(
+              "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe",
+              "$env:ProgramFiles\Microsoft Visual Studio\Installer\vswhere.exe"
+            )
+            $vswhere = $vswhereCandidates |
+              Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+              Select-Object -First 1
+            if (-not $vswhere) {
+              throw 'Unable to locate Visual Studio Installer vswhere.exe.'
+            }
+            $targetPattern = if ($env:ARCHITECTURE -eq 'arm64') {
+              '**\Hostarm64\arm64\dumpbin.exe'
+            } else {
+              '**\Hostx64\x64\dumpbin.exe'
+            }
+            $located = & $vswhere -latest -products '*' -find $targetPattern |
+              Select-Object -First 1
+            if (-not $located) {
+              $located = & $vswhere -latest -products '*' `
+                -find 'VC\Tools\MSVC\**\bin\Host*\*\dumpbin.exe' |
+                  Select-Object -First 1
+            }
+            $located
+          }
+          if (-not $dumpbin -or
+              -not (Test-Path -LiteralPath $dumpbin -PathType Leaf)) {
+            throw 'Unable to locate dumpbin.exe in the installed Visual Studio toolchain.'
+          }
           foreach ($binary in @($nativeHost, $setup)) {
             $dependencies = & $dumpbin /dependents $binary | Out-String
             if ($LASTEXITCODE -ne 0) {
