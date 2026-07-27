@@ -98,26 +98,36 @@ jobs:
           SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            is_draft="$(
-              gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'
-            )"
+          release_pages="$(
+            gh api --paginate \
+              "repos/${REPOSITORY}/releases?per_page=100"
+          )"
+          release_matches="$(
+            jq -cs \
+              --arg tag "$RELEASE_TAG" \
+              '[.[][] | select(.tag_name == $tag)]' \
+              <<<"$release_pages"
+          )"
+          release_count="$(jq -r 'length' <<<"$release_matches")"
+          if [[ "$release_count" == 1 ]]; then
+            release_body="$(jq -r '.[0].body // ""' <<<"$release_matches")"
+            if ! grep -Fq \
+              "https://github.com/${REPOSITORY}/commit/${SOURCE_COMMIT}" \
+              <<<"$release_body"; then
+              echo "::error::Existing release source does not match the current tag commit."
+              exit 1
+            fi
+            is_draft="$(jq -r '.[0].draft' <<<"$release_matches")"
             if [[ "$is_draft" == true ]]; then
               state="draft"
             else
-              release_body="$(
-                gh release view "$RELEASE_TAG" --json body --jq '.body'
-              )"
-              if ! grep -Fq \
-                "https://github.com/${REPOSITORY}/commit/${SOURCE_COMMIT}" \
-                <<<"$release_body"; then
-                echo "::error::Published release source does not match the current tag commit."
-                exit 1
-              fi
               state="published"
             fi
-          else
+          elif [[ "$release_count" == 0 ]]; then
             state="absent"
+          else
+            echo "::error::Multiple releases unexpectedly use tag $RELEASE_TAG."
+            exit 1
           fi
           echo "state=$state" >>"$GITHUB_OUTPUT"
 
@@ -708,15 +718,48 @@ jobs:
           done
           release_assets=("${build_assets[@]}" "SHA256SUMS")
 
+          resolve_release_json() {
+            local release_count
+            local release_id
+            local release_matches
+            local release_pages
+            release_pages="$(
+              gh api --paginate \
+                "repos/${GH_REPO}/releases?per_page=100"
+            )"
+            release_matches="$(
+              jq -cs \
+                --arg tag "$RELEASE_TAG" \
+                '[.[][] | select(.tag_name == $tag)]' \
+                <<<"$release_pages"
+            )"
+            release_count="$(jq -r 'length' <<<"$release_matches")"
+            if [[ "$release_count" != 1 ]]; then
+              echo "::error::Expected exactly one release for tag $RELEASE_TAG; found $release_count." >&2
+              return 1
+            fi
+            release_id="$(jq -r '.[0].id // empty' <<<"$release_matches")"
+            if [[ ! "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::GitHub returned an invalid release ID for tag $RELEASE_TAG." >&2
+              return 1
+            fi
+            jq -c '.[0]' <<<"$release_matches"
+          }
+
           verify_exact_remote_assets() {
+            local asset_pages
+            local assets_json
+            local release_id
             local release_json
             local remote_names
-            release_json="$(
-              gh api \
-                --method GET \
-                "repos/${GH_REPO}/releases/tags/${RELEASE_TAG}"
+            release_json="$(resolve_release_json)"
+            release_id="$(jq -er '.id' <<<"$release_json")"
+            asset_pages="$(
+              gh api --paginate \
+                "repos/${GH_REPO}/releases/${release_id}/assets?per_page=100"
             )"
-            remote_names="$(jq -r '.assets[].name' <<<"$release_json" | LC_ALL=C sort)"
+            assets_json="$(jq -cs 'add' <<<"$asset_pages")"
+            remote_names="$(jq -r '.[].name' <<<"$assets_json" | LC_ALL=C sort)"
             if ! diff -u \
               <(printf '%s\n' "${release_assets[@]}" | LC_ALL=C sort) \
               <(printf '%s\n' "$remote_names"); then
@@ -746,8 +789,8 @@ jobs:
                 return 1
               fi
             done < <(
-              jq -r '.assets[] | [.name, .size, (.digest // "")] | @tsv' \
-                <<<"$release_json"
+              jq -r '.[] | [.name, .size, (.digest // "")] | @tsv' \
+                <<<"$assets_json"
             )
           }
 
@@ -831,9 +874,13 @@ jobs:
               --title "HNS DANE Browser $VERSION" \
               --notes-file "$notes_file"
           elif [[ "$RELEASE_STATE" == draft ]]; then
-            gh release edit "$RELEASE_TAG" \
-              --title "HNS DANE Browser $VERSION" \
-              --notes-file "$notes_file"
+            release_json="$(resolve_release_json)"
+            release_id="$(jq -er '.id' <<<"$release_json")"
+            gh api \
+              --method PATCH \
+              "repos/${GH_REPO}/releases/${release_id}" \
+              -f name="HNS DANE Browser $VERSION" \
+              -F "body=@$notes_file" >/dev/null
           else
             echo "::error::Unsupported release state: $RELEASE_STATE"
             exit 1
@@ -846,10 +893,15 @@ jobs:
           upload_paths+=("dist/release/SHA256SUMS")
           gh release upload "$RELEASE_TAG" "${upload_paths[@]}" --clobber
           verify_exact_remote_assets
-          gh release edit "$RELEASE_TAG" --draft=false
+          release_json="$(resolve_release_json)"
+          release_id="$(jq -er '.id' <<<"$release_json")"
+          gh api \
+            --method PATCH \
+            "repos/${GH_REPO}/releases/${release_id}" \
+            -F draft=false >/dev/null
 
           is_draft="$(
-            gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'
+            resolve_release_json | jq -r '.draft'
           )"
           if [[ "$is_draft" != false ]]; then
             echo "::error::GitHub did not publish the fully verified release."

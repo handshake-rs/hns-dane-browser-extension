@@ -93,7 +93,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "needs: [prepare, quality, extension, native]",
             self.source,
         )
-        self.assertIn('gh release edit "$RELEASE_TAG" --draft=false', self.source)
+        self.assertIn("resolve_release_json", self.source)
+        self.assertIn(
+            '"repos/${GH_REPO}/releases/${release_id}"',
+            self.source,
+        )
+        self.assertIn("-F draft=false", self.source)
         self.assertIn("QUALITY_RESULT: ${{ needs.quality.result }}", self.source)
         self.assertIn("EXTENSION_RESULT: ${{ needs.extension.result }}", self.source)
         self.assertIn("NATIVE_RESULT: ${{ needs.native.result }}", self.source)
@@ -141,11 +146,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         self.assertIn(
+            '"repos/${GH_REPO}/releases/${release_id}/assets?per_page=100"',
+            self.source,
+        )
+        self.assertNotIn(
             '"repos/${GH_REPO}/releases/tags/${RELEASE_TAG}"',
             self.source,
         )
         self.assertIn(
-            ".assets[] | [.name, .size, (.digest // \"\")] | @tsv",
+            ".[] | [.name, .size, (.digest // \"\")] | @tsv",
             self.source,
         )
         self.assertIn('local_size="$(stat --format=%s "$local_path")"', self.source)
@@ -154,11 +163,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.source,
         )
         final_verify = self.source.rfind("verify_exact_remote_assets")
-        publish = self.source.rfind(
-            'gh release edit "$RELEASE_TAG" --draft=false'
-        )
+        publish = self.source.rfind("-F draft=false")
         self.assertGreater(final_verify, 0)
         self.assertGreater(publish, final_verify)
+
+    def test_draft_releases_are_resolved_from_authenticated_release_lists(
+        self,
+    ) -> None:
+        self.assertGreaterEqual(
+            self.source.count("releases?per_page=100"),
+            2,
+        )
+        self.assertIn(
+            "'[.[][] | select(.tag_name == $tag)]'",
+            self.source,
+        )
+        self.assertIn(
+            "Existing release source does not match the current tag commit.",
+            self.source,
+        )
 
     def test_linux_release_is_static_musl_with_runtime_smoke_check(self) -> None:
         self.assertIn(
