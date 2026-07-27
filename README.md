@@ -1,7 +1,8 @@
 # HNS DANE Browser Extension
 
-This repository contains the Chromium Manifest V3 extension and its Rust native
-messaging host. Android and iOS are maintained separately in
+This repository contains the Chromium Manifest V3 extension, its Rust native
+messaging host, and the cross-platform HNS DANE Browser Setup application.
+Android and iOS are maintained separately in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
 The extension installs a syntax-only PAC that sends every ordinary DNS
@@ -86,6 +87,8 @@ experimental policy inputs; unsupported selections fail closed.
   user-level native-host installers.
 - `rust/`: Chromium native host, platform adapter, loopback proxy, Handshake
   resolution stack, transport, and pinned canonical engine contracts.
+- `rust/crates/hns-browser-setup/`: desktop GUI/CLI that installs, repairs,
+  verifies, and completely removes the per-user native-host installation.
 - `fixtures/`: bounded parser and experimental relay fixtures.
 - `rust/fuzz/`: parser fuzz targets.
 - `tests/experimental-dns-relay/`: isolated and four-node regtest relay
@@ -104,19 +107,27 @@ cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
 cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
 cargo +1.92.0 build --locked --release \
   --manifest-path rust/Cargo.toml -p hns-chromium-native-host
+HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
+  cargo +1.92.0 build --locked --release \
+    --manifest-path rust/Cargo.toml -p hns-browser-setup \
+    --features embedded-host
 python3 scripts/verify_cargo_git_policy.py
 python3 scripts/generate-third-party-notices.py --check
 npm run check:extension
 ```
 
-See [Chromium Extension and Native Host](docs/chromium-extension.md) for build,
-installation, trust, recovery, and removal instructions.
+See [HNS DANE Browser Setup](docs/setup-application.md) for the primary desktop
+installation flow and [Chromium Extension and Native Host](docs/chromium-extension.md)
+for build, trust, recovery, and manual-installation details.
 
 Store submission copy, reviewer disclosures, permission justifications, and
 shared Chrome/Edge/Opera artwork are maintained in [`store/`](store/README.md).
-Tagged GitHub Releases provide the browser-neutral extension ZIP and matching
-native-host bundles; Chrome Web Store distribution also serves Brave and
-Vivaldi, while Edge and Opera can use their own catalog listings.
+Tagged GitHub Releases provide the browser-neutral extension ZIP, six
+platform-matched setup applications with bundled non-system dependencies, and
+matching manual native-host bundles. The v0.5.3 Linux Setup baseline is glibc
+2.39 or newer (for example Ubuntu 24.04 or Debian 13).
+Chrome Web Store distribution also serves Brave and Vivaldi, while Edge and
+Opera can use their own catalog listings.
 See the [Chromium release process](docs/release.md) for the immutable-tag,
 multi-platform build, checksum, signing-status, and catalog-ID boundaries.
 

@@ -22,8 +22,11 @@ if [[ "$installed_cargo_deny_version" != "$EXPECTED_CARGO_DENY_VERSION" ]]; then
   exit 2
 fi
 "${CARGO[@]}" deny --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" check --config "$ROOT_DIR/rust/deny.toml"
-"${CARGO[@]}" test --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" --workspace
+"${CARGO[@]}" test --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" --workspace -- --test-threads=2
 "${CARGO[@]}" build --locked --release --manifest-path "$ROOT_DIR/rust/Cargo.toml" -p hns-chromium-native-host
+HNS_NATIVE_HOST_PATH="$ROOT_DIR/rust/target/release/hns-chromium-native-host" \
+  "${CARGO[@]}" build --locked --release --manifest-path "$ROOT_DIR/rust/Cargo.toml" \
+    -p hns-browser-setup --features embedded-host
 "$ROOT_DIR/scripts/fuzz-smoke.sh"
 "${CARGO[@]}" deny --locked --manifest-path "$ROOT_DIR/rust/fuzz/Cargo.toml" check --config "$ROOT_DIR/rust/deny.toml"
 

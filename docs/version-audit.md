@@ -1,16 +1,19 @@
 # Version Audit
 
-Audit date: 2026-07-26
+Audit date: 2026-07-27
 
-This table records configured versions for the Chromium extension/native-host
-build. It does not claim that each entry is the newest upstream release.
+This table records configured versions for the Chromium extension, native
+host, and Setup build. It does not claim that each entry is the newest
+upstream release.
 
 | Component | Configured version/source |
 | --- | --- |
-| Extension package | `0.5.2` |
-| Rust workspace | `0.5.2` |
+| Extension package | `0.5.3` |
+| Rust workspace | `0.5.3` |
+| HNS DANE Browser Setup | `0.5.3` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
+| eframe | `0.35.0` |
 | Canonical browser contracts | `handshake-rs/hns-dane-engine` at `7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5` |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |

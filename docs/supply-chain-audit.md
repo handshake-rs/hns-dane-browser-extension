@@ -1,12 +1,12 @@
 # Build and Supply-Chain Audit
 
-Last audited: 2026-07-26
+Last audited: 2026-07-27
 
 ## Scope
 
-This audit covers the Chromium extension, Rust native host, active Cargo
-workspace, user-level installers, and generated desktop notices. Mobile build
-and release evidence is maintained in
+This audit covers the Chromium extension, Rust native host, Rust desktop Setup
+application, active Cargo workspace, user-level installers, and generated
+desktop notices. Mobile build and release evidence is maintained in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
 ## Locked inputs and policy
@@ -32,13 +32,18 @@ and release evidence is maintained in
 
 ## Notices
 
-The notice generator inventories the locked non-development dependency closure
-of `hns-chromium-native-host` for Linux, macOS, and Windows. It records license
-text for registry and canonical engine dependencies, fingerprints active
-manifests and the lock, and checks the committed notice digest.
+The notice generator inventories the locked non-development dependency
+closures of `hns-chromium-native-host` and `hns-browser-setup` for Linux,
+macOS, and Windows. It records license text for registry and canonical engine
+dependencies, includes fingerprinted reviewed standard-license texts when a
+published crate omits its workspace-level copy, fingerprints active manifests
+and the lock, and checks the committed notice digest. The license policy also
+explicitly permits the Setup GUI's Boost, CC0, Open Font, and Ubuntu Font
+licenses.
 
 `extension/THIRD_PARTY_NOTICES.txt` is copied into the unpacked extension and
-installed beside the native host. A notice mismatch is a release failure.
+installed beside the native host and Setup application. A notice mismatch is
+a release failure.
 
 ## Required portable gates
 
@@ -55,6 +60,10 @@ cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
 cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
 cargo +1.92.0 build --locked --release \
   --manifest-path rust/Cargo.toml -p hns-chromium-native-host
+HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
+  cargo +1.92.0 build --locked --release \
+    --manifest-path rust/Cargo.toml -p hns-browser-setup \
+    --features embedded-host
 npm run check:extension
 ```
 
@@ -64,13 +73,15 @@ CI run; historical runs do not qualify later source.
 
 ## Residual risks
 
-- The audit pins source and package inputs but does not yet establish
-  bit-for-bit reproducible native-host or extension artifacts.
+- Release archives and their inventory are deterministic for identical staged
+  inputs. Cross-run bit-for-bit reproducibility of compiled native-host and
+  Setup binaries is not yet established.
 - Hosted runner images, host C toolchains, operating-system certificate tools,
   archive metadata, and signing can vary.
 - cargo-deny depends on the RustSec advisory database available at check time.
-- Installer unit tests do not replace real user-level registration, trust,
-  restart, upgrade, and removal tests on Windows and macOS.
+- Installer unit tests and package-structure gates do not replace real
+  user-level registration, trust, restart, upgrade, and removal tests on every
+  Windows and macOS target.
 - Store signing and review require external credentials and policy decisions;
   source CI must not fabricate their completion.
 - An immutable Git revision is stronger than a branch selector but still

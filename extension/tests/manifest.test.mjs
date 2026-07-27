@@ -133,12 +133,18 @@ test("the unpacked Chromium build carries the generated dependency notices", () 
   assert.match(buildScript, /github\.com\/sponsors\/denuoweb/);
 });
 
-test("first install opens a complete native-host setup and project disclosure", () => {
+test("first install opens a complete bundled Setup flow and project disclosure", () => {
   assert.match(
     worker,
     /details\.reason === "install"[\s\S]*?chrome\.runtime\.getURL\("src\/setup\.html"\)/
   );
-  assert.match(setup, /native Rust native host|local Rust native host/);
+  assert.match(setup, /matching local Rust native host/);
+  assert.match(setup, /HNS DANE Browser Setup/);
+  assert.match(setup, /contains the matching Rust native host/);
+  assert.match(setup, /non-system runtime dependencies/);
+  assert.match(setup, /Copy extension ID/);
+  assert.match(setup, /select every Chromium flavor/);
+  assert.match(setup, /Complete Uninstall/);
   assert.match(setup, /per-user local CA/);
   assert.match(setup, /releases\/latest/);
   assert.match(setup, /handshake-rs\/hns-dane-browser-extension/);
@@ -149,10 +155,12 @@ test("first install opens a complete native-host setup and project disclosure", 
   assert.match(setup, /ChromeOS and mobile Chromium do not/);
   assert.match(setupScript, /\^\[a-p\]\{32\}\$/);
   assert.match(setupScript, /runtime\?\.getManifest\?\.\(\)/);
+  assert.match(setupScript, /navigator\.clipboard\.writeText\(extensionId\)/);
   assert.match(
     setupScript,
     /releases\/tag\/v\$\{extensionVersion\}/
   );
+  assert.match(setup, /Manual native-host packages/);
   assert.match(setup, /Latest release \(fallback only\)/);
   assert.match(popup, /id="setup"/);
   assert.match(popupScript, /src\/setup\.html/);

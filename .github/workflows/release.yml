@@ -212,7 +212,7 @@ jobs:
           compression-level: 0
 
   native:
-    name: Native host (${{ matrix.platform }}-${{ matrix.architecture }})
+    name: Native host and setup (${{ matrix.platform }}-${{ matrix.architecture }})
     needs: prepare
     if: ${{ needs.prepare.outputs.release-state != 'published' }}
     strategy:
@@ -222,43 +222,49 @@ jobs:
           - platform: linux
             architecture: x64
             runner: ubuntu-24.04
-            rust-target: x86_64-unknown-linux-musl
+            native-rust-target: x86_64-unknown-linux-musl
+            setup-rust-target: x86_64-unknown-linux-gnu
             musl-cc: x86_64-linux-musl-gcc
             binary-suffix: ""
             python: python3
           - platform: linux
             architecture: arm64
             runner: ubuntu-24.04-arm
-            rust-target: aarch64-unknown-linux-musl
+            native-rust-target: aarch64-unknown-linux-musl
+            setup-rust-target: aarch64-unknown-linux-gnu
             musl-cc: aarch64-linux-musl-gcc
             binary-suffix: ""
             python: python3
           - platform: windows
             architecture: x64
             runner: windows-2025
-            rust-target: x86_64-pc-windows-msvc
+            native-rust-target: x86_64-pc-windows-msvc
+            setup-rust-target: x86_64-pc-windows-msvc
             binary-suffix: ".exe"
             python: python
           - platform: windows
             architecture: arm64
             runner: windows-11-arm
-            rust-target: aarch64-pc-windows-msvc
+            native-rust-target: aarch64-pc-windows-msvc
+            setup-rust-target: aarch64-pc-windows-msvc
             binary-suffix: ".exe"
             python: python
           - platform: macos
             architecture: x64
             runner: macos-15-intel
-            rust-target: x86_64-apple-darwin
+            native-rust-target: x86_64-apple-darwin
+            setup-rust-target: x86_64-apple-darwin
             binary-suffix: ""
             python: python3
           - platform: macos
             architecture: arm64
             runner: macos-15
-            rust-target: aarch64-apple-darwin
+            native-rust-target: aarch64-apple-darwin
+            setup-rust-target: aarch64-apple-darwin
             binary-suffix: ""
             python: python3
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -267,7 +273,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install the static Linux linker
+      - name: Install Linux build and bundled runtime dependencies
         if: ${{ matrix.platform == 'linux' }}
         shell: bash
         env:
@@ -275,76 +281,194 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes musl-tools
+          sudo apt-get install --no-install-recommends --yes \
+            libdecor-0-0 \
+            libegl1 \
+            libgl1 \
+            libglvnd0 \
+            libglx0 \
+            libnss3-tools \
+            libwayland-client0 \
+            libwayland-cursor0 \
+            libwayland-egl1 \
+            libx11-6 \
+            libx11-xcb1 \
+            libxcb1 \
+            libxcursor1 \
+            libxext6 \
+            libxfixes3 \
+            libxi6 \
+            libxkbcommon-x11-0 \
+            libxkbcommon0 \
+            libxrandr2 \
+            musl-tools \
+            openssl
           if ! command -v "$MUSL_CC" >/dev/null 2>&1; then
             sudo ln -s "$(command -v musl-gcc)" "/usr/local/bin/$MUSL_CC"
           fi
 
-      - name: Install the pinned Rust target
+      - name: Install the pinned Rust targets
         shell: pwsh
         env:
-          RUST_TARGET: ${{ matrix.rust-target }}
+          NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
+          SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
         run: |
           $ErrorActionPreference = 'Stop'
-          rustup toolchain install 1.92.0 --profile minimal --target $env:RUST_TARGET
+          rustup toolchain install 1.92.0 --profile minimal
+          $targets = @(
+            $env:NATIVE_RUST_TARGET,
+            $env:SETUP_RUST_TARGET
+          ) | Select-Object -Unique
+          foreach ($target in $targets) {
+            rustup target add --toolchain 1.92.0 $target
+          }
 
-      - name: Build the native host
+      - name: Build the native host and embedded-host setup
         shell: pwsh
         env:
+          BINARY_SUFFIX: ${{ matrix.binary-suffix }}
           MUSL_CC: ${{ matrix.musl-cc }}
+          NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
           PLATFORM: ${{ matrix.platform }}
-          RUST_TARGET: ${{ matrix.rust-target }}
+          SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:PLATFORM -eq 'linux') {
-            $targetEnvironment = $env:RUST_TARGET.ToUpperInvariant().Replace('-', '_')
+            $targetEnvironment = $env:NATIVE_RUST_TARGET.ToUpperInvariant().Replace('-', '_')
             Set-Item -Path "Env:CARGO_TARGET_${targetEnvironment}_LINKER" -Value $env:MUSL_CC
-            $ccEnvironment = $env:RUST_TARGET.Replace('-', '_')
+            $ccEnvironment = $env:NATIVE_RUST_TARGET.Replace('-', '_')
             Set-Item -Path "Env:CC_${ccEnvironment}" -Value $env:MUSL_CC
+          }
+          if ($env:PLATFORM -eq 'windows') {
+            $env:RUSTFLAGS = (
+              "$env:RUSTFLAGS -C target-feature=+crt-static"
+            ).Trim()
           }
           cargo +1.92.0 build --locked --release `
             --manifest-path rust/Cargo.toml `
             -p hns-chromium-native-host `
-            --target $env:RUST_TARGET
+            --target $env:NATIVE_RUST_TARGET
+          $nativeHost = "rust/target/$env:NATIVE_RUST_TARGET/release/hns-chromium-native-host$env:BINARY_SUFFIX"
+          $env:HNS_NATIVE_HOST_PATH = (
+            Resolve-Path -LiteralPath $nativeHost
+          ).Path
+          cargo +1.92.0 build --locked --release `
+            --manifest-path rust/Cargo.toml `
+            -p hns-browser-setup `
+            --bin hns-dane-browser-setup `
+            --features embedded-host `
+            --target $env:SETUP_RUST_TARGET
 
-      - name: Verify the static Linux native host
+      - name: Verify the static Linux native host and GNU setup
         if: ${{ matrix.platform == 'linux' }}
         shell: bash
         env:
           CANONICAL_EXTENSION_ID: ${{ needs.prepare.outputs.canonical-extension-id }}
-          RUST_TARGET: ${{ matrix.rust-target }}
+          NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
+          SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
         run: |
           set -euo pipefail
-          native_host="rust/target/$RUST_TARGET/release/hns-chromium-native-host"
-          file "$native_host"
+          native_host="rust/target/$NATIVE_RUST_TARGET/release/hns-chromium-native-host"
+          setup="rust/target/$SETUP_RUST_TARGET/release/hns-dane-browser-setup"
+          file "$native_host" "$setup"
           if readelf --program-headers "$native_host" | grep -q 'INTERP'; then
-            echo "::error::The generic Linux release binary contains a dynamic program interpreter."
+            echo "::error::The Linux native host contains a dynamic program interpreter."
             exit 1
           fi
           if readelf --dynamic "$native_host" | grep -q '(NEEDED)'; then
-            echo "::error::The generic Linux release binary is dynamically linked."
+            echo "::error::The Linux native host is dynamically linked."
+            exit 1
+          fi
+          if ldd "$setup" | grep -q 'not found'; then
+            echo "::error::The Linux setup has an unresolved build-runner dependency."
             exit 1
           fi
           "$native_host" \
             --print-host-manifest \
             --extension-id "$CANONICAL_EXTENSION_ID" >/dev/null
 
-      - name: Package the native host
+      - name: Verify Windows static CRT and setup status
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        env:
+          BINARY_SUFFIX: ${{ matrix.binary-suffix }}
+          NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
+          SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nativeHost = "rust/target/$env:NATIVE_RUST_TARGET/release/hns-chromium-native-host$env:BINARY_SUFFIX"
+          $setup = "rust/target/$env:SETUP_RUST_TARGET/release/hns-dane-browser-setup$env:BINARY_SUFFIX"
+          $dumpbin = (Get-Command dumpbin.exe -ErrorAction Stop).Source
+          foreach ($binary in @($nativeHost, $setup)) {
+            $dependencies = & $dumpbin /dependents $binary | Out-String
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to inspect Windows dependencies for $binary."
+            }
+            if ($dependencies -match '(?i)(VCRUNTIME|MSVCP|UCRTBASE|api-ms-win-crt)') {
+              throw "$binary depends on a dynamic Microsoft CRT."
+            }
+          }
+          & $setup --status | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The Windows setup status smoke check failed.'
+          }
+
+      - name: Verify macOS system-only dependencies and setup status
+        if: ${{ matrix.platform == 'macos' }}
+        shell: bash
+        env:
+          NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
+          SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
+        run: |
+          set -euo pipefail
+          native_host="rust/target/$NATIVE_RUST_TARGET/release/hns-chromium-native-host"
+          setup="rust/target/$SETUP_RUST_TARGET/release/hns-dane-browser-setup"
+          for binary in "$native_host" "$setup"; do
+            while IFS= read -r dependency; do
+              case "$dependency" in
+                /System/Library/* | /usr/lib/*) ;;
+                *)
+                  echo "::error::$binary has a non-system dependency: $dependency"
+                  exit 1
+                  ;;
+              esac
+            done < <(otool -L "$binary" | tail -n +2 | awk '{print $1}')
+          done
+          "$setup" --status >/dev/null
+
+      - name: Stage the bundled Linux setup runtime
+        if: ${{ matrix.platform == 'linux' }}
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
+        run: |
+          set -euo pipefail
+          setup="rust/target/$SETUP_RUST_TARGET/release/hns-dane-browser-setup"
+          python3 scripts/package-release.py linux-runtime \
+            --output-dir dist/linux-setup-runtime \
+            --architecture "$ARCHITECTURE" \
+            --certutil "$(command -v certutil)" \
+            --setup-executable "$setup"
+
+      - name: Package the native host and setup application
         shell: pwsh
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
           BINARY_SUFFIX: ${{ matrix.binary-suffix }}
           EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
           PLATFORM: ${{ matrix.platform }}
           PYTHON_COMMAND: ${{ matrix.python }}
           RELEASE_TAG: ${{ github.ref_name }}
-          RUST_TARGET: ${{ matrix.rust-target }}
+          SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
           SOURCE_COMMIT: ${{ github.sha }}
           SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source-date-epoch }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $nativeHost = "rust/target/$env:RUST_TARGET/release/hns-chromium-native-host$env:BINARY_SUFFIX"
+          $nativeHost = "rust/target/$env:NATIVE_RUST_TARGET/release/hns-chromium-native-host$env:BINARY_SUFFIX"
+          $setup = "rust/target/$env:SETUP_RUST_TARGET/release/hns-dane-browser-setup$env:BINARY_SUFFIX"
           & $env:PYTHON_COMMAND scripts/package-release.py native `
             --output-dir dist/release `
             --source-date-epoch $env:SOURCE_DATE_EPOCH `
@@ -353,22 +477,129 @@ jobs:
             --extension-id $env:EXTENSION_ID `
             --platform $env:PLATFORM `
             --architecture $env:ARCHITECTURE `
-            --rust-target $env:RUST_TARGET `
+            --rust-target $env:NATIVE_RUST_TARGET `
             --native-host $nativeHost
           if ($LASTEXITCODE -ne 0) {
             throw 'Native-host packaging failed.'
           }
+          $setupArguments = @(
+            'scripts/package-release.py',
+            'setup',
+            '--output-dir', 'dist/release',
+            '--source-date-epoch', $env:SOURCE_DATE_EPOCH,
+            '--source-commit', $env:SOURCE_COMMIT,
+            '--source-tag', $env:RELEASE_TAG,
+            '--extension-id', $env:EXTENSION_ID,
+            '--platform', $env:PLATFORM,
+            '--architecture', $env:ARCHITECTURE,
+            '--native-rust-target', $env:NATIVE_RUST_TARGET,
+            '--setup-rust-target', $env:SETUP_RUST_TARGET,
+            '--setup-executable', $setup,
+            '--embedded-native-host', $nativeHost
+          )
+          if ($env:PLATFORM -eq 'linux') {
+            $setupArguments += @(
+              '--linux-runtime', 'dist/linux-setup-runtime'
+            )
+          }
+          & $env:PYTHON_COMMAND @setupArguments
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Setup-application packaging failed.'
+          }
           $extension = if ($env:PLATFORM -eq 'windows') { 'zip' } else { 'tar.gz' }
-          $asset = "dist/release/hns-dane-browser-native-host-v$env:VERSION-$env:PLATFORM-$env:ARCHITECTURE.$extension"
-          if (-not (Test-Path -LiteralPath $asset -PathType Leaf) -or
-              -not (Test-Path -LiteralPath "$asset.sha256" -PathType Leaf)) {
-            throw 'Native-host release artifacts are missing.'
+          $assets = @(
+            "dist/release/hns-dane-browser-native-host-v$env:VERSION-$env:PLATFORM-$env:ARCHITECTURE.$extension",
+            "dist/release/hns-dane-browser-setup-v$env:VERSION-$env:PLATFORM-$env:ARCHITECTURE.$extension"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf) -or
+                -not (Test-Path -LiteralPath "$asset.sha256" -PathType Leaf)) {
+              throw "Release artifacts are missing for $asset."
+            }
           }
 
-      - name: Retain the native-host release artifacts
+      - name: Smoke test the bundled Linux setup layout
+        if: ${{ matrix.platform == 'linux' }}
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          archive="dist/release/hns-dane-browser-setup-v${VERSION}-linux-${ARCHITECTURE}.tar.gz"
+          temporary="$(mktemp -d)"
+          cleanup() {
+            find "$temporary" -mindepth 1 -delete
+            rmdir "$temporary"
+          }
+          trap cleanup EXIT
+          tar -xzf "$archive" -C "$temporary"
+          root="$temporary/hns-dane-browser-setup-v${VERSION}-linux-${ARCHITECTURE}"
+          app="$root/HNS-DANE-Browser-Setup.AppDir"
+          glibc_ceiling="2.39"
+          elf_count=0
+          while IFS= read -r -d '' candidate; do
+            if ! file "$candidate" | grep -q 'ELF'; then
+              continue
+            fi
+            elf_count=$((elf_count + 1))
+            required_glibc="$(
+              readelf --version-info "$candidate" 2>/dev/null |
+                grep -oE 'GLIBC_[0-9]+\.[0-9]+' |
+                sed 's/^GLIBC_//' |
+                sort -Vu |
+                tail -n 1 || true
+            )"
+            if [[ -n "$required_glibc" ]] &&
+              [[ "$(printf '%s\n%s\n' "$required_glibc" "$glibc_ceiling" | sort -V | tail -n 1)" != "$glibc_ceiling" ]]; then
+              echo "::error::$candidate requires glibc $required_glibc, above the documented $glibc_ceiling ceiling."
+              exit 1
+            fi
+          done < <(find "$app" -type f -print0)
+          if ((elf_count == 0)); then
+            echo "::error::The Linux Setup package contained no ELF objects."
+            exit 1
+          fi
+          mkdir "$temporary/home"
+          mkdir "$temporary/nssdb"
+          openssl req \
+            -x509 \
+            -newkey rsa:2048 \
+            -nodes \
+            -subj "/CN=HNS DANE Browser release smoke test" \
+            -days 1 \
+            -keyout "$temporary/smoke.key" \
+            -out "$temporary/smoke.pem" >/dev/null 2>&1
+          clean_helper=(
+            env
+            -i
+            "HOME=$temporary/home"
+            "PATH=/usr/bin:/bin"
+            "$app/usr/libexec/certutil"
+          )
+          "${clean_helper[@]}" \
+            -N \
+            -d "sql:$temporary/nssdb" \
+            --empty-password
+          "${clean_helper[@]}" \
+            -A \
+            -d "sql:$temporary/nssdb" \
+            -n "release-smoke" \
+            -t "C,," \
+            -i "$temporary/smoke.pem"
+          "${clean_helper[@]}" \
+            -L \
+            -d "sql:$temporary/nssdb" >/dev/null
+          "${clean_helper[@]}" \
+            -D \
+            -d "sql:$temporary/nssdb" \
+            -n "release-smoke"
+          "$app/AppRun" --status >/dev/null
+
+      - name: Retain the platform release artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-native-${{ matrix.platform }}-${{ matrix.architecture }}
+          name: release-platform-${{ matrix.platform }}-${{ matrix.architecture }}
           path: dist/release/
           if-no-files-found: error
           retention-days: 7
@@ -432,6 +663,12 @@ jobs:
             "hns-dane-browser-native-host-v${VERSION}-windows-arm64.zip"
             "hns-dane-browser-native-host-v${VERSION}-macos-x64.tar.gz"
             "hns-dane-browser-native-host-v${VERSION}-macos-arm64.tar.gz"
+            "hns-dane-browser-setup-v${VERSION}-linux-x64.tar.gz"
+            "hns-dane-browser-setup-v${VERSION}-linux-arm64.tar.gz"
+            "hns-dane-browser-setup-v${VERSION}-windows-x64.zip"
+            "hns-dane-browser-setup-v${VERSION}-windows-arm64.zip"
+            "hns-dane-browser-setup-v${VERSION}-macos-x64.tar.gz"
+            "hns-dane-browser-setup-v${VERSION}-macos-arm64.tar.gz"
           )
           build_assets=()
           for archive in "${archives[@]}"; do
@@ -442,7 +679,11 @@ jobs:
           verify_exact_remote_assets() {
             local release_json
             local remote_names
-            release_json="$(gh release view "$RELEASE_TAG" --json assets)"
+            release_json="$(
+              gh api \
+                --method GET \
+                "repos/${GH_REPO}/releases/tags/${RELEASE_TAG}"
+            )"
             remote_names="$(jq -r '.assets[].name' <<<"$release_json" | LC_ALL=C sort)"
             if ! diff -u \
               <(printf '%s\n' "${release_assets[@]}" | LC_ALL=C sort) \
@@ -450,18 +691,45 @@ jobs:
               echo "::error::Release assets do not exactly match the expected archive, sidecar, and aggregate-checksum set."
               return 1
             fi
-            while IFS=$'\t' read -r name size; do
+            while IFS=$'\t' read -r name size digest; do
               if [[ ! "$size" =~ ^[1-9][0-9]*$ ]]; then
                 echo "::error::Release asset is empty: $name"
                 return 1
               fi
+              local local_path="dist/release/$name"
+              if [[ ! -f "$local_path" ]]; then
+                echo "::error::Local release asset is missing: $name"
+                return 1
+              fi
+              local local_size
+              local_size="$(stat --format=%s "$local_path")"
+              if [[ "$size" != "$local_size" ]]; then
+                echo "::error::Remote release asset size differs from the verified local file: $name"
+                return 1
+              fi
+              local local_digest
+              local_digest="sha256:$(sha256sum "$local_path" | cut -d ' ' -f 1)"
+              if [[ "$digest" != "$local_digest" ]]; then
+                echo "::error::Remote release asset digest differs from the verified local file: $name"
+                return 1
+              fi
             done < <(
-              jq -r '.assets[] | [.name, .size] | @tsv' <<<"$release_json"
+              jq -r '.assets[] | [.name, .size, (.digest // "")] | @tsv' \
+                <<<"$release_json"
             )
           }
 
           if [[ "$RELEASE_STATE" == published ]]; then
+            mkdir -p dist/release
+            gh release download "$RELEASE_TAG" --dir dist/release
             verify_exact_remote_assets
+            (
+              cd dist/release
+              for archive in "${archives[@]}"; do
+                sha256sum --check "${archive}.sha256"
+              done
+              sha256sum --check SHA256SUMS
+            )
             exit 0
           fi
 
@@ -494,7 +762,8 @@ jobs:
           cat >"$notes_file" <<EOF
           HNS DANE Browser ${VERSION} provides a keyless first-submission store
           package, a canonical-ID Manifest V3 package for GitHub/unpacked use, and
-          native-host bundles for Linux, Windows, and macOS on x64 and arm64.
+          both native-host and bundled-runtime graphical setup packages for Linux,
+          Windows, and macOS on x64 and arm64.
 
           Canonical release/default extension ID: \`${CANONICAL_EXTENSION_ID}\`.
           Native registration ID selected for this release: \`${EXTENSION_ID}\`.
@@ -504,13 +773,21 @@ jobs:
           Source commit: https://github.com/${REPOSITORY}/commit/${SOURCE_COMMIT}
           License: https://github.com/${REPOSITORY}/blob/${RELEASE_TAG}/LICENSE
           Installation: each native-host archive contains platform-specific
-          install and uninstall instructions, the license, and third-party notices.
+          manual install/uninstall scripts. Each setup archive contains a graphical
+          per-user setup application with the version-matched native host embedded.
+          Linux setup AppDirs bundle certutil, NSS/NSPR, runtime/GUI libraries, and
+          dependency licenses, so users do not need a system certutil package.
+          The v${VERSION} Linux Setup retains the base-system ABI and requires glibc
+          2.39 or newer (Ubuntu 24.04 / Debian 13 generation).
           HNS donation: handshake:hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh?label=Denuo%20Web%20Handshake%20Browser&message=Handshake%20Browser%20donation
           GitHub Sponsors: https://github.com/sponsors/denuoweb
 
-          Linux bundles are statically linked with musl. Automated Windows bundles
-          are unsigned. Automated macOS bundles are unsigned and not notarized
-          until project signing credentials exist.
+          Linux native hosts are statically linked with musl; Linux setup uses the
+          native GNU target with its non-base GUI libraries bundled separately.
+          Windows native hosts and setup executables statically link the Microsoft
+          CRT where supported. Automated Windows bundles are unsigned. Automated
+          macOS binaries are unsigned and not notarized; they rely only on system
+          frameworks until project signing credentials exist.
 
           Verify every downloaded artifact against SHA256SUMS before installing.
           EOF

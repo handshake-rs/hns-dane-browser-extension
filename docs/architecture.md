@@ -1,7 +1,7 @@
 # Architecture
 
-This repository is the Chromium extension and native-host product. Current
-Android and iOS work lives in
+This repository is the Chromium extension, native-host, and desktop setup
+product. Current Android and iOS work lives in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
 The Chromium adapter consumes five canonical browser contracts from
@@ -173,6 +173,10 @@ explicitly unavailable.
 
 ## Rust layers
 
+- `hns-browser-setup`: version-matched GUI/CLI distribution boundary that
+  installs or repairs the embedded native host, selected exact browser
+  registrations, and per-user CA; it is not part of request admission after
+  installation.
 - `hns-chromium-native-host`: native messaging, policy, per-install CA,
   lifecycle, installers, and sanitized schema conversion.
 - `hns-chromium-platform-runtime`: Chromium storage/network adapter, sync,
@@ -191,6 +195,27 @@ explicitly unavailable.
 The product-specific adapter remains in this repository. The canonical engine
 contracts constrain authority and policy without claiming that every product
 adapter has already been consolidated into the engine.
+
+## Setup and runtime separation
+
+Each released setup target embeds the native host built for the same tag,
+operating system, and CPU. Setup accepts exact extension IDs and explicit
+browser selections, performs user-level registration and CA trust, and writes
+a bounded pre-trust ownership transaction followed by a completed receipt for
+repair and exact removal. It downloads no executable payload.
+
+Browser selections are compatibility intent rather than storage isolation.
+Opera's published native-messaging contract includes a Chrome registration
+location, as do the Windows Brave and Vivaldi fallbacks. Setup may therefore
+write one deduplicated path observed by more than one Chromium flavor. The
+allowed extension origins remain exact, and Setup refuses to replace or remove
+content that is not proven to belong to this installation.
+
+The setup application exits before ordinary browsing. It cannot mint a
+successful security result, authorize a namespace decision, or weaken the
+runtime fail-closed policy. The extension still requires the native host's
+current session, policy generation, CA marker, and checked status on every
+active runtime.
 
 ## Experimental relay boundary
 

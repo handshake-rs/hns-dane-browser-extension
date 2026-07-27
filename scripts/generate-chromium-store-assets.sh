@@ -9,6 +9,12 @@ listing_output="$root_dir/store/assets/chrome-edge"
 screenshot_output="$listing_output/screenshots"
 opera_output="$root_dir/store/assets/opera/screenshots"
 chromium="${CHROMIUM:-$(command -v chromium || true)}"
+png_normalization=(
+  -strip
+  +set date:create
+  +set date:modify
+  -define png:exclude-chunk=date,time
+)
 
 command -v magick >/dev/null 2>&1 || {
   echo "ImageMagick 7 (magick) is required." >&2
@@ -77,6 +83,17 @@ for screenshot in "$screenshot_output"/*.png; do
   name="${screenshot##*/}"
   magick "$screenshot" -resize '612x408^' -gravity center -extent 612x408 \
     "$opera_output/${name%-1280x800.png}-612x408.png"
+done
+
+# ImageMagick can otherwise preserve filesystem-derived PNG date properties.
+# Normalize every generated asset so identical source pixels produce identical
+# repository and release bytes across repeated invocations.
+for image in \
+  "$icon_output"/*.png \
+  "$listing_output"/*.png \
+  "$screenshot_output"/*.png \
+  "$opera_output"/*.png; do
+  magick "$image" "${png_normalization[@]}" "$image"
 done
 
 identify "$icon_output"/*.png "$listing_output"/*.png \

@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: 2026-07-26
+Last updated: 2026-07-27
 
 HNS DANE Browser Extension is published by Denuo Web, LLC. Privacy and
 support questions can be sent to `info@denuoweb.com`. Do not post personal
@@ -19,7 +19,9 @@ feature, including:
 - extension settings, the explicit P2P DNS-relay requester choice, the
   independently configured recursive HNS DoH URL, and the local timestamp of
   the last header-sync attempt used for retry limiting;
-- native-host registration and installation markers;
+- native-host registration, setup receipt or in-progress ownership
+  transaction, selected trust-store path, selected browser compatibility
+  flavors, exact registered extension IDs, and installation markers;
 - a per-install local CA key and certificate;
 - Handshake headers, peer state, verified proof/resource cache, namespace
   bindings, and bounded resolver state;
@@ -30,6 +32,14 @@ The raw internal resolution trace is not sent through native messaging because
 it can contain URLs or certificate material. Browser-visible responses do not
 receive private `X-HNS-*` metadata. Checked status contains bounded protocol
 state and intermediaries, not page bodies.
+
+Some Chromium flavors share local native-messaging discovery locations. Opera
+uses a Chrome compatibility location, and Brave/Vivaldi have platform-specific
+Chrome fallbacks. Selecting one of those flavors can therefore write a
+registration path another installed Chromium flavor also reads. This remains
+local, contains only this product's manifest and exact allowed extension IDs,
+and does not cause Setup to scan browser profiles or send browser-selection
+data to Denuo Web.
 
 ## Network disclosure
 
@@ -89,7 +99,8 @@ time, and Chromium-observed completion status and time. It does not add an
 HTTP-status or main-frame claim to the Rust decision, and it stores no request
 or response headers, bodies, certificate bytes, cookies, or URL fragments.
 
-The supplied uninstaller removes the product's user-level native-host
+HNS DANE Browser Setup's Complete Uninstall and the supplied manual
+uninstaller remove the product's user-level native-host
 registrations, exact per-install trust anchor, native executable, CA key
 material, marker, chain/cache state, and runtime data. Browser-managed
 extension storage is removed according to the browser's extension-removal
@@ -102,6 +113,8 @@ no account record or synced browsing history to delete.
 
 ## Scope
 
-This policy covers the Chromium extension and native host in this repository.
-The mobile product has its own current source and disclosures in
+This policy covers the Chromium extension, native host, and local setup
+application in this repository. Setup performs no analytics or telemetry and
+does not send its installation receipt to Denuo Web. The mobile product has
+its own current source and disclosures in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).

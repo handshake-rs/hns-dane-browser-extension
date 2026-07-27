@@ -42,11 +42,13 @@ Key capabilities:
   recovery. Both are off/blank by default and returned answers remain subject
   to local proof, DNSSEC, TLSA, and DANE verification.
 
-The extension requires a separately installed source-available Rust native host and
-a per-user local CA. The first-install setup page links to the matching Linux,
-macOS, and Windows bundles and shows the exact catalog-specific extension ID
-needed by the installer. ChromeOS and mobile Chromium cannot use this native
-host. Android and iOS are separate products.
+The extension requires the source-available HNS DANE Browser Setup application.
+Its version-matched Linux, macOS, and Windows packages contain the matching
+Rust native host, required non-system dependencies, and install one per-user
+local CA. The extension's first-install page links to the matching setup
+release and shows the exact catalog-specific extension ID that Setup must
+register. ChromeOS and mobile Chromium cannot use this native host. Android
+and iOS are separate products.
 
 The project runs no advertising, analytics, telemetry, developer account, or
 browsing-history service. See the linked privacy policy for the DNS operators

@@ -188,6 +188,11 @@ Install Rust 1.92.0 and Node.js 22 or later, then run:
 cargo +1.92.0 build --release --locked \
   --manifest-path rust/Cargo.toml \
   -p hns-chromium-native-host
+HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
+  cargo +1.92.0 build --release --locked \
+    --manifest-path rust/Cargo.toml \
+    -p hns-browser-setup \
+    --features embedded-host
 npm run check:extension
 ```
 
@@ -197,9 +202,31 @@ anchor.
 
 ## Install
 
-Load `dist/chromium-extension` through the target browser's extension
-developer page and copy its 32-character extension ID. Close every selected
-browser before registering the native host and local CA.
+Install the extension from its catalog, or load `dist/chromium-extension`
+through the target browser's extension developer page. Its first-run page
+links to the exact-version HNS DANE Browser Setup downloads and displays the
+exact 32-character ID assigned by that catalog or browser.
+
+Download the Setup application matching your operating system and CPU, close
+every selected browser, paste the displayed extension ID, select every
+Chromium flavor in which that ID is installed, and choose **Install or
+Repair**. Repeat the exact ID field for store and sideloaded builds with
+different IDs. Setup does not scan browser profiles or infer extension IDs.
+It installs only for the current user.
+
+Each Setup package embeds the matching native host. Windows and macOS packages
+use the platform's standard trust facilities. Linux packages also carry the
+NSS `certutil` executable and companion non-system libraries used to modify
+the current user's Chromium NSS database. Base operating-system facilities,
+graphics stacks, kernels, and drivers remain system components.
+
+For expert managed deployment or troubleshooting, the release also includes
+manual native-host bundles. Prefer Setup for ordinary installation, repair,
+and removal. The manual scripts use fixed per-user product roots and exact
+ownership gates, but they have less transactional recovery than Setup: they
+do not maintain Setup's full receipt and rollback state, and a damaged or
+partial manual installation can require expert cleanup. Their fallback
+commands are:
 
 Linux and macOS:
 
@@ -221,9 +248,24 @@ Repeat `--extension-id` on Unix, or provide a PowerShell string array, when
 store and sideloaded builds use different IDs. `--browser` accepts `chrome`,
 `chromium`, `edge`, `brave`, `vivaldi`, `opera`, or `all`.
 
-Linux requires `certutil` from `libnss3-tools` or `nss-tools` and modifies only
-the current user's NSS database. macOS uses the user's login keychain. Windows
-uses the current user's Root store. Native-host registration is user-level.
+These selections request browser compatibility, not necessarily a unique
+registration path. Opera uses Chrome's native-messaging compatibility
+location on Windows and uses both its own and Chrome's locations on Linux and
+macOS. Brave and Vivaldi use dedicated locations on Linux and macOS, but their
+Windows contracts also include a Chrome fallback. Setup and the manual
+installers deduplicate shared locations, bind the manifest to the supplied
+extension IDs, and refuse to replace foreign content. Consequently, selecting
+Opera, or Brave/Vivaldi on Windows, can write a location that Chrome also
+reads even if Chrome was not selected.
+
+The manual Linux fallback requires a system `certutil` from `libnss3-tools` or
+`nss-tools`. It uses the existing Chromium legacy database at
+`~/.pki/nssdb`, or otherwise the XDG data database at
+`${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. macOS resolves the user's
+actual login keychain through `security login-keychain` and removes the exact
+certificate together with its trust settings. Windows uses the current user's
+Root store and explicitly maintains both 32-bit and 64-bit native-messaging
+registry views. Native-host registration remains user-level.
 
 The installer creates one P-256 CA per installation. Its private key remains
 in the native host's protected data bundle. Rust issues only exact-host,
@@ -234,7 +276,11 @@ trust installation succeeds and the matching SHA-256 marker exists.
 
 ## Uninstall
 
-Close all selected browsers, then run:
+Use **Complete Uninstall** in HNS DANE Browser Setup. It removes only the
+installation recorded by Setup: this product's exact browser registrations,
+CA, runtime data, cached chain state, and receipt.
+
+For a manual installation, close all selected browsers, then run:
 
 ```sh
 extension/install/uninstall.sh --browser all
@@ -246,10 +292,14 @@ or:
 extension\install\uninstall.ps1 -Browser all
 ```
 
-The uninstaller removes this host's browser registrations, exact per-install
-trust anchor, native executable, key material, marker, chain state, cache, and
-runtime data. The browser removes extension-owned proxy settings when the
-extension is disabled or uninstalled; orderly suspension also clears them.
+The manual uninstaller requires the exact fixed-root ownership marker before
+recursive removal. It removes only registrations matching its installed
+manifest and a trust anchor identified by exact persisted fingerprints;
+foreign or unverifiable entries are left untouched. If its ownership or
+fingerprint metadata is damaged, use expert manual recovery rather than
+broad name-based deletion. The browser removes extension-owned proxy settings
+when the extension is disabled or uninstalled; orderly suspension also clears
+them.
 
 ## Recovery and security invariants
 

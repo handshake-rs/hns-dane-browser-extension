@@ -1,8 +1,8 @@
 # Store Reviewer Notes
 
-HNS DANE Browser intentionally fails closed until its separately distributed
-native Rust host and per-user local CA are installed. The extension ZIP cannot
-embed or launch an arbitrary platform executable.
+HNS DANE Browser intentionally fails closed until HNS DANE Browser Setup
+installs its embedded native Rust host and per-user local CA. The extension ZIP
+cannot embed or launch an arbitrary platform executable.
 
 ## Setup
 
@@ -13,25 +13,22 @@ embed or launch an arbitrary platform executable.
    first-submission package.
 2. The first-install page shows the exact 32-character catalog extension ID.
 3. Follow the first-install page's version-specific GitHub Release link and
-   download the matching native-host bundle. Use its separately labeled
+   download the matching Setup package. Use its separately labeled
    latest-release link only as an intentional compatibility fallback.
 4. Close the browser being tested.
-5. Unpack the bundle and run its installer with that exact ID and browser:
-   - Linux/macOS:
-     `bash extension/install/install.sh --extension-id ID --browser chrome`
-   - Microsoft Edge:
-     use `--browser edge`
-   - Opera:
-     use `--browser opera`
-   - Windows PowerShell:
-     `Set-ExecutionPolicy -Scope Process Bypass -Force; & .\extension\install\install.ps1 -ExtensionId ID -Browser edge`
+5. Open Setup, paste the exact ID, select the browser under review, and choose
+   **Install or Repair**. The manual native-host archive and shell/PowerShell
+   installers remain release assets only as an expert fallback with less
+   transactional recovery than Setup.
 6. Reopen the browser. The popup should report `Rust security path active` and
    `DANE local CA: Installed`.
 
-Linux requires `certutil` from `libnss3-tools`/`nss-tools`. The installer is
-user-level. It registers only the exact supplied extension origin, creates one
-local CA, installs that CA in the current user's browser trust database, and
-writes the activation marker only after trust installation succeeds.
+Setup is user-level. Linux packages include the required NSS certificate
+utility and non-system runtime libraries. Setup registers only the exact
+supplied extension origin, creates one local CA, installs that CA in the
+current user's browser trust database, and writes the activation marker only
+after trust installation succeeds. It does not scan browser profiles or infer
+an extension ID.
 
 ## Suggested checks
 

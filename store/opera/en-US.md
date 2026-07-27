@@ -22,10 +22,12 @@ downloads, and WebSockets. Optional P2P DNS use is requester-only and requires
 explicit consent. A user-configured recursive HNS DoH recovery URL is blank by
 default. Bogus or indeterminate evidence fails closed.
 
-Install the matching Linux, macOS, or Windows native-host bundle from the
-GitHub Release linked by the setup page. Pass the exact Opera extension ID to
-the installer and select `opera`. The extension runs no ads, analytics,
-telemetry, or developer-operated browsing-history service.
+Download the matching Linux, macOS, or Windows HNS DANE Browser Setup package
+from the GitHub Release linked by the extension's setup page. Each package
+contains the matching native host and required non-system dependencies. Paste
+the exact Opera extension ID, select Opera, and choose Install or Repair. The
+extension runs no ads, analytics, telemetry, or developer-operated
+browsing-history service.
 
 Source and downloads:
 https://github.com/handshake-rs/hns-dane-browser-extension

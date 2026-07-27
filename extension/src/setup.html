@@ -29,44 +29,48 @@
 
       <div class="setup-grid">
         <section class="setup-card">
-          <h2>1. Download</h2>
+          <h2>1. Download Setup</h2>
           <p>
-            Download the native-host bundle matching extension version
-            <code id="extension-version">shown after installation</code>. Store packages do
-            not and cannot embed this executable.
+            Download HNS DANE Browser Setup version
+            <code id="extension-version">shown after installation</code> for your operating
+            system and CPU. Each package contains the matching Rust native host and
+            non-system runtime dependencies. Linux Setup requires glibc 2.39 or
+            newer (Ubuntu 24.04 / Debian 13 generation).
           </p>
           <p class="link-stack">
-            <a id="version-downloads" href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Native-host downloads for this version</a>
+            <a id="version-downloads" href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Setup downloads for this version</a>
             <a href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Latest release (fallback only)</a>
+            <a id="manual-downloads" href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Manual native-host packages</a>
           </p>
         </section>
 
         <section class="setup-card">
-          <h2>2. Register this ID</h2>
-          <p>The installer must receive this exact store-specific extension ID:</p>
+          <h2>2. Copy this exact ID</h2>
+          <p>Setup must receive this exact store-specific extension ID:</p>
           <p id="extension-id" class="extension-id"><code>shown after installation</code></p>
+          <button id="copy-extension-id" type="button">Copy extension ID</button>
+          <p id="copy-status" class="section-detail" role="status"></p>
           <p>
-            Run the bundle's installer with <code>--extension-id</code> on Linux/macOS or
-            <code>-ExtensionId</code> on Windows, and select Chrome, Chromium, Edge, Brave,
-            Vivaldi, Opera, or all installed browsers.
+            Catalogs can assign different IDs. Do not copy an ID from documentation or
+            another browser installation.
           </p>
         </section>
 
         <section class="setup-card">
-          <h2>3. Install trust</h2>
+          <h2>3. Run Setup</h2>
           <p>
-            Close the selected browsers, run the user-level installer, then reopen the browser.
-            Linux requires <code>certutil</code>. macOS and Windows use the current user's trust
-            store. No administrator-wide installation is required.
+            Close the selected browsers, open the downloaded setup application, paste the
+            exact ID, select every Chromium flavor you use, and choose Install or Repair.
+            Setup registers the native host and installs its local CA for the current user.
           </p>
         </section>
 
         <section class="setup-card">
-          <h2>4. Verify and remove</h2>
+          <h2>4. Verify or remove</h2>
           <p>
             Open the toolbar popup and confirm “Rust security path active” and “DANE local CA:
-            Installed.” The supplied uninstaller removes native registration, the exact CA,
-            runtime data, and cached chain state.
+            Installed.” Setup also provides Complete Uninstall, which removes registrations,
+            the exact CA, runtime data, and cached chain state.
           </p>
         </section>
       </div>

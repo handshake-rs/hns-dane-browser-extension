@@ -43,7 +43,11 @@ with the exact release before submission.
 - Resolver, proof, header, namespace-binding, and peer state remain in the
   local native-host data directory.
 - Users can clear the optional recursive resolver, disable P2P requester use,
-  remove the extension, and run the complete uninstaller.
+  remove the extension, and use HNS DANE Browser Setup's Complete Uninstall.
+- Setup stores only a local receipt—or a bounded ownership transaction while
+  installation is in progress—containing product version, selected browser
+  flavors, exact registered extension IDs, owned/trust-store paths, and the
+  local CA fingerprints needed for repair and exact removal.
 - No developer account or server-side user profile exists.
 
 Privacy URL:

@@ -3,8 +3,9 @@
 ## Product boundary
 
 This repository qualifies the Chromium Manifest V3 extension, Rust native
-messaging host, authenticated loopback proxy, and their local Handshake and
-ICANN resolution stack. Current mobile security claims belong to
+messaging host, cross-platform setup application, authenticated loopback
+proxy, and their local Handshake and ICANN resolution stack. Current mobile
+security claims belong to
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
 Five canonical contracts are pinned to
@@ -19,6 +20,13 @@ Five canonical contracts are pinned to
 
 The local Chromium adapter, loopback listener, native messaging, per-install
 CA, lifecycle, storage, and origin transport remain product code.
+
+The setup application is a distribution boundary, not a browser trust anchor.
+Every released target embeds the native host built from the same tag and
+rejects runtime native-host overrides. It installs only exact extension IDs
+supplied by the user and downloads no executable payload. Successful setup
+cannot replace runtime session, generation, namespace, DNSSEC, TLSA, DANE, or
+publication checks.
 
 ## Trust anchors
 
@@ -216,6 +224,9 @@ qnames, qtypes, request timing, and source IP.
 | Stale async response after restart/policy change | Exact admission stamp and publication permit |
 | Cross-root pool or Alt-Svc reuse | Namespace-decision fingerprint partitioning |
 | Local process reaches proxy port | Per-generation proxy authentication and bounded framing |
+| Setup package substitutes a different native host | Target-matched native host embedded at build time; runtime override rejected; release checksum and binary-format/architecture gates |
+| Setup removes another native registration or broad user data | Fixed per-user root, exact owned-path/manifest checks, recorded trust-store identity and CA fingerprints, pre-trust transaction recovery, effective-trust verification, and unsafe-root/redirect refusal |
+| Chromium flavors share a native-messaging location | Treat browser selection as compatibility intent; deduplicate shared paths, bind exact allowed extension origins, and refuse replacement or removal unless the manifest is proven to be owned by this installation |
 | Page forges security metadata | Strip internal headers; publish only native checked status |
 | Relay lies or sets AD | Treat response as untrusted and validate locally |
 | Configured recursive resolver lies or sets AD | Treat raw RFC 8484 bytes as untrusted and validate locally |

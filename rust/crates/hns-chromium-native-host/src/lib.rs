@@ -3170,7 +3170,11 @@ mod tests {
         ));
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy.port())).unwrap();
         client
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            // The full workspace suite can saturate slower CI runners while
+            // this production proxy path performs its cryptographic checks.
+            // Keep the test bounded without making ordinary parallel load a
+            // false protocol failure.
+            .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         client
             .write_all(

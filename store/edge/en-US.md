@@ -33,11 +33,12 @@ P2P DNS is requester-only and opt-in. A custom recursive HNS DoH URL is blank
 by default. Both recovery paths still require local proof, DNSSEC, TLSA, and
 DANE verification.
 
-A matching source-available native-host bundle must be installed separately for
-Linux, macOS, or Windows. The setup page displays this Edge catalog item's
-exact extension ID and links first to the matching version-specific bundle,
-with the latest release labeled only as a fallback. ChromeOS and mobile
-Chromium are unsupported.
+The matching source-available HNS DANE Browser Setup application must be run on
+Linux, macOS, or Windows. Its platform package contains the matching Rust
+native host and required non-system dependencies. The extension page displays
+this Edge catalog item's exact ID and links first to the matching
+version-specific Setup release, with the latest release labeled only as a
+fallback. ChromeOS and mobile Chromium are unsupported.
 
 There are no ads, analytics, telemetry, developer accounts, paid feature
 unlocks, or developer-operated browsing-history service. Source, license,

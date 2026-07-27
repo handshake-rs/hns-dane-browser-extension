@@ -28,10 +28,12 @@ from verify_cargo_git_policy import (
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "extension/THIRD_PARTY_NOTICES.txt"
 OUTPUT_SHA256 = ROOT / "scripts/third-party-notices.sha256"
-SCHEMA = "4"
+SCHEMA = "5"
 LOCKED_INPUT_PATHS = (
     "scripts/generate-third-party-notices.py",
     "scripts/verify_cargo_git_policy.py",
+    "release/license-texts/BSL-1.0.txt",
+    "release/license-texts/CC0-1.0.txt",
     "rust/Cargo.toml",
     "rust/Cargo.lock",
     "extension/manifest.json",
@@ -60,9 +62,18 @@ INPUT_PATHS = LOCKED_INPUT_PATHS + RUST_MANIFEST_INPUTS
 LICENSE_FILE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
 MAX_NOTICE_FILE_SIZE = 512 * 1024
 RUST_SHIPPING_TARGETS = (
-    ("x86_64-unknown-linux-gnu", "hns-chromium-native-host"),
-    ("aarch64-apple-darwin", "hns-chromium-native-host"),
+    ("x86_64-unknown-linux-musl", "hns-chromium-native-host"),
+    ("aarch64-unknown-linux-musl", "hns-chromium-native-host"),
     ("x86_64-pc-windows-msvc", "hns-chromium-native-host"),
+    ("aarch64-pc-windows-msvc", "hns-chromium-native-host"),
+    ("x86_64-apple-darwin", "hns-chromium-native-host"),
+    ("aarch64-apple-darwin", "hns-chromium-native-host"),
+    ("x86_64-unknown-linux-gnu", "hns-browser-setup"),
+    ("aarch64-unknown-linux-gnu", "hns-browser-setup"),
+    ("x86_64-pc-windows-msvc", "hns-browser-setup"),
+    ("aarch64-pc-windows-msvc", "hns-browser-setup"),
+    ("x86_64-apple-darwin", "hns-browser-setup"),
+    ("aarch64-apple-darwin", "hns-browser-setup"),
 )
 
 # These registry packages are published without their workspace-level license
@@ -70,6 +81,43 @@ RUST_SHIPPING_TARGETS = (
 # family and contain the project license texts named by the package manifest.
 RUST_LICENSE_FILE_FALLBACKS = {
     ("asn1-rs-impl", "0.2.0"): ("asn1-rs", "0.7.2"),
+}
+
+# Some checksum-verified registry packages declare a standard license but omit
+# the corresponding workspace-level text from the published crate. Keep this
+# mapping explicit so a new or changed expression fails closed during release.
+DECLARED_LICENSE_FALLBACK_IDS = {
+    "MIT": ("MIT",),
+    "Apache-2.0": ("Apache-2.0",),
+    "MIT OR Apache-2.0": ("MIT", "Apache-2.0"),
+    "MIT/Apache-2.0": ("MIT", "Apache-2.0"),
+    "(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0": (
+        "MIT",
+        "Apache-2.0",
+    ),
+    "BSL-1.0": ("BSL-1.0",),
+    "CC0-1.0": ("CC0-1.0",),
+    "Zlib OR Apache-2.0 OR MIT": ("Zlib", "Apache-2.0", "MIT"),
+}
+
+CANONICAL_CRATE_LICENSE_SOURCES = {
+    "MIT": (("quinn", "0.11.11"), "LICENSE-MIT"),
+    "Apache-2.0": (("quinn", "0.11.11"), "LICENSE-APACHE"),
+    "Zlib": (("glow", "0.17.0"), "LICENSE-ZLIB"),
+}
+
+REVIEWED_LICENSE_TEXT_SOURCES = {
+    "BSL-1.0": "release/license-texts/BSL-1.0.txt",
+    "CC0-1.0": "release/license-texts/CC0-1.0.txt",
+}
+
+SUPPLEMENTAL_PACKAGE_LICENSE_FILES = {
+    ("epaint_default_fonts", "0.35.0"): (
+        "fonts/Hack-Regular.txt",
+        "fonts/OFL.txt",
+        "fonts/UFL.txt",
+        "fonts/emoji-icon-font-mit-license.txt",
+    ),
 }
 
 
@@ -115,7 +163,7 @@ def check_committed_asset() -> int:
             failures.append(f"the fingerprint for {relative} is stale")
 
     if not re.search(r"^RUST COMPONENTS \([1-9][0-9]*\)$", text, re.MULTILINE):
-        failures.append("the Chromium native-host Rust inventory is missing")
+        failures.append("the Chromium native-host/setup Rust inventory is missing")
 
     if failures:
         print("Third-party notices are stale:", file=sys.stderr)
@@ -206,7 +254,7 @@ def shipping_rust_packages_for_targets() -> tuple[list[dict], dict[str, int]]:
     target_counts: dict[str, int] = {}
     for target, root_package in RUST_SHIPPING_TARGETS:
         target_packages = shipping_rust_packages(cargo_metadata(target), root_package)
-        target_counts[target] = len(target_packages)
+        target_counts[f"{root_package} @ {target}"] = len(target_packages)
         for package in target_packages:
             package_id = package["id"]
             existing = packages_by_id.get(package_id)
@@ -258,6 +306,116 @@ def registry_license_files(package: dict) -> list[tuple[str, str]]:
         if content:
             result.append((candidate.relative_to(package_dir).as_posix(), content))
     return result
+
+
+def package_relative_text_files(
+    package: dict, relative_paths: tuple[str, ...]
+) -> list[tuple[str, str]]:
+    package_dir = Path(package["manifest_path"]).resolve().parent
+    result: list[tuple[str, str]] = []
+    for relative in relative_paths:
+        candidate = package_dir / relative
+        if candidate.is_symlink() or not candidate.is_file():
+            raise RuntimeError(
+                f"Missing reviewed license file for {package['name']} "
+                f"{package['version']}: {relative}"
+            )
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(package_dir)
+        except ValueError as error:
+            raise RuntimeError(
+                f"Reviewed license file for {package['name']} escapes its "
+                f"verified registry package: {relative}"
+            ) from error
+        size = resolved.stat().st_size
+        if not 0 <= size <= MAX_NOTICE_FILE_SIZE:
+            raise RuntimeError(f"License file has an unexpected size: {resolved}")
+        try:
+            content = (
+                resolved.read_text(encoding="utf-8")
+                .replace("\r\n", "\n")
+                .strip()
+            )
+        except UnicodeDecodeError as error:
+            raise RuntimeError(
+                f"License file is not UTF-8 text: {resolved}"
+            ) from error
+        if not content:
+            raise RuntimeError(f"License file is unexpectedly empty: {resolved}")
+        result.append((relative, content))
+    return result
+
+
+def reviewed_repository_license_text(
+    license_id: str, relative: str
+) -> tuple[str, str]:
+    candidate = ROOT / relative
+    if candidate.is_symlink() or not candidate.is_file():
+        raise RuntimeError(
+            f"Missing reviewed repository text for {license_id}: {relative}"
+        )
+    size = candidate.stat().st_size
+    if not 0 <= size <= MAX_NOTICE_FILE_SIZE:
+        raise RuntimeError(f"License file has an unexpected size: {candidate}")
+    try:
+        content = (
+            candidate.read_text(encoding="utf-8")
+            .replace("\r\n", "\n")
+            .strip()
+        )
+    except UnicodeDecodeError as error:
+        raise RuntimeError(
+            f"License file is not UTF-8 text: {candidate}"
+        ) from error
+    if not content:
+        raise RuntimeError(f"License file is unexpectedly empty: {candidate}")
+    return (f"reviewed canonical {license_id} text/{relative}", content)
+
+
+def declared_license_fallback_files(
+    package: dict, rust_packages_by_key: dict[tuple[str, str], dict]
+) -> list[tuple[str, str]]:
+    expression = package["license"]
+    license_ids = DECLARED_LICENSE_FALLBACK_IDS.get(expression)
+    if license_ids is None:
+        raise RuntimeError(
+            f"No reviewed canonical text mapping exists for the license "
+            f"expression on {package['name']} {package['version']}: {expression}"
+        )
+
+    files: list[tuple[str, str]] = []
+    for license_id in license_ids:
+        crate_source = CANONICAL_CRATE_LICENSE_SOURCES.get(license_id)
+        if crate_source is not None:
+            source_key, relative = crate_source
+            source_package = rust_packages_by_key.get(source_key)
+            if source_package is None:
+                raise RuntimeError(
+                    f"The reviewed canonical {license_id} source package "
+                    f"{source_key[0]} {source_key[1]} is not in the shipping closure."
+                )
+            [(name, content)] = package_relative_text_files(
+                source_package, (relative,)
+            )
+            files.append(
+                (
+                    f"canonical {license_id} text from checksum-verified "
+                    f"{source_key[0]} {source_key[1]}/{name}",
+                    content,
+                )
+            )
+            continue
+
+        repository_source = REVIEWED_LICENSE_TEXT_SOURCES.get(license_id)
+        if repository_source is None:
+            raise RuntimeError(
+                f"No reviewed canonical text source exists for {license_id}."
+            )
+        files.append(
+            reviewed_repository_license_text(license_id, repository_source)
+        )
+    return files
 
 
 def rust_package_license_files(package: dict) -> list[tuple[str, str]]:
@@ -341,11 +499,17 @@ def sqlite_public_domain_notice(rust_packages: list[dict]) -> tuple[str, str] | 
 
 def generate() -> str:
     rust_packages, rust_target_counts = shipping_rust_packages_for_targets()
+    rust_packages_by_key = {
+        (package["name"], package["version"]): package
+        for package in rust_packages
+    }
 
     notice_groups: dict[str, dict[str, object]] = {}
 
     def add_notice(applies_to: str, source_name: str, content: str) -> None:
-        normalized = content.replace("\r\n", "\n").strip()
+        normalized = "\n".join(
+            line.rstrip() for line in content.replace("\r\n", "\n").splitlines()
+        ).strip()
         digest = sha256_bytes(normalized.encode("utf-8"))
         group = notice_groups.setdefault(
             digest,
@@ -369,6 +533,17 @@ def generate() -> str:
                 (f"companion {fallback[0]} {fallback[1]}/{name}", content)
                 for name, content in fallback_files
             ]
+    for package in rust_packages:
+        key = (package["name"], package["version"])
+        if not package_license_files[key]:
+            package_license_files[key] = declared_license_fallback_files(
+                package, rust_packages_by_key
+            )
+        supplemental = SUPPLEMENTAL_PACKAGE_LICENSE_FILES.get(key)
+        if supplemental is not None:
+            package_license_files[key].extend(
+                package_relative_text_files(package, supplemental)
+            )
 
     for package in rust_packages:
         key = (package["name"], package["version"])
@@ -389,21 +564,24 @@ def generate() -> str:
     lines = [
         "HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES",
         "",
-        "This Chromium extension and native host include open-source components. The inventory",
+        "This Chromium extension, native host, and setup application include open-source",
+        "components. The inventory",
         "below is generated from the locked non-development Cargo dependency closures reachable",
-        "from hns-chromium-native-host on every supported desktop target. Cargo build-time",
-        "dependencies are retained conservatively. Workspace-owned HNS DANE Browser crates and",
-        "test-only, lint, fuzz, and snapshot-exporter dependencies are excluded.",
+        "from hns-chromium-native-host and hns-browser-setup on representative supported desktop",
+        "targets. Cargo build-time dependencies are retained conservatively. Workspace-owned HNS",
+        "DANE Browser crates and test-only, lint, fuzz, and snapshot-exporter dependencies are",
+        "excluded.",
         "The extension JavaScript has no third-party runtime package dependency.",
         "",
         "Supported desktop Rust target closure counts:",
         *(
-            f"  {target}: {rust_target_counts[target]} external Cargo components"
-            for target, _ in RUST_SHIPPING_TARGETS
+            f"  {closure}: {rust_target_counts[closure]} external Cargo components"
+            for closure in sorted(rust_target_counts)
         ),
         "",
         "License expressions are the declarations in the verified package metadata. The reproduced",
-        "texts come from checksum-verified registry packages or immutable Cargo Git checkouts.",
+        "texts come from checksum-verified registry packages, immutable Cargo Git checkouts,",
+        "or fingerprinted canonical license texts reviewed in this repository.",
         "Inclusion here does not imply endorsement by the component authors.",
         "",
         f"Generator schema: {SCHEMA}",

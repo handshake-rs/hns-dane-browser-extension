@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.5.3 - 2026-07-27
+
+### Added
+
+- Added HNS DANE Browser Setup as a version-matched Rust desktop application
+  for Linux, macOS, and Windows on x64 and arm64. Each target embeds the exact
+  native host built for that target and the release publishes a separately
+  labeled Setup archive for every supported operating-system/CPU pair.
+- Added graphical Install or Repair, Status, and Complete Uninstall flows for
+  Chrome, Chromium, Edge, Brave, Vivaldi, and Opera, together with equivalent
+  command-line automation. Setup accepts multiple explicit store-specific
+  extension IDs and never scans browser profiles to infer them.
+- Added first-run copy-ID and exact-version Setup download guidance. Manual
+  native-host archives and shell/PowerShell installers remain available for
+  managed deployment and troubleshooting.
+
+### Changed
+
+- Bundled the matching NSS `certutil` executable and its required non-system
+  libraries in Linux Setup packages. Windows uses a self-contained Rust
+  executable with the static CRT where supported, while macOS uses standard
+  system frameworks. Linux Setup retains the base operating-system ABI and
+  requires glibc 2.39 or newer (Ubuntu 24.04 / Debian 13 generation).
+- Extended deterministic release manifests, checksums, dependency notices,
+  CI, privacy disclosures, store-review notes, and platform documentation to
+  cover the Setup application.
+- Normalized generated PNG metadata so repeated store-artwork builds are
+  byte-for-byte deterministic.
+
+### Security
+
+- Kept installation per-user and limited it to explicitly selected browser
+  registrations and exact validated 32-character extension IDs. Setup writes
+  manifests and its ownership records atomically, installs only its exact
+  generated CA, verifies effective platform trust, and retains a pre-trust
+  ownership history across repeated interrupted repairs so uninstall can still
+  remove older exact CA and registration hashes.
+- Hardened the expert Linux manual fallback to compare the complete exported
+  certificate digest and inspect both permitted Chromium NSS database
+  locations during uninstall.
+- Kept the native executable, CA key material, runtime state, and browser
+  registration inside the existing Rust security boundary; the extension
+  package still contains no executable or private key.
+
 ## 0.5.2 - 2026-07-26
 
 ### Changed

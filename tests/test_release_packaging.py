@@ -45,6 +45,111 @@ def fake_native_binary(platform: str, architecture: str) -> bytes:
     return bytes(binary)
 
 
+LINUX_RUNTIME_LIBRARIES = (
+    "ld-linux-x86-64.so.2",
+    "libc.so.6",
+    "libdecor-0.so.0",
+    "libEGL.so.1",
+    "libfreebl3.chk",
+    "libfreebl3.so",
+    "libfreeblpriv3.chk",
+    "libfreeblpriv3.so",
+    "libGL.so.1",
+    "libGLX.so.0",
+    "libnspr4.so",
+    "libnss3.so",
+    "libnssckbi.so",
+    "libnssdbm3.chk",
+    "libnssdbm3.so",
+    "libsoftokn3.chk",
+    "libsoftokn3.so",
+    "libwayland-client.so.0",
+    "libwayland-cursor.so.0",
+    "libwayland-egl.so.1",
+    "libX11.so.6",
+    "libX11-xcb.so.1",
+    "libxcb.so.1",
+    "libXcursor.so.1",
+    "libXext.so.6",
+    "libXfixes.so.3",
+    "libXi.so.6",
+    "libxkbcommon.so.0",
+    "libxkbcommon-x11.so.0",
+    "libXrandr.so.2",
+)
+
+
+def fake_setup_binary(
+    platform: str,
+    architecture: str,
+    native_host: bytes,
+) -> bytes:
+    return (
+        fake_native_binary(platform, architecture)
+        + b"\0embedded-native-host\0"
+        + native_host
+    )
+
+
+def write_fake_linux_runtime(directory: Path) -> None:
+    files: dict[str, bytes] = {
+        "certutil": fake_native_binary("linux", "x64"),
+        "licenses/fake-runtime.copyright": b"Fake runtime license fixture\n",
+    }
+    files.update(
+        {
+            f"lib/{name}": f"fixture:{name}\n".encode()
+            for name in LINUX_RUNTIME_LIBRARIES
+        }
+    )
+    for name, data in files.items():
+        path = directory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    metadata = {
+        "schemaVersion": 1,
+        "architecture": "x64",
+        "distribution": {"id": "fixture", "version": "1"},
+        "files": {
+            name: {
+                "ownerPackage": "fixture",
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+            for name, data in sorted(files.items())
+        },
+        "packages": {"fixture": "1"},
+        "certutilLibraries": sorted(
+            name
+            for name in LINUX_RUNTIME_LIBRARIES
+            if name.startswith("ld-linux")
+            or name == "libc.so.6"
+            or any(
+                marker in name
+                for marker in ("freebl", "nspr", "nss", "softokn")
+            )
+        ),
+        "setupLibraries": sorted(
+            name
+            for name in LINUX_RUNTIME_LIBRARIES
+            if name.startswith(
+                (
+                    "libdecor",
+                    "libEGL",
+                    "libGL",
+                    "libwayland",
+                    "libX",
+                    "libxcb",
+                    "libxkbcommon",
+                )
+            )
+        ),
+    }
+    (directory / "RUNTIME-METADATA.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 class ReleasePackagingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -333,6 +438,303 @@ class ReleasePackagingTests(unittest.TestCase):
                     "notNotarized",
                 )
                 self.assertIn("unsigned and not notarized", readme)
+
+    def test_linux_setup_appdir_is_deterministic_and_bundles_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            native_bytes = fake_native_binary("linux", "x64")
+            native_host = base / "hns-chromium-native-host"
+            native_host.write_bytes(native_bytes)
+            setup = base / "hns-dane-browser-setup"
+            setup.write_bytes(fake_setup_binary("linux", "x64", native_bytes))
+            runtime = base / "runtime"
+            write_fake_linux_runtime(runtime)
+            outputs = [base / "first", base / "second"]
+            for output in outputs:
+                self.run_packager(
+                    "setup",
+                    *self.common_arguments(output),
+                    "--platform",
+                    "linux",
+                    "--architecture",
+                    "x64",
+                    "--native-rust-target",
+                    "x86_64-unknown-linux-musl",
+                    "--setup-rust-target",
+                    "x86_64-unknown-linux-gnu",
+                    "--setup-executable",
+                    str(setup),
+                    "--embedded-native-host",
+                    str(native_host),
+                    "--linux-runtime",
+                    str(runtime),
+                )
+
+            stem = f"hns-dane-browser-setup-v{self.version}-linux-x64"
+            first_archive = outputs[0] / f"{stem}.tar.gz"
+            second_archive = outputs[1] / f"{stem}.tar.gz"
+            self.assertEqual(first_archive.read_bytes(), second_archive.read_bytes())
+            self.assert_checksum(first_archive)
+            app = f"{stem}/HNS-DANE-Browser-Setup.AppDir"
+            with tarfile.open(first_archive, "r:gz") as archive:
+                files = {
+                    member.name: member
+                    for member in archive.getmembers()
+                    if member.isfile()
+                }
+                launcher = f"{app}/AppRun"
+                setup_name = f"{app}/usr/bin/hns-dane-browser-setup"
+                helper = f"{app}/usr/libexec/certutil"
+                helper_binary = f"{app}/usr/libexec/certutil.bin"
+                self.assertIn(launcher, files)
+                self.assertIn(setup_name, files)
+                self.assertIn(helper, files)
+                self.assertIn(helper_binary, files)
+                self.assertIn(
+                    f"{app}/usr/libexec/certutil-runtime/libnss3.so",
+                    files,
+                )
+                self.assertIn(
+                    f"{app}/usr/libexec/certutil-runtime/libnspr4.so",
+                    files,
+                )
+                self.assertIn(f"{app}/usr/lib/libX11.so.6", files)
+                self.assertIn(f"{app}/usr/lib/libwayland-client.so.0", files)
+                self.assertIn(
+                    f"{app}/usr/libexec/certutil-runtime/libsoftokn3.chk",
+                    files,
+                )
+                loader = (
+                    f"{app}/usr/libexec/certutil-runtime/"
+                    "ld-linux-x86-64.so.2"
+                )
+                self.assertEqual(stat.S_IMODE(files[loader].mode), 0o755)
+                self.assertNotIn(f"{app}/usr/lib/libc.so.6", files)
+                self.assertIn(
+                    f"{app}/usr/share/licenses/fake-runtime.copyright",
+                    files,
+                )
+                self.assertEqual(stat.S_IMODE(files[launcher].mode), 0o755)
+                self.assertEqual(stat.S_IMODE(files[setup_name].mode), 0o755)
+                self.assertEqual(stat.S_IMODE(files[helper].mode), 0o755)
+                self.assertNotIn(
+                    f"{app}/usr/bin/hns-chromium-native-host",
+                    files,
+                )
+                app_run = archive.extractfile(files[launcher]).read().decode()
+                self.assertIn("HNS_SETUP_CERTUTIL", app_run)
+                self.assertIn("LD_LIBRARY_PATH", app_run)
+                self.assertNotIn("HNS_SETUP_CERTUTIL_LIB_DIR", app_run)
+                metadata = json.loads(
+                    archive.extractfile(
+                        f"{stem}/RELEASE-METADATA.json"
+                    ).read()
+                )
+                self.assertTrue(metadata["setup"]["selfContained"])
+                self.assertEqual(
+                    metadata["setup"]["embeddedNativeHost"]["sha256"],
+                    hashlib.sha256(native_bytes).hexdigest(),
+                )
+                self.assertEqual(
+                    metadata["setup"]["embeddedNativeHost"]["rustTarget"],
+                    "x86_64-unknown-linux-musl",
+                )
+                self.assertEqual(
+                    metadata["setup"]["setupRustTarget"],
+                    "x86_64-unknown-linux-gnu",
+                )
+                self.assertFalse(
+                    metadata["setup"]["embeddedNativeHost"][
+                        "includedAsStandaloneFile"
+                    ]
+                )
+                readme = archive.extractfile(f"{stem}/README.md").read().decode()
+                self.assertIn("No system certutil package is required", readme)
+                self.assertIn("Bundled Linux runtime licenses", readme)
+
+    def test_windows_setup_is_one_self_contained_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            native_bytes = fake_native_binary("windows", "arm64")
+            native_host = base / "hns-chromium-native-host.exe"
+            native_host.write_bytes(native_bytes)
+            setup = base / "hns-dane-browser-setup.exe"
+            setup.write_bytes(fake_setup_binary("windows", "arm64", native_bytes))
+            output = base / "output"
+            self.run_packager(
+                "setup",
+                *self.common_arguments(output),
+                "--platform",
+                "windows",
+                "--architecture",
+                "arm64",
+                "--native-rust-target",
+                "aarch64-pc-windows-msvc",
+                "--setup-rust-target",
+                "aarch64-pc-windows-msvc",
+                "--setup-executable",
+                str(setup),
+                "--embedded-native-host",
+                str(native_host),
+            )
+            stem = f"hns-dane-browser-setup-v{self.version}-windows-arm64"
+            archive_path = output / f"{stem}.zip"
+            self.assert_checksum(archive_path)
+            with zipfile.ZipFile(archive_path) as archive:
+                names = archive.namelist()
+                setup_name = f"{stem}/hns-dane-browser-setup.exe"
+                self.assertIn(setup_name, names)
+                self.assertNotIn(
+                    f"{stem}/hns-chromium-native-host.exe",
+                    names,
+                )
+                metadata = json.loads(
+                    archive.read(f"{stem}/RELEASE-METADATA.json")
+                )
+                self.assertEqual(metadata["setup"]["crtLinkage"], "static")
+                self.assertEqual(
+                    metadata["setup"]["runtimeDependencies"],
+                    "windowsComponentsOnly",
+                )
+                self.assertEqual(
+                    metadata["setup"]["codeSigningStatus"],
+                    "unsigned",
+                )
+                readme = archive.read(f"{stem}/README.md").decode()
+                self.assertIn("SmartScreen may warn", readme)
+                self.assertIn("checksum verification is required", readme)
+                self.assertNotIn("Bundled Linux runtime licenses", readme)
+
+    def test_macos_setup_is_an_unsigned_system_framework_app(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            native_bytes = fake_native_binary("macos", "arm64")
+            native_host = base / "hns-chromium-native-host"
+            native_host.write_bytes(native_bytes)
+            setup = base / "hns-dane-browser-setup"
+            setup.write_bytes(fake_setup_binary("macos", "arm64", native_bytes))
+            output = base / "output"
+            self.run_packager(
+                "setup",
+                *self.common_arguments(output),
+                "--platform",
+                "macos",
+                "--architecture",
+                "arm64",
+                "--native-rust-target",
+                "aarch64-apple-darwin",
+                "--setup-rust-target",
+                "aarch64-apple-darwin",
+                "--setup-executable",
+                str(setup),
+                "--embedded-native-host",
+                str(native_host),
+            )
+            stem = f"hns-dane-browser-setup-v{self.version}-macos-arm64"
+            app = f"{stem}/HNS DANE Browser Setup.app/Contents"
+            with tarfile.open(output / f"{stem}.tar.gz", "r:gz") as archive:
+                names = archive.getnames()
+                self.assertIn(f"{app}/Info.plist", names)
+                self.assertIn(
+                    f"{app}/MacOS/hns-dane-browser-setup",
+                    names,
+                )
+                self.assertIn(f"{app}/Resources/LICENSE", names)
+                self.assertIn(
+                    f"{app}/Resources/THIRD_PARTY_NOTICES.txt",
+                    names,
+                )
+                plist = archive.extractfile(f"{app}/Info.plist").read().decode()
+                self.assertIn(
+                    "com.denuoweb.hns-dane-browser.setup",
+                    plist,
+                )
+                metadata = json.loads(
+                    archive.extractfile(
+                        f"{stem}/RELEASE-METADATA.json"
+                    ).read()
+                )
+                self.assertEqual(
+                    metadata["setup"]["runtimeDependencies"],
+                    "systemFrameworksOnly",
+                )
+                self.assertEqual(
+                    metadata["setup"]["notarizationStatus"],
+                    "notNotarized",
+                )
+                readme = archive.extractfile(f"{stem}/README.md").read().decode()
+                self.assertIn("Control-click the app and choose Open", readme)
+                self.assertIn("System Settings > Privacy & Security", readme)
+                self.assertIn("Do not disable Gatekeeper globally", readme)
+                self.assertNotIn("Bundled Linux runtime licenses", readme)
+
+    def test_setup_rejects_a_non_embedded_or_mislabeled_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            native_host = base / "hns-chromium-native-host.exe"
+            native_host.write_bytes(fake_native_binary("windows", "arm64"))
+            setup = base / "hns-dane-browser-setup.exe"
+            setup.write_bytes(fake_native_binary("windows", "x64"))
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PACKAGER),
+                    "setup",
+                    *self.common_arguments(base / "output"),
+                    "--platform",
+                    "windows",
+                    "--architecture",
+                    "x64",
+                    "--native-rust-target",
+                    "x86_64-pc-windows-msvc",
+                    "--setup-rust-target",
+                    "x86_64-pc-windows-msvc",
+                    "--setup-executable",
+                    str(setup),
+                    "--embedded-native-host",
+                    str(native_host),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "embedded native host architecture does not match windows-x64",
+                result.stderr,
+            )
+            native_host.write_bytes(fake_native_binary("windows", "x64"))
+            native_bytes = bytearray(native_host.read_bytes())
+            native_bytes[-1] = 1
+            native_host.write_bytes(native_bytes)
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PACKAGER),
+                    "setup",
+                    *self.common_arguments(base / "second-output"),
+                    "--platform",
+                    "windows",
+                    "--architecture",
+                    "x64",
+                    "--native-rust-target",
+                    "x86_64-pc-windows-msvc",
+                    "--setup-rust-target",
+                    "x86_64-pc-windows-msvc",
+                    "--setup-executable",
+                    str(setup),
+                    "--embedded-native-host",
+                    str(native_host),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "does not contain the exact native host payload",
+                result.stderr,
+            )
 
     def test_rejects_a_binary_whose_format_or_architecture_is_mislabeled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -31,29 +31,56 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_matrix_covers_current_standard_runner_architectures(self) -> None:
         expected = {
-            ("linux", "x64", "ubuntu-24.04", "x86_64-unknown-linux-musl"),
+            (
+                "linux",
+                "x64",
+                "ubuntu-24.04",
+                "x86_64-unknown-linux-musl",
+                "x86_64-unknown-linux-gnu",
+            ),
             (
                 "linux",
                 "arm64",
                 "ubuntu-24.04-arm",
                 "aarch64-unknown-linux-musl",
+                "aarch64-unknown-linux-gnu",
             ),
-            ("windows", "x64", "windows-2025", "x86_64-pc-windows-msvc"),
+            (
+                "windows",
+                "x64",
+                "windows-2025",
+                "x86_64-pc-windows-msvc",
+                "x86_64-pc-windows-msvc",
+            ),
             (
                 "windows",
                 "arm64",
                 "windows-11-arm",
                 "aarch64-pc-windows-msvc",
+                "aarch64-pc-windows-msvc",
             ),
-            ("macos", "x64", "macos-15-intel", "x86_64-apple-darwin"),
-            ("macos", "arm64", "macos-15", "aarch64-apple-darwin"),
+            (
+                "macos",
+                "x64",
+                "macos-15-intel",
+                "x86_64-apple-darwin",
+                "x86_64-apple-darwin",
+            ),
+            (
+                "macos",
+                "arm64",
+                "macos-15",
+                "aarch64-apple-darwin",
+                "aarch64-apple-darwin",
+            ),
         }
         rows = set(
             re.findall(
                 r"- platform: (\w+)\n"
                 r"\s+architecture: (\w+)\n"
                 r"\s+runner: ([\w.-]+)\n"
-                r"\s+rust-target: ([\w.-]+)",
+                r"\s+native-rust-target: ([\w.-]+)\n"
+                r"\s+setup-rust-target: ([\w.-]+)",
                 self.source,
             )
         )
@@ -89,12 +116,84 @@ class ReleaseWorkflowTests(unittest.TestCase):
             "and aggregate-checksum set.",
             self.source,
         )
+        archive_block = re.search(
+            r"archives=\(\n(?P<archives>.*?)\n\s+\)\n\s+build_assets=",
+            self.source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(archive_block)
+        archives = re.findall(
+            r'"(hns-dane-browser-[^"]+\.(?:zip|tar\.gz))"',
+            archive_block.group("archives"),
+        )
+        self.assertEqual(len(archives), 14)
+        self.assertEqual(len(set(archives)), 14)
+        self.assertEqual(
+            len([name for name in archives if "browser-setup-" in name]),
+            6,
+        )
+        self.assertIn(
+            'release_assets=("${build_assets[@]}" "SHA256SUMS")',
+            self.source,
+        )
+
+    def test_remote_assets_match_local_names_sizes_and_digests_before_publish(
+        self,
+    ) -> None:
+        self.assertIn(
+            '"repos/${GH_REPO}/releases/tags/${RELEASE_TAG}"',
+            self.source,
+        )
+        self.assertIn(
+            ".assets[] | [.name, .size, (.digest // \"\")] | @tsv",
+            self.source,
+        )
+        self.assertIn('local_size="$(stat --format=%s "$local_path")"', self.source)
+        self.assertIn(
+            'local_digest="sha256:$(sha256sum "$local_path" | cut -d \' \' -f 1)"',
+            self.source,
+        )
+        final_verify = self.source.rfind("verify_exact_remote_assets")
+        publish = self.source.rfind(
+            'gh release edit "$RELEASE_TAG" --draft=false'
+        )
+        self.assertGreater(final_verify, 0)
+        self.assertGreater(publish, final_verify)
 
     def test_linux_release_is_static_musl_with_runtime_smoke_check(self) -> None:
-        self.assertIn("sudo apt-get install --no-install-recommends --yes musl-tools", self.source)
+        self.assertIn(
+            "sudo apt-get install --no-install-recommends --yes \\",
+            self.source,
+        )
+        self.assertIn("musl-tools", self.source)
         self.assertIn("readelf --program-headers", self.source)
         self.assertIn("readelf --dynamic", self.source)
+        self.assertIn('ldd "$setup"', self.source)
         self.assertIn("--print-host-manifest", self.source)
+        self.assertIn("scripts/package-release.py linux-runtime", self.source)
+        self.assertIn("libnss3-tools", self.source)
+        self.assertIn("libwayland-client0", self.source)
+        self.assertIn("libx11-6", self.source)
+        self.assertIn("HNS-DANE-Browser-Setup.AppDir", self.source)
+        self.assertIn('"$app/usr/libexec/certutil"', self.source)
+        self.assertIn('"${clean_helper[@]}" \\\n            -N', self.source)
+        self.assertIn('"$app/AppRun" --status', self.source)
+
+    def test_setup_embeds_exact_host_and_enforces_platform_runtime_policy(
+        self,
+    ) -> None:
+        self.assertIn("$env:HNS_NATIVE_HOST_PATH", self.source)
+        self.assertIn("matrix.native-rust-target", self.source)
+        self.assertIn("matrix.setup-rust-target", self.source)
+        self.assertIn("-p hns-browser-setup", self.source)
+        self.assertIn("--features embedded-host", self.source)
+        self.assertIn("--embedded-native-host", self.source)
+        self.assertIn("--linux-runtime", self.source)
+        self.assertIn("-C target-feature=+crt-static", self.source)
+        self.assertIn("dumpbin.exe", self.source)
+        self.assertIn("VCRUNTIME|MSVCP|UCRTBASE|api-ms-win-crt", self.source)
+        self.assertIn("otool -L", self.source)
+        self.assertIn("/System/Library/* | /usr/lib/*", self.source)
 
     def test_store_identity_and_source_metadata_are_mandatory(self) -> None:
         self.assertIn("vars.CHROMIUM_EXTENSION_ID", self.source)

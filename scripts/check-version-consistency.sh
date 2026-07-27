@@ -30,6 +30,7 @@ if len(set(versions.values())) != 1:
 
 expected_packages = {
     "rust/Cargo.lock": {
+        "hns-browser-setup",
         "hns-chromium-native-host",
         "hns-chromium-platform-runtime",
     },
@@ -57,5 +58,8 @@ for relative, names in expected_packages.items():
                 f"{relative}: {name} is {actual or 'missing'}; expected {rust_version}"
             )
 
-print(f"Chromium extension, native host, and Rust workspace agree on {rust_version}.")
+print(
+    f"Chromium extension, native host, Setup application, and Rust workspace "
+    f"agree on {rust_version}."
+)
 PY
