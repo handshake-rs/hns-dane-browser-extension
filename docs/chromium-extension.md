@@ -77,6 +77,48 @@ The extension requires an exact session/generation/policy/event match before
 rendering it. A newer observation without exact canonical evidence clears the
 older result and reports unavailable rather than synthesizing state.
 
+The popup is scoped to the active tab's current Chromium `documentId`, not to
+a process-global "last request." A bounded in-memory session map joins
+`webRequest` main-frame completion to `webNavigation` document lifecycle.
+Back/forward cache and History API changes may retain only the immutable
+receipt already bound to that same document. A new document restored from the
+HTTP cache may reuse a receipt only for the exact URL, runtime tuple, and
+header-maintenance epoch that originally produced it. Missing, mismatched, or
+concurrently ambiguous evidence is reported unavailable.
+
+Header maintenance invalidates pending navigation correlation and exact-URL
+cache reuse. It does not rewrite history: a document that was already
+committed may continue to show its immutable receipt, explicitly labeled as
+predating the latest header sync. A later document must obtain fresh
+correlated evidence.
+
+For an ICANN origin where Rust authenticates a defined WebPKI fallback, the
+CONNECT tunnel remains end-to-end between Chromium and the origin. Rust emits
+a bounded, sanitized decision with no HTTP status and no main-frame claim. The
+extension can bind that decision to a document only after Chromium reports a
+successful main-frame completion for the exact HTTPS host and port, runtime
+tuple, and native security-maintenance epoch. A retained same-host decision
+may describe Chromium reusing its existing tunnel; multiple non-equivalent
+fingerprint/evidence matches fail unavailable. The popup labels this
+provenance and states that Chromium, not the local Rust proxy, owns end-to-end
+WebPKI.
+
+That branch connects only to the explicit public IP and effective TCP port in
+Rust's selected namespace plan; it never resolves the origin through system
+DNS. The local CA is not prepared or presented, so Chromium's certificate
+viewer shows the actual origin chain. Independent bounded upload/download
+halves avoid throttling one direction behind an idle poll in the other.
+Failure to open the selected socket, publish its checked status, or satisfy
+the WebPKI-plan invariants returns a pre-TLS CONNECT failure and cannot fall
+back to local certificate issuance. HNS DANE and secure ICANN TLSA remain on
+the Rust TLS-termination path.
+
+The native `securityMaintenanceEpoch` is authoritative. The extension never
+predicts it: every header-sync attempt, successful or failed, is followed by a
+native status read before cache or tunnel-decision reuse can resume. This
+closes the interval where a sync may already have invalidated native evidence
+but a browser cache completion arrives against older extension state.
+
 When the verified HNS name proof itself contains all origin data, a successful
 page has no delegated UDP/TCP/DoH/P2P DNS trace. Shared status records that
 case as `LocalHnsProof`, an honest non-network provenance that is never a
@@ -180,9 +222,10 @@ uses the current user's Root store. Native-host registration is user-level.
 
 The installer creates one P-256 CA per installation. Its private key remains
 in the native host's protected data bundle. Rust issues only exact-host,
-short-lived leaf certificates after native name admission. The extension does
-not activate the PAC until platform trust installation succeeds and the
-matching SHA-256 marker exists.
+short-lived leaf certificates after native name admission on paths where Rust
+must terminate TLS to enforce HNS or ICANN DANE. Defined ICANN WebPKI fallback
+paths bypass this CA. The extension does not activate the PAC until platform
+trust installation succeeds and the matching SHA-256 marker exists.
 
 ## Uninstall
 
@@ -227,8 +270,10 @@ extension is disabled or uninstalled; orderly suspension also clears them.
   generation are returned.
 - Header synchronization takes the runtime maintenance write lock, so a chain
   advance or reorganization cannot overlap request proof validation or
-  publication. Page observations are cleared after synchronization and must be
-  re-established against the resulting canonical chain.
+  publication. Native status exposes only page and CONNECT observations from
+  the current maintenance epoch. Selective post-sync retention preserves a
+  new-epoch observation published after maintenance releases while stale or
+  late old-epoch observations remain unavailable.
 
 ## Qualification
 

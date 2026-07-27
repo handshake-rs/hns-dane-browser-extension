@@ -21,7 +21,10 @@ test("popup distinguishes the global header tip from the page proof anchor", () 
 });
 
 test("manual and automatic header sync share one bounded native operation", () => {
-  assert.match(worker, /case "syncHeadersNow":\s*\n\s*return synchronizeHeaders\(\)/);
+  assert.match(
+    worker,
+    /case "syncHeadersNow": \{[\s\S]*?await synchronizeHeaders\(\)[\s\S]*?statusForTab\(status, message\.tabId\)/
+  );
   assert.match(
     worker,
     /function synchronizeHeaders\(\) \{\s*if \(headerSyncOperation\) return headerSyncOperation;/
@@ -35,6 +38,14 @@ test("manual and automatic header sync share one bounded native operation", () =
 test("runtime lifecycle rejects legacy native status without authoritative freshness", () => {
   assert.match(worker, /validateStartResult[\s\S]*?!validHeaderSyncEnvelope\(result\)/);
   assert.match(worker, /validateStatusResult[\s\S]*?!validHeaderSyncEnvelope\(result\)/);
+  assert.match(
+    worker,
+    /validateStartResult[\s\S]*?result\.securityMaintenanceEpoch[\s\S]*?result\.recentConnectSecurityDecisions/
+  );
+  assert.match(
+    worker,
+    /validateStatusResult[\s\S]*?result\.securityMaintenanceEpoch[\s\S]*?result\.recentConnectSecurityDecisions/
+  );
 });
 
 test("maintenance reads local status, checks authoritative freshness, and rate limits attempts", () => {
@@ -52,12 +63,14 @@ test("maintenance reads local status, checks authoritative freshness, and rate l
 test("status requests do not queue behind sync and sync failure leaves the PAC active", () => {
   assert.match(
     worker,
-    /async function refreshNativeStatus\(\) \{[\s\S]*?if \(headerSyncOperation\) return publicStatus;[\s\S]*?client\.request\("status"\)/
+    /async function refreshNativeStatus\(allowDuringHeaderSync = false\) \{[\s\S]*?if \(headerSyncOperation && !allowDuringHeaderSync\) return publicStatus;[\s\S]*?client\.request\("status"\)/
   );
   const synchronization = worker.match(
     /function synchronizeHeaders\(\) \{[\s\S]*?\n\}\n\nasync function loadLastHeaderSyncAttempt/
   )?.[0];
   assert.ok(synchronization, "synchronizeHeaders function");
   assert.doesNotMatch(synchronization, /clearProxy|client\.disconnect/);
-  assert.match(synchronization, /headerSyncError: boundedError\(error\)/);
+  assert.match(synchronization, /await refreshNativeStatus\(true\)/);
+  assert.match(synchronization, /store\.ensureRuntime\(authoritativeStatus\)/);
+  assert.match(synchronization, /headerSyncError: boundedError\(syncError\)/);
 });

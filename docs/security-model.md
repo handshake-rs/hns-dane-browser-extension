@@ -93,6 +93,23 @@ alias, HTTPS/SVCB, denial, and TLSA observations. For HTTPS/WSS:
 The TLSA owner is derived from the effective host, port, and transport for
 every selected ICANN origin. This is `DANE via ICANN DoH`.
 
+Securely present ICANN TLSA remains on the local Rust TLS-termination path so
+Rust can enforce DANE. The two defined WebPKI outcomes take a different path:
+the proxy opens the exact public IP selected by the retained namespace plan
+and carries Chromium's TLS bytes over a raw CONNECT tunnel. Chromium therefore
+performs the end-to-end WebPKI handshake and displays the origin's actual
+certificate chain; the local CA is neither presented nor issued for that
+connection. A selected-WebPKI origin-connect failure is terminal at CONNECT
+and cannot fall back to local TLS.
+
+The raw tunnel owns independent bounded reader and writer halves so an idle
+upload cannot throttle a download, and vice versa. It cannot move bytes before
+the namespace binding is committed and the authenticated CONNECT 200 is
+written under the same invalidation-exclusion boundary. The tunnel remains
+gated unless the CONNECT write succeeds.
+Header maintenance advances a native epoch which revokes both halves; stop,
+policy change, readiness loss, or generation rotation also closes them.
+
 ## Namespace ambiguity
 
 The PAC routes ordinary DNS HTTP(S)/WS(S) names but makes no namespace
@@ -144,9 +161,11 @@ cannot change another request's published choice.
 - Proxy stop, native disconnect, malformed health state, or failed policy/PAC
   update clears active browser proxy configuration.
 
-The local CA can authenticate the browser-to-loopback hop only. It is not an
-origin trust substitute; selected-origin DNSSEC/DANE or WebPKI policy is
-enforced independently inside Rust.
+The local CA authenticates the browser-to-loopback hop only on branches where
+Rust must terminate TLS, including HNS DANE and ICANN DANE. It is not an
+origin trust substitute. For a defined ICANN WebPKI fallback, Rust
+authenticates the namespace and DNSSEC/TLSA policy decision, then bypasses
+local TLS so Chromium validates and displays the real origin certificate.
 
 ## Status boundary
 

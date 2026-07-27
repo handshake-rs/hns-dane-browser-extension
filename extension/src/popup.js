@@ -1,4 +1,5 @@
 import {
+  currentConnectSecurityDecision,
   currentSecurityResult,
   namespaceLabel,
   namespaceOutcomeLabel,
@@ -21,7 +22,10 @@ async function retry() {
 }
 
 async function refresh() {
-  const response = await chrome.runtime.sendMessage({ type: "getStatus" });
+  const response = await chrome.runtime.sendMessage({
+    type: "getStatus",
+    tabId: await activeTabId()
+  });
   const status = response?.ok ? response.result : { state: "degraded", reason: response?.error };
   renderStatus(status);
 }
@@ -29,7 +33,10 @@ async function refresh() {
 async function syncHeadersNow() {
   setSyncBusy(true);
   try {
-    const response = await chrome.runtime.sendMessage({ type: "syncHeadersNow" });
+    const response = await chrome.runtime.sendMessage({
+      type: "syncHeadersNow",
+      tabId: await activeTabId()
+    });
     if (response?.ok) {
       renderStatus(response.result);
       return;
@@ -42,7 +49,10 @@ async function syncHeadersNow() {
 
 async function showSyncError(error) {
   try {
-    const statusResponse = await chrome.runtime.sendMessage({ type: "getStatus" });
+    const statusResponse = await chrome.runtime.sendMessage({
+      type: "getStatus",
+      tabId: await activeTabId()
+    });
     if (statusResponse?.ok) renderStatus(statusResponse.result);
   } catch {
     // The explicit error below remains useful if status refresh is unavailable.
@@ -53,12 +63,20 @@ async function showSyncError(error) {
 function renderStatus(status) {
   const active = status.state === "active";
   const security = currentSecurityResult(status.latestMainFrameSecurity, status);
+  const connectDecision = connectDecisionForStatus(status);
+  const displayedSecurity = security ?? connectDecision;
   renderHeaderStatus(status);
   document.querySelector("#state-title").textContent = active
     ? "Rust security path active"
     : "Handshake browsing blocked";
   document.querySelector("#state-detail").textContent = security
-    ? namespaceSummary(security)
+    ? namespaceSummary(security, status.latestMainFrameSecurityReceiptState)
+    : connectDecision
+      ? connectDecisionSummary(
+          connectDecision,
+          status.latestMainFrameSecurityReceiptState,
+          status.latestMainFrameSecurityReceiptSource
+        )
     : active
       ? status.latestMainFrameSecurityUnavailableReason
         ? `Checked main-frame security status unavailable: ${stateLabel(
@@ -71,40 +89,45 @@ function renderStatus(status) {
   document.querySelector("#policy-generation").textContent =
     status.policyGeneration ?? "—";
   document.querySelector("#ca-state").textContent = status.caReady ? "Installed" : "Not ready";
-  document.querySelector("#security-origin").textContent = security?.host ?? "—";
-  document.querySelector("#security-proof-anchor").textContent = pageProofAnchor(security);
-  document.querySelector("#security-namespace-outcome").textContent = security
-    ? namespaceOutcomeLabel(security.namespaceOutcome)
+  document.querySelector("#security-origin").textContent =
+    displayedSecurity?.host ?? "—";
+  document.querySelector("#security-proof-anchor").textContent =
+    pageProofAnchor(displayedSecurity);
+  document.querySelector("#security-namespace-outcome").textContent = displayedSecurity
+    ? namespaceOutcomeLabel(displayedSecurity.namespaceOutcome)
     : "—";
-  document.querySelector("#security-namespace-selected").textContent = security
-    ? namespaceLabel(security.selectedNamespace)
+  document.querySelector("#security-namespace-selected").textContent = displayedSecurity
+    ? namespaceLabel(displayedSecurity.selectedNamespace)
     : "—";
-  document.querySelector("#security-namespace-reason").textContent = security
-    ? namespaceReasonLabel(security.namespaceSelectionReason)
+  document.querySelector("#security-namespace-reason").textContent = displayedSecurity
+    ? namespaceReasonLabel(displayedSecurity.namespaceSelectionReason)
     : "—";
-  document.querySelector("#security-hns-resolution").textContent = security
-    ? stateLabel(security.hnsResolutionState)
+  document.querySelector("#security-hns-resolution").textContent = displayedSecurity
+    ? stateLabel(displayedSecurity.hnsResolutionState)
     : "—";
-  document.querySelector("#security-icann-resolution").textContent = security
-    ? stateLabel(security.icannResolutionState)
+  document.querySelector("#security-icann-resolution").textContent = displayedSecurity
+    ? stateLabel(displayedSecurity.icannResolutionState)
     : "—";
-  document.querySelector("#security-transport").textContent = security
-    ? transportLabel(security.actualSelectedTransport)
+  document.querySelector("#security-transport").textContent = displayedSecurity
+    ? transportLabel(displayedSecurity.actualSelectedTransport)
     : "—";
-  document.querySelector("#security-hns-proof").textContent = security
-    ? stateLabel(security.localHnsProofState)
+  document.querySelector("#security-receipt-source").textContent = displayedSecurity
+    ? receiptSourceLabel(status.latestMainFrameSecurityReceiptSource)
     : "—";
-  document.querySelector("#security-dnssec").textContent = security
-    ? stateLabel(security.localDnssecState)
+  document.querySelector("#security-hns-proof").textContent = displayedSecurity
+    ? stateLabel(displayedSecurity.localHnsProofState)
     : "—";
-  document.querySelector("#security-tlsa").textContent = security
-    ? stateLabel(security.localTlsaState)
+  document.querySelector("#security-dnssec").textContent = displayedSecurity
+    ? stateLabel(displayedSecurity.localDnssecState)
     : "—";
-  document.querySelector("#security-dane").textContent = security
-    ? stateLabel(security.localDaneState)
+  document.querySelector("#security-tlsa").textContent = displayedSecurity
+    ? stateLabel(displayedSecurity.localTlsaState)
+    : "—";
+  document.querySelector("#security-dane").textContent = displayedSecurity
+    ? stateLabel(displayedSecurity.localDaneState)
     : "—";
   document.querySelector("#security-event").textContent =
-    security?.eventSequence ?? "—";
+    displayedSecurity?.eventSequence ?? "—";
 }
 
 function renderHeaderStatus(status) {
@@ -137,17 +160,86 @@ function setSyncBusy(syncing, error = null) {
     : `The header sync request failed: ${String(error).slice(0, 512)}`;
 }
 
-function namespaceSummary(security) {
+function connectDecisionForStatus(status) {
+  const receipt = status.latestMainFrameConnectDecisionReceipt;
+  const decision = receipt?.nativeDecision;
+  if (
+    receipt?.schemaVersion !== 1 ||
+    receipt.receiptKind !== "browserWebPkiDocumentReceipt" ||
+    !decision
+  ) {
+    return null;
+  }
+  return currentConnectSecurityDecision(decision, {
+    ...status,
+    securityMaintenanceEpoch: decision.maintenanceEpoch
+  });
+}
+
+function connectDecisionSummary(decision, receiptState, receiptSource) {
+  const namespace = namespaceSummary(decision, receiptState);
+  if (receiptSource === "browserWebPkiConnectionReuse") {
+    return `${namespace} Chromium owns end-to-end WebPKI for this document over a retained same-host tunnel that Rust authorized in its maintenance epoch.`;
+  }
+  if (receiptSource === "browserWebPkiCacheReceipt") {
+    return `${namespace} Chromium owns end-to-end WebPKI; this exact cached URL retains its correlated Rust ICANN fallback decision.`;
+  }
+  return `${namespace} Chromium owns end-to-end WebPKI for this document; Rust authenticated the ICANN namespace and WebPKI fallback decision.`;
+}
+
+function receiptSourceLabel(source) {
+  const labels = {
+    rustHttpResponse: "Rust-observed origin response",
+    rustHttpResponseCache: "Exact-URL Rust receipt from Chromium cache",
+    browserWebPkiPassthrough: "Rust CONNECT decision + Chromium completion",
+    browserWebPkiConnectionReuse: "Current-epoch Rust decision for reused tunnel",
+    browserWebPkiCacheReceipt: "Exact-URL WebPKI decision from Chromium cache"
+  };
+  return labels[source] ?? "Unavailable";
+}
+
+function namespaceSummary(security, receiptState) {
   const outcome = namespaceOutcomeLabel(security.namespaceOutcome);
   if (security.namespaceOutcome === "bothDivergent") {
     return `${outcome} for ${security.host}; ${namespaceLabel(
       security.selectedNamespace
-    )} was selected by ${namespaceReasonLabel(security.namespaceSelectionReason)}.`;
+    )} was selected by ${namespaceReasonLabel(
+      security.namespaceSelectionReason
+    )}.${receiptQualifier(receiptState)}`;
   }
   if (security.selectedNamespace) {
-    return `${outcome} for ${security.host}; ${namespaceLabel(
-      security.selectedNamespace
-    )} is active.`;
+    const selected = namespaceLabel(security.selectedNamespace);
+    if (receiptState === "committedBeforeHeaderMaintenance") {
+      return `${outcome} for ${security.host}; ${selected} was selected for this committed document before the latest header sync.`;
+    }
+    if (receiptState === "browserCacheReceipt") {
+      return `${outcome} for ${security.host}; ${selected} was verified when this exact URL entered Chromium's cache.`;
+    }
+    if (receiptState === "restoredDocument") {
+      return `${outcome} for ${security.host}; ${selected} was verified for this restored document.`;
+    }
+    return `${outcome} for ${security.host}; ${selected} is active.`;
   }
-  return `${outcome} for ${security.host}; the request failed closed.`;
+  return `${outcome} for ${security.host}; the request failed closed.${receiptQualifier(
+    receiptState
+  )}`;
+}
+
+function receiptQualifier(receiptState) {
+  if (receiptState === "committedBeforeHeaderMaintenance") {
+    return " This immutable receipt belongs to the committed document and predates the latest header sync.";
+  }
+  if (receiptState === "browserCacheReceipt") {
+    return " This exact URL was restored from Chromium's cache with its same-generation receipt.";
+  }
+  if (receiptState === "restoredDocument") {
+    return " This is the same checked document restored from browser history.";
+  }
+  return "";
+}
+
+async function activeTabId() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = tabs?.[0]?.id;
+  return Number.isSafeInteger(tabId) && tabId >= 0 ? tabId : null;
 }

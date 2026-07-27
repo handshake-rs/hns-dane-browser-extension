@@ -157,6 +157,19 @@ pub trait OriginTransport {
         Err(TransportError::UnsupportedTransport)
     }
 
+    /// Opens a raw TCP connection to an already-resolved origin endpoint.
+    ///
+    /// This deliberately performs no TLS handshake. It exists so a browser
+    /// can retain end-to-end WebPKI validation after the gateway has selected
+    /// an ICANN endpoint and authenticated the TLSA fallback decision. Default
+    /// implementations fail closed.
+    fn open_webpki_passthrough(
+        &self,
+        _request: &OriginRequest,
+    ) -> Result<OriginWebPkiPassthrough, TransportError> {
+        Err(TransportError::UnsupportedTransport)
+    }
+
     fn fetch_to_writer(
         &self,
         request: &OriginRequest,
@@ -171,6 +184,34 @@ pub trait OriginTransport {
 pub trait ReadWrite: Read + Write + Send {}
 
 impl<T: Read + Write + Send> ReadWrite for T {}
+
+/// Independently owned halves of one browser-TLS passthrough socket.
+///
+/// The split is part of the security/performance contract: a quiet browser
+/// upload direction must never serialize a large origin download behind a
+/// polling read. Both halves must use bounded I/O waits.
+pub struct OriginWebPkiPassthrough {
+    pub reader: Box<dyn Read + Send>,
+    pub writer: Box<dyn Write + Send>,
+    pub shutdown: Arc<dyn OriginPassthroughShutdown>,
+}
+
+/// Out-of-band close used to wake both passthrough directions on
+/// cancellation, policy revocation, EOF, or an I/O failure.
+///
+/// Implementations must be thread-safe, nonblocking, idempotent, and wake
+/// both independently owned halves. Either pump direction may call it.
+pub trait OriginPassthroughShutdown: Send + Sync {
+    fn shutdown(&self);
+}
+
+struct TcpPassthroughShutdown(TcpStream);
+
+impl OriginPassthroughShutdown for TcpPassthroughShutdown {
+    fn shutdown(&self) {
+        let _result = self.0.shutdown(std::net::Shutdown::Both);
+    }
+}
 
 struct CountingWriter<'a> {
     inner: &'a mut dyn Write,
@@ -482,6 +523,54 @@ impl TcpHttpTransport {
 
     pub fn limits(&self) -> TransportLimits {
         self.limits
+    }
+
+    fn open_explicit_webpki_passthrough(
+        &self,
+        request: &OriginRequest,
+    ) -> Result<OriginWebPkiPassthrough, TransportError> {
+        validate_request_common(request, self.limits)?;
+        validate_browser_tls_decision(&request.tls)?;
+        if !matches!(
+            request.scheme.to_ascii_lowercase().as_str(),
+            "https" | "wss"
+        ) || request.protocol == OriginProtocol::Http3
+            || request.tls.mode != DomainTrustMode::IcannWebPki
+            || request.tls.namespace_fingerprint.is_none()
+            || request.tls.service_transport != TlsaTransport::Tcp
+            || !matches!(
+                request.tls.browser_tls_decision,
+                Some(
+                    BrowserTlsDecision::WebPkiAuthenticatedAbsence
+                        | BrowserTlsDecision::WebPkiInsecureDelegation
+                )
+            )
+        {
+            return Err(TransportError::InvalidRequest);
+        }
+        let connect_ip = request
+            .connect_host
+            .as_deref()
+            .and_then(|host| host.parse::<IpAddr>().ok())
+            .ok_or(TransportError::InvalidRequest)?;
+        let writer = TcpStream::connect_timeout(
+            &SocketAddr::new(connect_ip, request.port),
+            self.connect_timeout,
+        )
+        .map_err(io_error)?;
+        writer
+            .set_read_timeout(Some(TUNNEL_IO_TIMEOUT))
+            .map_err(io_error)?;
+        writer
+            .set_write_timeout(Some(TUNNEL_IO_TIMEOUT))
+            .map_err(io_error)?;
+        let reader = writer.try_clone().map_err(io_error)?;
+        let shutdown = writer.try_clone().map_err(io_error)?;
+        Ok(OriginWebPkiPassthrough {
+            reader: Box::new(reader),
+            writer: Box::new(writer),
+            shutdown: Arc::new(TcpPassthroughShutdown(shutdown)),
+        })
     }
 
     /// Performs one HTTP/1.1 request to an explicit IP address while enforcing
@@ -1357,6 +1446,13 @@ impl OriginTransport for TcpHttpTransport {
 
     fn open_tunnel(&self, request: &OriginRequest) -> Result<OriginTunnel, TransportError> {
         self.open_http11_tunnel(request)
+    }
+
+    fn open_webpki_passthrough(
+        &self,
+        request: &OriginRequest,
+    ) -> Result<OriginWebPkiPassthrough, TransportError> {
+        self.open_explicit_webpki_passthrough(request)
     }
 
     fn fetch_to_writer(
@@ -2860,6 +2956,69 @@ mod tests {
 
         assert_eq!(response.status, 200);
         assert_eq!(response.body, b"ok");
+    }
+
+    #[test]
+    fn webpki_passthrough_uses_only_the_explicit_selected_ip() {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4];
+            stream.read_exact(&mut request).unwrap();
+            assert_eq!(&request, b"ping");
+            stream.write_all(b"pong").unwrap();
+        });
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+        let mut request = request(address);
+        request.scheme = "https".to_owned();
+        request.tls.dnssec_secure = true;
+        request.tls.namespace_fingerprint = Some("selected-icann".to_owned());
+        request.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+
+        let mut tunnel = transport.open_webpki_passthrough(&request).unwrap();
+        tunnel.writer.write_all(b"ping").unwrap();
+        tunnel.writer.flush().unwrap();
+        let mut response = [0_u8; 4];
+        tunnel.reader.read_exact(&mut response).unwrap();
+
+        assert_eq!(&response, b"pong");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn webpki_passthrough_rejects_dane_and_unresolved_endpoints() {
+        let transport = TcpHttpTransport::default();
+        let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 443)));
+        request.scheme = "https".to_owned();
+        request.tls.dnssec_secure = true;
+        request.tls.namespace_fingerprint = Some("selected-icann".to_owned());
+        request.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+
+        request.connect_host = Some("example.com".to_owned());
+        assert!(matches!(
+            transport.open_webpki_passthrough(&request),
+            Err(TransportError::InvalidRequest)
+        ));
+
+        request.connect_host = Some(Ipv4Addr::LOCALHOST.to_string());
+        request.tls.tlsa_records.push(TlsaRecord {
+            usage: TlsaUsage::DaneEe,
+            selector: TlsaSelector::SubjectPublicKeyInfo,
+            matching: TlsaMatching::Sha256,
+            association_data: vec![0_u8; 32],
+        });
+        request.tls.browser_tls_decision = Some(BrowserTlsDecision::EnforceDane {
+            record_count: std::num::NonZeroUsize::new(1).unwrap(),
+        });
+        assert!(matches!(
+            transport.open_webpki_passthrough(&request),
+            Err(TransportError::InvalidRequest)
+        ));
     }
 
     #[test]

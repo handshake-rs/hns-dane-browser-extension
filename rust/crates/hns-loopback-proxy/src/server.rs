@@ -2,8 +2,9 @@
 
 use crate::auth::ProxyAuthorization;
 use crate::backend::{
-    BackendError, CancellationToken, ProxyBackend, ProxyHeader, ProxyRequest, ProxyRequestBody,
-    ProxyResponse, ProxyResponseBody, ProxyTunnel, ProxyTunnelOpen,
+    BackendError, CancellationToken, ProxyBackend, ProxyConnectOpen, ProxyConnectTunnel,
+    ProxyHeader, ProxyRequest, ProxyRequestBody, ProxyResponse, ProxyResponseBody, ProxyTunnel,
+    ProxyTunnelOpen,
 };
 use crate::certificate::LocalTlsIdentityStore;
 use crate::config::{ProxyConfig, ProxyLimits, ProxyRoutingMode, ProxyTimeouts};
@@ -23,8 +24,8 @@ use crate::listener::{
     RejectionHandler,
 };
 use crate::metadata::{
-    NoopProxyResponseMetadataObserver, ProxyResponseMetadataObservation,
-    ProxyResponseMetadataObserver,
+    NoopProxyResponseMetadataObserver, ProxyMetadataObservationKind,
+    ProxyResponseMetadataObservation, ProxyResponseMetadataObserver,
 };
 use crate::rate_limit::{
     RateLimitConfig, RateLimitConfigError, RateLimitDecision, RateLimitScope, RequestRateLimiter,
@@ -38,15 +39,16 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
-use std::thread::ThreadId;
+use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const RESPONSE_COPY_BUFFER_BYTES: usize = 16 * 1024;
 const TUNNEL_COPY_BUFFER_BYTES: usize = 16 * 1024;
 const TUNNEL_CLIENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const CONNECT_TUNNEL_IO_TIMEOUT: Duration = Duration::from_millis(250);
 const CONNECT_ESTABLISHED_RESPONSE: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
 
 /// Failure to start a proxy generation. No listener or credential is retained
@@ -742,6 +744,103 @@ fn handle_connect(
         return;
     }
     if !admit_rate(&mut stream, context, &canonical_host, method, false) {
+        return;
+    }
+
+    let connect_started = Instant::now();
+    let connect = catch_unwind(AssertUnwindSafe(|| {
+        context.backend.open_connect(
+            ProxyRequest {
+                method: "CONNECT".to_owned(),
+                scheme: "https".to_owned(),
+                host: canonical_host.as_str().to_owned(),
+                port: authority.port(),
+                path_and_query: "/".to_owned(),
+                headers: Vec::new(),
+                body: ProxyRequestBody::Empty,
+            },
+            cancellation,
+        )
+    }))
+    .unwrap_or(Err(BackendError::Internal));
+    let connect = match connect {
+        Ok(connect) => connect,
+        Err(BackendError::Cancelled) => return,
+        Err(_error) => ProxyConnectOpen::WebPkiUnavailable,
+    };
+    if matches!(&connect, ProxyConnectOpen::WebPkiUnavailable) {
+        reject_scoped_request(
+            &mut stream,
+            context,
+            &canonical_host,
+            method,
+            502,
+            "ICANN WebPKI Origin Unavailable",
+            RequestRejectionReason::InvalidRequest,
+        );
+        return;
+    }
+    if let ProxyConnectOpen::WebPkiPassthrough(ProxyConnectTunnel {
+        reader: origin_reader,
+        writer: origin_writer,
+        shutdown: origin_shutdown,
+        observation_id,
+        correlation_epoch,
+        publication_permit,
+    }) = connect
+    {
+        if cancellation.is_cancelled()
+            || publication_permit
+                .publish(|| {
+                    if cancellation.is_cancelled() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "proxy generation was cancelled before CONNECT publication",
+                        ));
+                    }
+                    stream.write_all(CONNECT_ESTABLISHED_RESPONSE)?;
+                    stream.flush()
+                })
+                .is_err()
+        {
+            origin_shutdown.shutdown();
+            let _result = stream.shutdown(Shutdown::Both);
+            return;
+        }
+        observe_connect_security_decision(
+            context,
+            &canonical_host,
+            authority.port(),
+            observation_id,
+            correlation_epoch,
+        );
+        match pump_connect_tunnel(
+            stream,
+            origin_reader,
+            origin_writer,
+            origin_shutdown,
+            cancellation,
+        ) {
+            TunnelPumpOutcome::Completed => observe_request(
+                context,
+                &canonical_host,
+                method,
+                RequestPhase::Completed {
+                    status_code: 200,
+                    elapsed: connect_started.elapsed(),
+                },
+            ),
+            TunnelPumpOutcome::OriginIo => observe_request(
+                context,
+                &canonical_host,
+                method,
+                RequestPhase::BackendFailed {
+                    kind: BackendFailureKind::Upstream,
+                    elapsed: connect_started.elapsed(),
+                },
+            ),
+            TunnelPumpOutcome::ClientIo | TunnelPumpOutcome::Cancelled => {}
+        }
         return;
     }
 
@@ -1497,6 +1596,210 @@ fn retryable_tunnel_read(error: &io::Error) -> bool {
     )
 }
 
+fn pump_connect_tunnel(
+    client: TcpStream,
+    origin_reader: Box<dyn Read + Send>,
+    origin_writer: Box<dyn Write + Send>,
+    origin_shutdown: Arc<dyn crate::ProxyConnectShutdown>,
+    cancellation: &CancellationToken,
+) -> TunnelPumpOutcome {
+    let client_reader = match client.try_clone() {
+        Ok(stream) => stream,
+        Err(_) => {
+            origin_shutdown.shutdown();
+            let _result = client.shutdown(Shutdown::Both);
+            return TunnelPumpOutcome::ClientIo;
+        }
+    };
+    let client_shutdown = match client.try_clone() {
+        Ok(stream) => stream,
+        Err(_) => {
+            origin_shutdown.shutdown();
+            let _result = client.shutdown(Shutdown::Both);
+            return TunnelPumpOutcome::ClientIo;
+        }
+    };
+    if client_reader
+        .set_read_timeout(Some(CONNECT_TUNNEL_IO_TIMEOUT))
+        .is_err()
+        || client
+            .set_write_timeout(Some(CONNECT_TUNNEL_IO_TIMEOUT))
+            .is_err()
+    {
+        origin_shutdown.shutdown();
+        let _result = client.shutdown(Shutdown::Both);
+        return TunnelPumpOutcome::ClientIo;
+    }
+
+    // Each direction owns its socket half. A quiet browser-upload direction
+    // therefore cannot serialize a large origin download behind a polling
+    // read, while bounded waits still make cancellation and revocation joinable.
+    let first_outcome = Arc::new(AtomicU8::new(0));
+    let upload_outcome = Arc::clone(&first_outcome);
+    let upload_cancellation = cancellation.clone();
+    let upload_origin_shutdown = Arc::clone(&origin_shutdown);
+    let upload_client_shutdown = match client_shutdown.try_clone() {
+        Ok(stream) => stream,
+        Err(_) => {
+            origin_shutdown.shutdown();
+            let _result = client.shutdown(Shutdown::Both);
+            return TunnelPumpOutcome::ClientIo;
+        }
+    };
+    let upload = match thread::Builder::new()
+        .name("hns-proxy-connect-upload".to_owned())
+        .spawn(move || {
+            pump_connect_upload(
+                client_reader,
+                origin_writer,
+                &upload_cancellation,
+                &upload_outcome,
+                upload_client_shutdown,
+                upload_origin_shutdown,
+            );
+        }) {
+        Ok(upload) => upload,
+        Err(_) => {
+            origin_shutdown.shutdown();
+            let _result = client.shutdown(Shutdown::Both);
+            return TunnelPumpOutcome::OriginIo;
+        }
+    };
+
+    pump_connect_download(
+        client,
+        origin_reader,
+        cancellation,
+        &first_outcome,
+        client_shutdown,
+        Arc::clone(&origin_shutdown),
+    );
+    if upload.join().is_err() {
+        record_connect_outcome(&first_outcome, TunnelPumpOutcome::OriginIo);
+        origin_shutdown.shutdown();
+    }
+    connect_outcome(&first_outcome)
+}
+
+fn pump_connect_upload(
+    mut client: TcpStream,
+    mut origin: Box<dyn Write + Send>,
+    cancellation: &CancellationToken,
+    first_outcome: &AtomicU8,
+    client_shutdown: TcpStream,
+    origin_shutdown: Arc<dyn crate::ProxyConnectShutdown>,
+) {
+    let mut buffer = [0_u8; TUNNEL_COPY_BUFFER_BYTES];
+    let outcome = loop {
+        if cancellation.is_cancelled() {
+            break TunnelPumpOutcome::Cancelled;
+        }
+        if first_outcome.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        match client.read(&mut buffer) {
+            Ok(0) => break TunnelPumpOutcome::Completed,
+            Ok(count) if count > buffer.len() => break TunnelPumpOutcome::ClientIo,
+            Ok(count) => {
+                let write = catch_unwind(AssertUnwindSafe(|| {
+                    origin.write_all(&buffer[..count])?;
+                    origin.flush()
+                }));
+                if !matches!(write, Ok(Ok(()))) {
+                    break if cancellation.is_cancelled() {
+                        TunnelPumpOutcome::Cancelled
+                    } else {
+                        TunnelPumpOutcome::OriginIo
+                    };
+                }
+            }
+            Err(error) if retryable_tunnel_read(&error) => {}
+            Err(_) => {
+                break if cancellation.is_cancelled() {
+                    TunnelPumpOutcome::Cancelled
+                } else {
+                    TunnelPumpOutcome::ClientIo
+                };
+            }
+        }
+    };
+    record_connect_outcome(first_outcome, outcome);
+    origin_shutdown.shutdown();
+    let _result = client_shutdown.shutdown(Shutdown::Both);
+}
+
+fn pump_connect_download(
+    mut client: TcpStream,
+    mut origin: Box<dyn Read + Send>,
+    cancellation: &CancellationToken,
+    first_outcome: &AtomicU8,
+    client_shutdown: TcpStream,
+    origin_shutdown: Arc<dyn crate::ProxyConnectShutdown>,
+) {
+    let mut buffer = [0_u8; TUNNEL_COPY_BUFFER_BYTES];
+    let outcome = loop {
+        if cancellation.is_cancelled() {
+            break TunnelPumpOutcome::Cancelled;
+        }
+        if first_outcome.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        let read = catch_unwind(AssertUnwindSafe(|| origin.read(&mut buffer)));
+        match read {
+            Ok(Ok(0)) => break TunnelPumpOutcome::Completed,
+            Ok(Ok(count)) if count > buffer.len() => break TunnelPumpOutcome::OriginIo,
+            Ok(Ok(count)) => {
+                if client.write_all(&buffer[..count]).is_err() || client.flush().is_err() {
+                    break if cancellation.is_cancelled() {
+                        TunnelPumpOutcome::Cancelled
+                    } else {
+                        TunnelPumpOutcome::ClientIo
+                    };
+                }
+            }
+            Ok(Err(error)) if retryable_tunnel_read(&error) => {}
+            Ok(Err(_)) | Err(_) => {
+                break if cancellation.is_cancelled() {
+                    TunnelPumpOutcome::Cancelled
+                } else {
+                    TunnelPumpOutcome::OriginIo
+                };
+            }
+        }
+    };
+    record_connect_outcome(first_outcome, outcome);
+    origin_shutdown.shutdown();
+    let _result = client_shutdown.shutdown(Shutdown::Both);
+}
+
+fn record_connect_outcome(first_outcome: &AtomicU8, outcome: TunnelPumpOutcome) {
+    let _result = first_outcome.compare_exchange(
+        0,
+        connect_outcome_code(outcome),
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+}
+
+fn connect_outcome(first_outcome: &AtomicU8) -> TunnelPumpOutcome {
+    match first_outcome.load(Ordering::Acquire) {
+        1 => TunnelPumpOutcome::Completed,
+        2 => TunnelPumpOutcome::ClientIo,
+        3 => TunnelPumpOutcome::OriginIo,
+        4 => TunnelPumpOutcome::Cancelled,
+        _ => TunnelPumpOutcome::OriginIo,
+    }
+}
+
+const fn connect_outcome_code(outcome: TunnelPumpOutcome) -> u8 {
+    match outcome {
+        TunnelPumpOutcome::Completed => 1,
+        TunnelPumpOutcome::ClientIo => 2,
+        TunnelPumpOutcome::OriginIo => 3,
+        TunnelPumpOutcome::Cancelled => 4,
+    }
+}
+
 fn observe_invalid_response(
     context: &ServerContext,
     host: &crate::NormalizedHost,
@@ -2022,7 +2325,37 @@ fn observe_response_metadata(
         status_code,
         likely_main_frame,
         observation_id,
+        ProxyMetadataObservationKind::OriginResponse,
+        None,
+        None,
         metadata.clone(),
+    );
+    let _result = catch_unwind(AssertUnwindSafe(|| {
+        context.metadata_observer.observe(&observation);
+    }));
+}
+
+fn observe_connect_security_decision(
+    context: &ServerContext,
+    host: &str,
+    port: u16,
+    observation_id: Option<u64>,
+    correlation_epoch: u64,
+) {
+    let Ok(host) = ObservedHost::new(host) else {
+        return;
+    };
+    let observation = ProxyResponseMetadataObservation::new(
+        context.generation,
+        host,
+        ObservedMethod::Connect,
+        200,
+        false,
+        observation_id,
+        ProxyMetadataObservationKind::WebPkiConnectDecision,
+        Some(port),
+        Some(correlation_epoch),
+        crate::InternalResponseMetadata::default(),
     );
     let _result = catch_unwind(AssertUnwindSafe(|| {
         context.metadata_observer.observe(&observation);
@@ -2369,6 +2702,256 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    struct ConnectPassthroughBackend {
+        requests: Mutex<Vec<ProxyRequest>>,
+    }
+
+    struct ConnectEchoState {
+        pending: Mutex<VecDeque<u8>>,
+        shutdown: AtomicBool,
+    }
+
+    struct ConnectEchoReader(Arc<ConnectEchoState>);
+
+    impl Read for ConnectEchoReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let mut pending = self
+                .0
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if pending.is_empty() {
+                if self.0.shutdown.load(AtomicOrdering::Acquire) {
+                    return Ok(0);
+                }
+                drop(pending);
+                thread::sleep(Duration::from_millis(5));
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "idle test tunnel"));
+            }
+            let count = buffer.len().min(pending.len());
+            for output in &mut buffer[..count] {
+                *output = pending.pop_front().unwrap();
+            }
+            Ok(count)
+        }
+    }
+
+    struct ConnectEchoWriter(Arc<ConnectEchoState>);
+
+    impl Write for ConnectEchoWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            if self.0.shutdown.load(AtomicOrdering::Acquire) {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "test tunnel was shut down",
+                ));
+            }
+            self.0
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .extend(buffer.iter().copied());
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct ConnectEchoShutdown(Arc<ConnectEchoState>);
+
+    impl crate::ProxyConnectShutdown for ConnectEchoShutdown {
+        fn shutdown(&self) {
+            self.0.shutdown.store(true, AtomicOrdering::Release);
+        }
+    }
+
+    struct NoopConnectShutdown;
+
+    impl crate::ProxyConnectShutdown for NoopConnectShutdown {
+        fn shutdown(&self) {}
+    }
+
+    struct BulkDownloadBackend {
+        bytes: Vec<u8>,
+    }
+
+    impl ProxyBackend for BulkDownloadBackend {
+        fn open_connect(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyConnectOpen, BackendError> {
+            Ok(ProxyConnectOpen::WebPkiPassthrough(ProxyConnectTunnel {
+                reader: Box::new(Cursor::new(self.bytes.clone())),
+                writer: Box::new(io::sink()),
+                shutdown: Arc::new(NoopConnectShutdown),
+                observation_id: None,
+                correlation_epoch: 1,
+                publication_permit: ProxyPublicationPermit::default(),
+            }))
+        }
+
+        fn execute(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyResponse, BackendError> {
+            Err(BackendError::Internal)
+        }
+    }
+
+    struct BulkUploadState {
+        received: std::sync::atomic::AtomicUsize,
+        shutdown: AtomicBool,
+    }
+
+    struct IdleOriginReader(Arc<BulkUploadState>);
+
+    impl Read for IdleOriginReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            if self.0.shutdown.load(AtomicOrdering::Acquire) {
+                return Ok(0);
+            }
+            thread::sleep(Duration::from_millis(25));
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "idle origin test reader",
+            ))
+        }
+    }
+
+    struct CountingOriginWriter(Arc<BulkUploadState>);
+
+    impl Write for CountingOriginWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0
+                .received
+                .fetch_add(buffer.len(), AtomicOrdering::AcqRel);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct BulkUploadShutdown(Arc<BulkUploadState>);
+
+    impl crate::ProxyConnectShutdown for BulkUploadShutdown {
+        fn shutdown(&self) {
+            self.0.shutdown.store(true, AtomicOrdering::Release);
+        }
+    }
+
+    struct BulkUploadBackend {
+        state: Arc<BulkUploadState>,
+    }
+
+    impl ProxyBackend for BulkUploadBackend {
+        fn open_connect(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyConnectOpen, BackendError> {
+            Ok(ProxyConnectOpen::WebPkiPassthrough(ProxyConnectTunnel {
+                reader: Box::new(IdleOriginReader(Arc::clone(&self.state))),
+                writer: Box::new(CountingOriginWriter(Arc::clone(&self.state))),
+                shutdown: Arc::new(BulkUploadShutdown(Arc::clone(&self.state))),
+                observation_id: None,
+                correlation_epoch: 1,
+                publication_permit: ProxyPublicationPermit::default(),
+            }))
+        }
+
+        fn execute(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyResponse, BackendError> {
+            Err(BackendError::Internal)
+        }
+    }
+
+    struct WebPkiUnavailableBackend;
+
+    impl ProxyBackend for WebPkiUnavailableBackend {
+        fn open_connect(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyConnectOpen, BackendError> {
+            Ok(ProxyConnectOpen::WebPkiUnavailable)
+        }
+
+        fn execute(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyResponse, BackendError> {
+            Err(BackendError::Internal)
+        }
+    }
+
+    struct UnexpectedConnectFailureBackend {
+        panic: bool,
+    }
+
+    impl ProxyBackend for UnexpectedConnectFailureBackend {
+        fn open_connect(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyConnectOpen, BackendError> {
+            if self.panic {
+                panic!("test CONNECT backend panic");
+            }
+            Err(BackendError::Internal)
+        }
+
+        fn execute(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyResponse, BackendError> {
+            Err(BackendError::Internal)
+        }
+    }
+
+    impl ProxyBackend for ConnectPassthroughBackend {
+        fn open_connect(
+            &self,
+            request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyConnectOpen, BackendError> {
+            self.requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(request);
+            let state = Arc::new(ConnectEchoState {
+                pending: Mutex::new(b"origin".iter().copied().collect()),
+                shutdown: AtomicBool::new(false),
+            });
+            Ok(ProxyConnectOpen::WebPkiPassthrough(ProxyConnectTunnel {
+                reader: Box::new(ConnectEchoReader(Arc::clone(&state))),
+                writer: Box::new(ConnectEchoWriter(Arc::clone(&state))),
+                shutdown: Arc::new(ConnectEchoShutdown(state)),
+                observation_id: Some(17),
+                correlation_epoch: 9,
+                publication_permit: ProxyPublicationPermit::default(),
+            }))
+        }
+
+        fn execute(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyResponse, BackendError> {
+            Err(BackendError::Internal)
         }
     }
 
@@ -4023,6 +4606,198 @@ mod tests {
                 || header.name.to_ascii_lowercase().starts_with("x-hns-")
         }));
         proxy.stop();
+    }
+
+    #[test]
+    fn connect_webpki_passthrough_skips_local_tls_and_copies_bidirectionally() {
+        let backend = Arc::new(ConnectPassthroughBackend {
+            requests: Mutex::new(Vec::new()),
+        });
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&observations);
+        let proxy = RunningProxy::start_with_metadata_observer(
+            test_config(),
+            backend.clone(),
+            Arc::new(NoopProxyObserver),
+            Arc::new(move |observation: &ProxyResponseMetadataObservation| {
+                sink.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((
+                        observation.kind(),
+                        observation.port(),
+                        observation.correlation_epoch(),
+                        observation.observation_id(),
+                    ));
+            }),
+        )
+        .unwrap();
+
+        let mut client = begin_authenticated_connect(&proxy, "welcome:443");
+        assert!(proxy.local_certificate_pin("welcome").is_none());
+        let mut from_origin = [0_u8; 6];
+        client.read_exact(&mut from_origin).unwrap();
+        assert_eq!(&from_origin, b"origin");
+        client.write_all(b"client").unwrap();
+        client.flush().unwrap();
+        let mut echoed = [0_u8; 6];
+        client.read_exact(&mut echoed).unwrap();
+        assert_eq!(&echoed, b"client");
+        drop(client);
+
+        let requests = backend
+            .requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "CONNECT");
+        assert_eq!(requests[0].scheme, "https");
+        assert_eq!(requests[0].host, "welcome");
+        assert_eq!(requests[0].port, 443);
+        assert_eq!(
+            *observations
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![(
+                ProxyMetadataObservationKind::WebPkiConnectDecision,
+                Some(443),
+                Some(9),
+                Some(17),
+            )]
+        );
+        drop(requests);
+        proxy.stop();
+    }
+
+    #[test]
+    fn connect_download_is_not_serialized_behind_idle_client_upload_polls() {
+        const DOWNLOAD_BYTES: usize = 4 * 1024 * 1024;
+
+        let backend = Arc::new(BulkDownloadBackend {
+            bytes: vec![0x5a; DOWNLOAD_BYTES],
+        });
+        let proxy =
+            RunningProxy::start(test_config(), backend, Arc::new(NoopProxyObserver)).unwrap();
+        let mut client = begin_authenticated_connect(&proxy, "welcome:443");
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let started = Instant::now();
+        let mut downloaded = Vec::new();
+        client.read_to_end(&mut downloaded).unwrap();
+
+        assert_eq!(downloaded.len(), DOWNLOAD_BYTES);
+        assert!(downloaded.iter().all(|byte| *byte == 0x5a));
+        // The former sequential 16-KiB pump waited 25 ms on the idle upload
+        // side for every chunk (>6 seconds for this payload).
+        assert!(started.elapsed() < Duration::from_secs(3));
+        proxy.stop();
+    }
+
+    #[test]
+    fn connect_upload_is_not_serialized_behind_idle_origin_download_polls() {
+        const UPLOAD_BYTES: usize = 4 * 1024 * 1024;
+
+        let state = Arc::new(BulkUploadState {
+            received: std::sync::atomic::AtomicUsize::new(0),
+            shutdown: AtomicBool::new(false),
+        });
+        let proxy = RunningProxy::start(
+            test_config(),
+            Arc::new(BulkUploadBackend {
+                state: Arc::clone(&state),
+            }),
+            Arc::new(NoopProxyObserver),
+        )
+        .unwrap();
+        let mut client = begin_authenticated_connect(&proxy, "welcome:443");
+        client
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let started = Instant::now();
+        client.write_all(&vec![0x6b; UPLOAD_BYTES]).unwrap();
+        client.flush().unwrap();
+        let deadline = started + Duration::from_secs(5);
+        while state.received.load(AtomicOrdering::Acquire) != UPLOAD_BYTES
+            && Instant::now() < deadline
+        {
+            thread::yield_now();
+        }
+
+        assert_eq!(state.received.load(AtomicOrdering::Acquire), UPLOAD_BYTES);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        drop(client);
+        proxy.stop();
+    }
+
+    #[test]
+    fn selected_webpki_connect_failure_never_prepares_a_local_identity() {
+        let proxy = RunningProxy::start(
+            test_config(),
+            Arc::new(WebPkiUnavailableBackend),
+            Arc::new(NoopProxyObserver),
+        )
+        .unwrap();
+        let request = format!(
+            "CONNECT welcome:443 HTTP/1.1\r\nHost: welcome:443\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        let response = send_raw(&proxy, request.as_bytes());
+
+        assert_eq!(response_status(&response), 502);
+        assert!(response.starts_with(b"HTTP/1.1 502 ICANN WebPKI Origin Unavailable\r\n"));
+        assert!(proxy.local_certificate_pin("welcome").is_none());
+        proxy.stop();
+    }
+
+    #[test]
+    fn unexpected_connect_backend_failures_never_fall_back_to_local_tls() {
+        for panic in [false, true] {
+            let proxy = RunningProxy::start(
+                test_config(),
+                Arc::new(UnexpectedConnectFailureBackend { panic }),
+                Arc::new(NoopProxyObserver),
+            )
+            .unwrap();
+            let request = format!(
+                "CONNECT welcome:443 HTTP/1.1\r\nHost: welcome:443\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            let response = send_raw(&proxy, request.as_bytes());
+
+            assert_eq!(response_status(&response), 502);
+            assert!(proxy.local_certificate_pin("welcome").is_none());
+            proxy.stop();
+        }
+    }
+
+    #[test]
+    fn stop_joins_an_idle_webpki_passthrough_without_detached_copy_workers() {
+        let backend = Arc::new(ConnectPassthroughBackend {
+            requests: Mutex::new(Vec::new()),
+        });
+        let proxy =
+            RunningProxy::start(test_config(), backend.clone(), Arc::new(NoopProxyObserver))
+                .unwrap();
+        let mut client = begin_authenticated_connect(&proxy, "welcome:443");
+        let mut initial = [0_u8; 6];
+        client.read_exact(&mut initial).unwrap();
+        assert_eq!(&initial, b"origin");
+        wait_for_active_clients(&proxy, 1);
+
+        let started = Instant::now();
+        proxy.stop();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(proxy.is_stopped());
+        assert_eq!(proxy.active_clients(), 0);
+        assert_eq!(
+            backend
+                .requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            1
+        );
+        assert_connection_closed(client);
     }
 
     #[test]

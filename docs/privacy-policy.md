@@ -58,6 +58,22 @@ Normal logs must omit full qnames, URLs, headers, bodies, raw DNS messages, and
 stable browser identifiers. Temporary diagnostic state is bounded and cleared
 on lifecycle or authority changes.
 
+To attach a Rust security receipt to the correct active tab after
+back/forward-cache, History API, or HTTP-cache navigation, the extension keeps
+a bounded set of exact HTTP(S) URLs, Chromium document/tab identifiers, and
+sanitized receipts in `chrome.storage.session`. This browser-managed state is
+not sent to the native host or any network service, is scoped to the exact
+runtime and policy generation, and is cleared when the browser session ends.
+Header maintenance prevents those URL entries from authorizing a new cached
+document.
+
+For Chromium-owned ICANN WebPKI tunnels, session state may also retain the
+native decision's exact host and port, runtime tuple, event number,
+maintenance epoch, sanitized namespace/evidence fields, native observation
+time, and Chromium-observed completion status and time. It does not add an
+HTTP-status or main-frame claim to the Rust decision, and it stores no request
+or response headers, bodies, certificate bytes, cookies, or URL fragments.
+
 The supplied uninstaller removes the product's user-level native-host
 registrations, exact per-install trust anchor, native executable, CA key
 material, marker, chain/cache state, and runtime data. Browser-managed

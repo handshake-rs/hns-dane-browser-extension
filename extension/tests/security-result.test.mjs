@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  currentConnectSecurityDecision,
   currentSecurityResult,
   namespaceLabel,
   namespaceOutcomeLabel,
@@ -12,7 +13,8 @@ import {
 const runtime = Object.freeze({
   runtimeSession: "session-a",
   runtimeGeneration: 7,
-  policyGeneration: 3
+  policyGeneration: 3,
+  securityMaintenanceEpoch: 5
 });
 
 function result(overrides = {}) {
@@ -35,6 +37,57 @@ function result(overrides = {}) {
     transportPolicy: { directAuthoritativeFirst: true },
     providerReadiness: { dnsRelay: "disabled" },
     registryProfile: "denuoV1",
+    ...overrides
+  };
+}
+
+function connectDecision(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    observationKind: "browserWebPkiPassthrough",
+    httpStatusObserved: false,
+    observedAtUnixMs: Date.now() - 100,
+    maintenanceEpoch: runtime.securityMaintenanceEpoch,
+    eventSequence: 12,
+    runtimeSession: runtime.runtimeSession,
+    runtimeGeneration: runtime.runtimeGeneration,
+    policyGeneration: runtime.policyGeneration,
+    network: "mainnet",
+    host: "developer.chrome.com",
+    port: 443,
+    canonicalStatus: "available",
+    namespaceOutcome: "icannOnly",
+    selectedNamespace: "icann",
+    namespaceSelectionReason: "onlyAvailableRoot",
+    decisionFingerprint: "34".repeat(32),
+    hnsRootFailure: null,
+    icannRootFailure: null,
+    hnsResolutionState: "authenticatedAbsent",
+    icannResolutionState: "present",
+    icannTlsAction: "webPkiAuthenticatedAbsence",
+    icannDnssecStatus: "secure",
+    chainAnchor: {
+      localBestHeight: null,
+      targetHeight: null,
+      estimatedTargetHeight: null,
+      stale: null
+    },
+    transportPolicy: { directAuthoritativeFirst: true },
+    actualSelectedTransport: "icannDoh",
+    nameserverAuthority: "validatingIcannResolver",
+    localHnsProofState: "notAttempted",
+    localDnssecState: "verified",
+    localTlsaState: "unavailable",
+    localDaneState: "notAttempted",
+    peerIdentity: null,
+    proxyIdentity: null,
+    targetIdentity: null,
+    proxyTargetSeparation: "notApplicable",
+    directRelayFallback: false,
+    providerReadiness: { dnsRelay: "disabled" },
+    registryProfile: "denuoV1",
+    registryFingerprint: null,
+    protocolVersion: null,
     ...overrides
   };
 }
@@ -225,4 +278,56 @@ test("security UI never accepts a synthesized result for canonical unavailabilit
     ),
     null
   );
+});
+
+test("WebPKI CONNECT decisions remain decision-only and epoch-bound", () => {
+  const decision = connectDecision();
+  assert.equal(currentConnectSecurityDecision(decision, runtime), decision);
+  assert.equal(
+    currentConnectSecurityDecision(
+      { ...decision, httpStatusObserved: true },
+      runtime
+    ),
+    null
+  );
+  assert.equal(
+    currentConnectSecurityDecision({ ...decision, statusCode: 200 }, runtime),
+    null
+  );
+  assert.equal(
+    currentConnectSecurityDecision({ ...decision, mainFrame: true }, runtime),
+    null
+  );
+  assert.equal(
+    currentConnectSecurityDecision(
+      { ...decision, maintenanceEpoch: runtime.securityMaintenanceEpoch - 1 },
+      runtime
+    ),
+    null
+  );
+});
+
+test("WebPKI CONNECT decisions accept only authenticated ICANN fallback", () => {
+  assert.equal(
+    currentConnectSecurityDecision(
+      connectDecision({
+        icannTlsAction: "webPkiInsecureDelegation",
+        icannDnssecStatus: "insecureDelegation"
+      }),
+      runtime
+    )?.host,
+    "developer.chrome.com"
+  );
+  for (const invalid of [
+    connectDecision({ selectedNamespace: "hns" }),
+    connectDecision({ icannTlsAction: "enforceDane" }),
+    connectDecision({ icannDnssecStatus: "bogus" }),
+    connectDecision({ actualSelectedTransport: "directAuthoritativeTcp" }),
+    connectDecision({ port: 0 }),
+    connectDecision({ host: "Developer.Chrome.Com" }),
+    connectDecision({ host: "bad_host.example" }),
+    connectDecision({ observedAtUnixMs: Date.now() + 10 * 60 * 1000 })
+  ]) {
+    assert.equal(currentConnectSecurityDecision(invalid, runtime), null);
+  }
 });

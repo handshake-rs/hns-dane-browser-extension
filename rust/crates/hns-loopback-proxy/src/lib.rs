@@ -26,9 +26,10 @@ pub use auth::{
     ProxyAuthorization,
 };
 pub use backend::{
-    BackendError, CancellationToken, ProxyBackend, ProxyHeader, ProxyPublicationAuthority,
-    ProxyPublicationPermit, ProxyRequest, ProxyRequestBody, ProxyResponse, ProxyResponseBody,
-    ProxyResponseHead, ProxyTunnel, ProxyTunnelIo, ProxyTunnelOpen,
+    BackendError, CancellationToken, ProxyBackend, ProxyConnectOpen, ProxyConnectShutdown,
+    ProxyConnectTunnel, ProxyHeader, ProxyPublicationAuthority, ProxyPublicationPermit,
+    ProxyRequest, ProxyRequestBody, ProxyResponse, ProxyResponseBody, ProxyResponseHead,
+    ProxyTunnel, ProxyTunnelIo, ProxyTunnelOpen,
 };
 pub use certificate::{
     CertificateSha256, GeneratedLocalCertificateAuthority, LocalCertificateAuthority,
@@ -52,8 +53,8 @@ pub use http1::{
     sanitize_upgrade_forward_headers,
 };
 pub use metadata::{
-    NoopProxyResponseMetadataObserver, ProxyResponseMetadataObservation,
-    ProxyResponseMetadataObserver,
+    NoopProxyResponseMetadataObserver, ProxyMetadataObservationKind,
+    ProxyResponseMetadataObservation, ProxyResponseMetadataObserver,
 };
 pub use rate_limit::{
     ActiveClientLimiter, ActiveClientPermit, RateLimitConfig, RateLimitConfigError,

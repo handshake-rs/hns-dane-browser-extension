@@ -11,6 +11,7 @@ for (const permission of [
   "nativeMessaging",
   "proxy",
   "storage",
+  "webNavigation",
   "webRequest",
   "webRequestAuthProvider"
 ]) {

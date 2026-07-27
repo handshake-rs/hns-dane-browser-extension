@@ -296,6 +296,62 @@ pub struct ProxyTunnel {
     pub publication_permit: ProxyPublicationPermit,
 }
 
+/// Pre-TLS disposition for one authenticated outer CONNECT.
+pub enum ProxyConnectOpen {
+    /// Continue through the local certificate and HTTP gateway path.
+    Intercept,
+    /// Namespace selection required browser-owned WebPKI, but its exact
+    /// origin socket could not be opened. Never substitute local TLS.
+    WebPkiUnavailable,
+    /// Tunnel browser TLS unchanged to one backend-selected origin socket.
+    WebPkiPassthrough(ProxyConnectTunnel),
+}
+
+/// A raw, policy-bound CONNECT stream. The publication permit must validate
+/// before the proxy exposes `200 Connection Established`.
+pub struct ProxyConnectTunnel {
+    /// Origin-to-browser half. Reads must have bounded waits.
+    pub reader: Box<dyn Read + Send>,
+    /// Browser-to-origin half. Writes must have bounded waits.
+    pub writer: Box<dyn Write + Send>,
+    /// Wakes both halves when either direction finishes or is revoked.
+    pub shutdown: Arc<dyn ProxyConnectShutdown>,
+    pub observation_id: Option<u64>,
+    pub correlation_epoch: u64,
+    pub publication_permit: ProxyPublicationPermit,
+}
+
+/// Thread-safe, nonblocking, idempotent close which must wake both halves.
+///
+/// The CONNECT pump may invoke this concurrently from either direction.
+pub trait ProxyConnectShutdown: Send + Sync {
+    fn shutdown(&self);
+}
+
+impl fmt::Debug for ProxyConnectOpen {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Intercept => formatter.write_str("Intercept"),
+            Self::WebPkiUnavailable => formatter.write_str("WebPkiUnavailable"),
+            Self::WebPkiPassthrough(tunnel) => formatter
+                .debug_tuple("WebPkiPassthrough")
+                .field(tunnel)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Debug for ProxyConnectTunnel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProxyConnectTunnel")
+            .field("transport", &"<redacted split duplex stream>")
+            .field("observation_id_present", &self.observation_id.is_some())
+            .field("correlation_epoch", &self.correlation_epoch)
+            .finish()
+    }
+}
+
 /// Result of opening an Upgrade route. Policy and resolution failures can be
 /// returned as a normal bounded HTTP response without falsely switching the
 /// client into tunnel mode.
@@ -362,6 +418,18 @@ pub enum BackendError {
 }
 
 pub trait ProxyBackend: Send + Sync + 'static {
+    /// Resolves the outer CONNECT before local TLS termination. The default
+    /// preserves interception. Implementations may return passthrough only
+    /// after making the same namespace and TLS policy decision used by normal
+    /// gateway requests.
+    fn open_connect(
+        &self,
+        _request: ProxyRequest,
+        _cancellation: &CancellationToken,
+    ) -> Result<ProxyConnectOpen, BackendError> {
+        Ok(ProxyConnectOpen::Intercept)
+    }
+
     /// Executes one admitted request. Implementations must observe
     /// `cancellation` and bound every network/storage wait so proxy shutdown
     /// can join all work. Implementations must not panic: shipping profiles

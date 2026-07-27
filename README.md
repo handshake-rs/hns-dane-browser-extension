@@ -27,6 +27,12 @@ DoH. A securely present supported TLSA RRset is enforced. Authenticated denial
 or an unsigned delegation uses the defined WebPKI fallback. Bogus DNSSEC,
 malformed data, and resolver failure fail closed.
 
+On the defined WebPKI fallback, Rust opens only the exact public IP selected by
+that decision and tunnels Chromium's TLS bytes unchanged. Chromium therefore
+validates and displays the origin's real certificate chain. The per-install
+local CA is used only where Rust must terminate TLS to enforce HNS or ICANN
+DANE.
+
 The native host integrates the five canonical browser contracts from
 [`handshake-rs/hns-dane-engine`](https://github.com/handshake-rs/hns-dane-engine)
 at immutable revision

@@ -35,6 +35,28 @@ All notable changes to this project will be documented in this file.
   non-network `LocalHnsProof` provenance instead of dropping their details for
   lack of a delegated-DNS trace. The popup now shows the latest main frame
   before the complete Header chain panel.
+- Rendered confirmed port-53 interception failures as hardened, paragraph-
+  separated HTML with a per-name HNS DANE generator link. The handoff includes
+  a nameserver only when it came from the authenticated HNS delegation, and
+  unrelated gateway failures remain plain text.
+- Bound popup security receipts to the active Chromium tab and document.
+  Back/forward-cache and same-document history keep only that document's
+  immutable Rust receipt; disk-cache reuse requires an exact URL receipt from
+  the same runtime and header-maintenance epoch. Header sync keeps the receipt
+  for an already committed document but cannot authorize a new cached page.
+- Correlated Rust's decision-only ICANN WebPKI CONNECT observations with
+  successful Chromium main-frame completion without fabricating a Rust HTTP
+  status or main-frame claim. The popup now labels Chromium's end-to-end
+  WebPKI ownership, retained-tunnel and cache provenance, while the
+  authoritative native maintenance epoch revokes new reuse after every header
+  sync attempt. Native status filters both HTTP and CONNECT observations by
+  their stored epoch, preserving new-epoch results that race sync completion
+  while rejecting late old-epoch callbacks.
+- Bypassed local certificate issuance for selected ICANN WebPKI fallback.
+  Chromium now carries its TLS handshake through an exact-IP, independently
+  pumped raw CONNECT tunnel and displays the origin certificate. Socket-open,
+  invariant, canonical-status, registry, cancellation, and unexpected backend
+  failures are pre-TLS denials and cannot downgrade back to the local CA.
 
 ### Security
 

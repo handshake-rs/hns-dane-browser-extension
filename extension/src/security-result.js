@@ -1,4 +1,7 @@
 const SECURITY_RESULT_SCHEMA_VERSION = 3;
+const CONNECT_SECURITY_DECISION_SCHEMA_VERSION = 1;
+const EARLIEST_CONNECT_DECISION_UNIX_MS = 1_577_836_800_000;
+const MAX_CONNECT_DECISION_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 const TRANSPORT_LABELS = Object.freeze({
   directAuthoritativeUdp: "Direct authoritative UDP",
@@ -57,6 +60,7 @@ const ICANN_ROOT_STATES = new Set([
 
 const CANONICAL_STATUS_STATES = new Set(["available"]);
 const REGISTRY_PROFILES = new Set(["denuoV1", "official", "auto"]);
+const NETWORKS = new Set(["mainnet", "testnet", "regtest"]);
 
 export function currentSecurityResult(candidate, runtime) {
   if (!isRecord(candidate) || !isRecord(runtime)) return null;
@@ -79,6 +83,58 @@ export function currentSecurityResult(candidate, runtime) {
     !HNS_ROOT_STATES.has(candidate.hnsResolutionState) ||
     !ICANN_ROOT_STATES.has(candidate.icannResolutionState) ||
     !Object.hasOwn(TRANSPORT_LABELS, candidate.actualSelectedTransport) ||
+    !validCanonicalSecurityResult(candidate)
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
+export function currentConnectSecurityDecision(
+  candidate,
+  runtime,
+  nowUnixMs = Date.now()
+) {
+  if (!isRecord(candidate) || !isRecord(runtime)) return null;
+  if (
+    candidate.schemaVersion !== CONNECT_SECURITY_DECISION_SCHEMA_VERSION ||
+    candidate.observationKind !== "browserWebPkiPassthrough" ||
+    candidate.httpStatusObserved !== false ||
+    Object.hasOwn(candidate, "statusCode") ||
+    Object.hasOwn(candidate, "mainFrame") ||
+    typeof candidate.runtimeSession !== "string" ||
+    candidate.runtimeSession !== runtime.runtimeSession ||
+    !Number.isSafeInteger(candidate.runtimeGeneration) ||
+    candidate.runtimeGeneration !== runtime.runtimeGeneration ||
+    !Number.isSafeInteger(candidate.policyGeneration) ||
+    candidate.policyGeneration !== runtime.policyGeneration ||
+    !Number.isSafeInteger(candidate.maintenanceEpoch) ||
+    candidate.maintenanceEpoch < 1 ||
+    candidate.maintenanceEpoch !== runtime.securityMaintenanceEpoch ||
+    !Number.isSafeInteger(candidate.eventSequence) ||
+    candidate.eventSequence < 1 ||
+    !validHost(candidate.host) ||
+    !Number.isInteger(candidate.port) ||
+    candidate.port < 1 ||
+    candidate.port > 65_535 ||
+    !Number.isSafeInteger(candidate.observedAtUnixMs) ||
+    candidate.observedAtUnixMs < EARLIEST_CONNECT_DECISION_UNIX_MS ||
+    !Number.isFinite(nowUnixMs) ||
+    candidate.observedAtUnixMs > nowUnixMs + MAX_CONNECT_DECISION_CLOCK_SKEW_MS ||
+    candidate.canonicalStatus !== "available" ||
+    !NETWORKS.has(candidate.network) ||
+    candidate.selectedNamespace !== "icann" ||
+    !["icannOnly", "bothConvergent", "bothDivergent"].includes(
+      candidate.namespaceOutcome
+    ) ||
+    candidate.actualSelectedTransport !== "icannDoh" ||
+    candidate.nameserverAuthority !== "validatingIcannResolver" ||
+    candidate.localHnsProofState !== "notAttempted" ||
+    candidate.localDnssecState !== "verified" ||
+    candidate.localTlsaState !== "unavailable" ||
+    candidate.localDaneState !== "notAttempted" ||
+    !validIcannChainAnchor(candidate.chainAnchor) ||
+    !validIcannWebPkiFallback(candidate) ||
     !validCanonicalSecurityResult(candidate)
   ) {
     return null;
@@ -186,6 +242,44 @@ function validCanonicalSecurityResult(candidate) {
   return hasDecision
     ? validDecisionFingerprint(candidate.decisionFingerprint)
     : candidate.decisionFingerprint == null;
+}
+
+function validIcannWebPkiFallback(candidate) {
+  if (candidate.icannTlsAction === "webPkiAuthenticatedAbsence") {
+    return candidate.icannDnssecStatus === "secure";
+  }
+  if (candidate.icannTlsAction === "webPkiInsecureDelegation") {
+    return candidate.icannDnssecStatus === "insecureDelegation";
+  }
+  return false;
+}
+
+function validIcannChainAnchor(candidate) {
+  return (
+    isRecord(candidate) &&
+    candidate.localBestHeight == null &&
+    candidate.targetHeight == null &&
+    candidate.estimatedTargetHeight == null &&
+    candidate.stale == null
+  );
+}
+
+function validHost(value) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 253 ||
+    value !== value.toLowerCase() ||
+    value.endsWith(".")
+  ) {
+    return false;
+  }
+  return value.split(".").every(
+    (label) =>
+      label.length >= 1 &&
+      label.length <= 63 &&
+      /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+  );
 }
 
 function validDecisionFingerprint(value) {

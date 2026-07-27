@@ -11,6 +11,14 @@ use crate::event::{ObservedHost, ObservedMethod};
 use crate::response::InternalResponseMetadata;
 use std::fmt;
 
+/// Whether an observation describes an origin HTTP response or the
+/// pre-response decision to preserve browser-owned WebPKI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProxyMetadataObservationKind {
+    OriginResponse,
+    WebPkiConnectDecision,
+}
+
 /// Trusted, sensitive metadata from one validated response head.
 ///
 /// Observations contain no dedicated request-target, query, request-header,
@@ -25,10 +33,17 @@ pub struct ProxyResponseMetadataObservation {
     status_code: u16,
     likely_main_frame: bool,
     observation_id: Option<u64>,
+    kind: ProxyMetadataObservationKind,
+    port: Option<u16>,
+    correlation_epoch: Option<u64>,
     metadata: InternalResponseMetadata,
 }
 
 impl ProxyResponseMetadataObservation {
+    // Keep the complete trust-boundary tuple explicit at each construction
+    // site; grouping these fields would make security-relevant omissions less
+    // visible during review.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         generation: u64,
         host: ObservedHost,
@@ -36,6 +51,9 @@ impl ProxyResponseMetadataObservation {
         status_code: u16,
         likely_main_frame: bool,
         observation_id: Option<u64>,
+        kind: ProxyMetadataObservationKind,
+        port: Option<u16>,
+        correlation_epoch: Option<u64>,
         metadata: InternalResponseMetadata,
     ) -> Self {
         Self {
@@ -45,6 +63,9 @@ impl ProxyResponseMetadataObservation {
             status_code,
             likely_main_frame,
             observation_id,
+            kind,
+            port,
+            correlation_epoch,
             metadata,
         }
     }
@@ -83,6 +104,18 @@ impl ProxyResponseMetadataObservation {
         self.observation_id
     }
 
+    pub const fn kind(&self) -> ProxyMetadataObservationKind {
+        self.kind
+    }
+
+    pub const fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    pub const fn correlation_epoch(&self) -> Option<u64> {
+        self.correlation_epoch
+    }
+
     /// Returns allowlisted internal metadata removed from the browser-facing
     /// response head.
     pub fn metadata(&self) -> &InternalResponseMetadata {
@@ -100,6 +133,9 @@ impl fmt::Debug for ProxyResponseMetadataObservation {
             .field("status_code", &self.status_code)
             .field("likely_main_frame", &self.likely_main_frame)
             .field("observation_id_present", &self.observation_id.is_some())
+            .field("kind", &self.kind)
+            .field("port", &self.port)
+            .field("correlation_epoch", &self.correlation_epoch)
             .field("metadata", &self.metadata)
             .finish()
     }
@@ -153,6 +189,9 @@ mod tests {
             200,
             true,
             Some(9),
+            ProxyMetadataObservationKind::OriginResponse,
+            None,
+            None,
             headers.metadata().clone(),
         );
 

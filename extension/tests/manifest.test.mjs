@@ -8,6 +8,7 @@ const buildScript = readFileSync("extension/scripts/build.mjs", "utf8");
 const options = readFileSync("extension/src/options.html", "utf8");
 const optionsScript = readFileSync("extension/src/options.js", "utf8");
 const popup = readFileSync("extension/src/popup.html", "utf8");
+const popupScript = readFileSync("extension/src/popup.js", "utf8");
 
 test("manifest is MV3 with native messaging, mandatory proxy, and auth permissions", () => {
   assert.equal(manifest.manifest_version, 3);
@@ -17,6 +18,7 @@ test("manifest is MV3 with native messaging, mandatory proxy, and auth permissio
     "nativeMessaging",
     "proxy",
     "storage",
+    "webNavigation",
     "webRequest",
     "webRequestAuthProvider"
   ]) {
@@ -82,6 +84,29 @@ test("latest main-frame security details precede the complete header-chain panel
   assert.ok(recoveryGuidance > retry, "recovery guidance stays with page status");
   assert.ok(headerChain > recoveryGuidance, "header-chain section is the final panel");
   assert.ok(syncHeaders > headerChain, "header sync control stays inside the lower section");
+});
+
+test("popup security status is scoped to the active Chromium tab", () => {
+  assert.match(popupScript, /chrome\.tabs\.query\(\{ active: true, currentWindow: true \}\)/);
+  assert.match(
+    popupScript,
+    /type: "getStatus",[\s\S]*?tabId: await activeTabId\(\)/
+  );
+  assert.match(worker, /store\.receiptForTab\(validTabId, status\)/);
+  assert.match(worker, /latestMainFrameSecurity: scoped\.receipt/);
+  assert.match(
+    worker,
+    /latestMainFrameConnectDecisionReceipt: scoped\.connectDecisionReceipt/
+  );
+  assert.match(worker, /chrome\.storage\.session\.set/);
+  assert.match(worker, /store\.beginMaintenance\(publicStatus\)/);
+  assert.match(worker, /securityMaintenanceEpoch/);
+  assert.match(
+    worker,
+    /captureCompletedMainFrame[\s\S]*?await refreshNativeStatus\(\)[\s\S]*?store\.completeRequest\(details, status\)/
+  );
+  assert.match(popup, /id="security-receipt-source"/);
+  assert.match(popupScript, /Chromium owns end-to-end WebPKI for this document/);
 });
 
 test("the unpacked Chromium build carries the generated dependency notices", () => {

@@ -9,13 +9,14 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use getrandom::fill as fill_random;
 use hns_browser_observability::{
-    BrowserStatus as CanonicalBrowserStatus, Namespace as CanonicalNamespace,
+    BrowserStatus as CanonicalBrowserStatus, IcannDnssecStatus as CanonicalIcannDnssecStatus,
+    IcannTlsAction as CanonicalIcannTlsAction, Namespace as CanonicalNamespace,
     OutcomeKind as CanonicalOutcomeKind, ReadinessState as CanonicalReadinessState,
     RootFailureKind as CanonicalRootFailureKind, SelectionReason as CanonicalSelectionReason,
 };
 use hns_chromium_platform_runtime::{
-    BrowserProxy, BrowserProxyStatus, BrowserProxyStatusObserver, BrowserRuntime,
-    CanonicalBrowserObservationTuple, CanonicalRootResolutionStates,
+    BrowserProxy, BrowserProxyObservationKind, BrowserProxyStatus, BrowserProxyStatusObserver,
+    BrowserRuntime, CanonicalBrowserObservationTuple, CanonicalRootResolutionStates,
     CanonicalStatusUnavailableReason, NetworkKind, ResolutionMode, RootResolutionDisposition,
     RuntimeConfiguration, RuntimePolicy, chromium_dane_pac_script, diagnostics_json,
     normalize_configured_hns_doh_resolver,
@@ -35,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -252,6 +253,54 @@ struct ChromiumSecurityResult {
     diagnostic_final_error: Option<String>,
 }
 
+/// A host-scoped pre-TLS decision. It intentionally has no HTTP status or
+/// main-frame claim; the extension correlates it with a completed browser
+/// navigation.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChromiumConnectSecurityDecision {
+    schema_version: u32,
+    observation_kind: &'static str,
+    http_status_observed: bool,
+    observed_at_unix_ms: u64,
+    maintenance_epoch: u64,
+    event_sequence: u64,
+    runtime_session: String,
+    runtime_generation: u64,
+    policy_generation: u64,
+    network: String,
+    host: String,
+    port: u16,
+    canonical_status: CanonicalSecurityStatus,
+    namespace_outcome: String,
+    selected_namespace: Option<String>,
+    namespace_selection_reason: String,
+    decision_fingerprint: Option<String>,
+    hns_root_failure: Option<&'static str>,
+    icann_root_failure: Option<&'static str>,
+    hns_resolution_state: String,
+    icann_resolution_state: String,
+    icann_tls_action: Option<&'static str>,
+    icann_dnssec_status: Option<&'static str>,
+    chain_anchor: SecurityChainAnchor,
+    transport_policy: Option<SecurityTransportPolicy>,
+    actual_selected_transport: ChromiumDnsTransport,
+    nameserver_authority: &'static str,
+    local_hns_proof_state: String,
+    local_dnssec_state: String,
+    local_tlsa_state: String,
+    local_dane_state: String,
+    peer_identity: Option<String>,
+    proxy_identity: Option<String>,
+    target_identity: Option<String>,
+    proxy_target_separation: &'static str,
+    direct_relay_fallback: Option<bool>,
+    provider_readiness: Option<SecurityProviderReadiness>,
+    registry_profile: Option<ChromiumRegistryProfile>,
+    registry_fingerprint: Option<String>,
+    protocol_version: Option<u16>,
+}
+
 #[derive(Clone)]
 struct ActiveSecurityContext {
     runtime_session: String,
@@ -261,13 +310,22 @@ struct ActiveSecurityContext {
     network: String,
 }
 
+#[derive(Clone)]
+struct MaintenanceBoundSecurityResult {
+    maintenance_epoch: u64,
+    result: ChromiumSecurityResult,
+}
+
 #[derive(Default)]
 struct SecurityObservationState {
     active: Option<ActiveSecurityContext>,
+    highest_maintenance_epoch: Option<u64>,
+    latest_main_frame_maintenance_epoch: Option<u64>,
     latest_main_frame: Option<ChromiumSecurityResult>,
     latest_main_frame_unavailable_reason: Option<&'static str>,
     latest_main_frame_event_floor: Option<u64>,
-    recent: VecDeque<ChromiumSecurityResult>,
+    recent: VecDeque<MaintenanceBoundSecurityResult>,
+    recent_connect_decisions: VecDeque<ChromiumConnectSecurityDecision>,
 }
 
 #[derive(Clone, Default)]
@@ -276,32 +334,45 @@ struct SecurityObservations {
 }
 
 impl SecurityObservations {
-    fn activate(&self, context: ActiveSecurityContext) {
+    fn activate(&self, context: ActiveSecurityContext, maintenance_epoch: Option<u64>) {
         if let Ok(mut state) = self.state.lock() {
             state.active = Some(context);
+            state.highest_maintenance_epoch = maintenance_epoch.filter(|epoch| *epoch != 0);
+            state.latest_main_frame_maintenance_epoch = None;
             state.latest_main_frame = None;
             state.latest_main_frame_unavailable_reason = None;
             state.latest_main_frame_event_floor = None;
             state.recent.clear();
+            state.recent_connect_decisions.clear();
         }
     }
 
     fn deactivate(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.active = None;
+            state.highest_maintenance_epoch = None;
+            state.latest_main_frame_maintenance_epoch = None;
             state.latest_main_frame = None;
             state.latest_main_frame_unavailable_reason = None;
             state.latest_main_frame_event_floor = None;
             state.recent.clear();
+            state.recent_connect_decisions.clear();
         }
     }
 
-    fn invalidate_results(&self) {
+    fn retain_maintenance_epoch(&self, maintenance_epoch: Option<u64>) {
         if let Ok(mut state) = self.state.lock() {
-            state.latest_main_frame = None;
-            state.latest_main_frame_unavailable_reason = None;
-            state.latest_main_frame_event_floor = None;
-            state.recent.clear();
+            let maintenance_epoch = maintenance_epoch.filter(|epoch| *epoch != 0);
+            state.highest_maintenance_epoch = maintenance_epoch;
+            if state.latest_main_frame_maintenance_epoch != maintenance_epoch {
+                clear_latest_main_frame_security(&mut state);
+            }
+            state
+                .recent
+                .retain(|entry| Some(entry.maintenance_epoch) == maintenance_epoch);
+            state
+                .recent_connect_decisions
+                .retain(|entry| Some(entry.maintenance_epoch) == maintenance_epoch);
         }
     }
 
@@ -315,29 +386,76 @@ impl SecurityObservations {
         if status.generation() != context.proxy_generation {
             return;
         }
-        let observation = chromium_security_result(context, status);
-        retain_security_observation(&mut state, status.is_likely_main_frame(), observation);
+        let Some(maintenance_epoch) = status.correlation_epoch().filter(|epoch| *epoch != 0) else {
+            return;
+        };
+        match status.observation_kind() {
+            BrowserProxyObservationKind::OriginResponse => {
+                let observation = chromium_security_result(context, status);
+                retain_security_observation(
+                    &mut state,
+                    status.is_likely_main_frame(),
+                    maintenance_epoch,
+                    observation,
+                );
+            }
+            BrowserProxyObservationKind::WebPkiConnectDecision => {
+                let Some(decision) = chromium_connect_security_decision(context, status) else {
+                    return;
+                };
+                retain_connect_security_decision(&mut state, decision);
+            }
+        }
     }
 
-    fn latest_main_frame(&self) -> Option<ChromiumSecurityResult> {
-        self.state
-            .lock()
-            .ok()
-            .and_then(|state| state.latest_main_frame.clone())
+    fn latest_main_frame(&self, maintenance_epoch: Option<u64>) -> Option<ChromiumSecurityResult> {
+        self.state.lock().ok().and_then(|state| {
+            (state.latest_main_frame_maintenance_epoch == maintenance_epoch)
+                .then(|| state.latest_main_frame.clone())
+                .flatten()
+        })
     }
 
-    fn recent(&self) -> Vec<ChromiumSecurityResult> {
+    fn recent(&self, maintenance_epoch: Option<u64>) -> Vec<ChromiumSecurityResult> {
         self.state
             .lock()
-            .map(|state| state.recent.iter().cloned().collect())
+            .map(|state| {
+                state
+                    .recent
+                    .iter()
+                    .filter(|entry| Some(entry.maintenance_epoch) == maintenance_epoch)
+                    .map(|entry| entry.result.clone())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
-    fn latest_main_frame_unavailable_reason(&self) -> Option<&'static str> {
+    fn recent_connect_decisions(
+        &self,
+        maintenance_epoch: Option<u64>,
+    ) -> Vec<ChromiumConnectSecurityDecision> {
         self.state
             .lock()
-            .ok()
-            .and_then(|state| state.latest_main_frame_unavailable_reason)
+            .map(|state| {
+                state
+                    .recent_connect_decisions
+                    .iter()
+                    .filter(|entry| Some(entry.maintenance_epoch) == maintenance_epoch)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn latest_main_frame_unavailable_reason(
+        &self,
+        maintenance_epoch: Option<u64>,
+    ) -> Option<&'static str> {
+        self.state.lock().ok().and_then(|state| {
+            (state.latest_main_frame_maintenance_epoch == maintenance_epoch)
+                .then_some(state.latest_main_frame_unavailable_reason)
+                .flatten()
+        })
     }
 
     fn active_context(&self) -> Option<ActiveSecurityContext> {
@@ -363,6 +481,7 @@ enum CanonicalSecurityObservation {
 fn retain_security_observation(
     state: &mut SecurityObservationState,
     main_frame: bool,
+    maintenance_epoch: u64,
     observation: CanonicalSecurityObservation,
 ) {
     let (tuple, result, unavailable_reason) = match observation {
@@ -377,11 +496,15 @@ fn retain_security_observation(
             return;
         }
     };
+    if !admit_security_observation_epoch(state, maintenance_epoch) {
+        return;
+    }
     if main_frame
         && state
             .latest_main_frame_event_floor
             .is_none_or(|event| tuple.event_sequence() > event)
     {
+        state.latest_main_frame_maintenance_epoch = Some(maintenance_epoch);
         state.latest_main_frame_event_floor = Some(tuple.event_sequence());
         state.latest_main_frame = result.clone();
         state.latest_main_frame_unavailable_reason = unavailable_reason;
@@ -392,19 +515,77 @@ fn retain_security_observation(
     if state
         .recent
         .iter()
-        .any(|current| current.event_sequence == result.event_sequence)
+        .any(|current| current.result.event_sequence == result.event_sequence)
     {
         return;
     }
     let insertion = state
         .recent
         .iter()
-        .position(|current| current.event_sequence > result.event_sequence)
+        .position(|current| current.result.event_sequence > result.event_sequence)
         .unwrap_or(state.recent.len());
-    state.recent.insert(insertion, result);
+    state.recent.insert(
+        insertion,
+        MaintenanceBoundSecurityResult {
+            maintenance_epoch,
+            result,
+        },
+    );
     while state.recent.len() > MAX_RECENT_SECURITY_RESULTS {
         state.recent.pop_front();
     }
+}
+
+fn retain_connect_security_decision(
+    state: &mut SecurityObservationState,
+    decision: ChromiumConnectSecurityDecision,
+) {
+    if !admit_security_observation_epoch(state, decision.maintenance_epoch) {
+        return;
+    }
+    if state
+        .recent_connect_decisions
+        .iter()
+        .any(|current| current.event_sequence == decision.event_sequence)
+    {
+        return;
+    }
+    let insertion = state
+        .recent_connect_decisions
+        .iter()
+        .position(|current| current.event_sequence > decision.event_sequence)
+        .unwrap_or(state.recent_connect_decisions.len());
+    state.recent_connect_decisions.insert(insertion, decision);
+    while state.recent_connect_decisions.len() > MAX_RECENT_SECURITY_RESULTS {
+        state.recent_connect_decisions.pop_front();
+    }
+}
+
+fn admit_security_observation_epoch(
+    state: &mut SecurityObservationState,
+    maintenance_epoch: u64,
+) -> bool {
+    if maintenance_epoch == 0 {
+        return false;
+    }
+    match state.highest_maintenance_epoch {
+        Some(current) if maintenance_epoch < current => false,
+        Some(current) if maintenance_epoch == current => true,
+        _ => {
+            state.highest_maintenance_epoch = Some(maintenance_epoch);
+            clear_latest_main_frame_security(state);
+            state.recent.clear();
+            state.recent_connect_decisions.clear();
+            true
+        }
+    }
+}
+
+fn clear_latest_main_frame_security(state: &mut SecurityObservationState) {
+    state.latest_main_frame_maintenance_epoch = None;
+    state.latest_main_frame = None;
+    state.latest_main_frame_unavailable_reason = None;
+    state.latest_main_frame_event_floor = None;
 }
 
 fn security_result_matches_observation(
@@ -464,6 +645,158 @@ fn chromium_security_result(
             .canonical_status_unavailable_reason()
             .map(canonical_unavailable_reason)
             .unwrap_or("pending"),
+    }
+}
+
+fn chromium_connect_security_decision(
+    context: &ActiveSecurityContext,
+    status: &BrowserProxyStatus,
+) -> Option<ChromiumConnectSecurityDecision> {
+    if status.observation_kind() != BrowserProxyObservationKind::WebPkiConnectDecision {
+        return None;
+    }
+    let port = status.port()?;
+    let maintenance_epoch = status.correlation_epoch()?;
+    if port == 0 || maintenance_epoch == 0 {
+        return None;
+    }
+    let canonical = status.canonical_status()?;
+    let observed_at_unix_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_millis(),
+    )
+    .ok()?;
+    let observation = chromium_security_result(context, status);
+    let CanonicalSecurityObservation::Available { result, .. } = observation else {
+        return None;
+    };
+    chromium_connect_security_decision_from_canonical(
+        canonical,
+        *result,
+        port,
+        maintenance_epoch,
+        observed_at_unix_ms,
+    )
+}
+
+fn chromium_connect_security_decision_from_canonical(
+    canonical: &CanonicalBrowserStatus,
+    result: ChromiumSecurityResult,
+    port: u16,
+    maintenance_epoch: u64,
+    observed_at_unix_ms: u64,
+) -> Option<ChromiumConnectSecurityDecision> {
+    if port == 0
+        || maintenance_epoch == 0
+        || canonical.selected_namespace() != Some(CanonicalNamespace::Icann)
+        || !matches!(
+            canonical.icann_tls_action(),
+            Some(
+                CanonicalIcannTlsAction::WebPkiAuthenticatedAbsence
+                    | CanonicalIcannTlsAction::WebPkiInsecureDelegation
+            )
+        )
+    {
+        return None;
+    }
+    let ChromiumSecurityResult {
+        event_sequence,
+        runtime_session,
+        runtime_generation,
+        policy_generation,
+        network,
+        host,
+        canonical_status,
+        namespace_outcome,
+        selected_namespace,
+        namespace_selection_reason,
+        decision_fingerprint,
+        hns_root_failure,
+        icann_root_failure,
+        hns_resolution_state,
+        icann_resolution_state,
+        chain_anchor,
+        transport_policy,
+        actual_selected_transport,
+        nameserver_authority,
+        local_hns_proof_state,
+        local_dnssec_state,
+        local_tlsa_state,
+        local_dane_state,
+        peer_identity,
+        proxy_identity,
+        target_identity,
+        proxy_target_separation,
+        direct_relay_fallback,
+        provider_readiness,
+        registry_profile,
+        registry_fingerprint,
+        protocol_version,
+        ..
+    } = result;
+    Some(ChromiumConnectSecurityDecision {
+        schema_version: NATIVE_MESSAGING_SCHEMA_VERSION,
+        observation_kind: "browserWebPkiPassthrough",
+        http_status_observed: false,
+        observed_at_unix_ms,
+        maintenance_epoch,
+        event_sequence,
+        runtime_session,
+        runtime_generation,
+        policy_generation,
+        network,
+        host,
+        port,
+        canonical_status,
+        namespace_outcome,
+        selected_namespace,
+        namespace_selection_reason,
+        decision_fingerprint,
+        hns_root_failure,
+        icann_root_failure,
+        hns_resolution_state,
+        icann_resolution_state,
+        icann_tls_action: canonical.icann_tls_action().map(canonical_icann_tls_action),
+        icann_dnssec_status: canonical
+            .icann_dnssec_status()
+            .map(canonical_icann_dnssec_status),
+        chain_anchor,
+        transport_policy,
+        actual_selected_transport,
+        nameserver_authority,
+        local_hns_proof_state,
+        local_dnssec_state,
+        local_tlsa_state,
+        local_dane_state,
+        peer_identity,
+        proxy_identity,
+        target_identity,
+        proxy_target_separation,
+        direct_relay_fallback,
+        provider_readiness,
+        registry_profile,
+        registry_fingerprint,
+        protocol_version,
+    })
+}
+
+fn canonical_icann_tls_action(action: CanonicalIcannTlsAction) -> &'static str {
+    match action {
+        CanonicalIcannTlsAction::EnforceDane => "enforceDane",
+        CanonicalIcannTlsAction::WebPkiAuthenticatedAbsence => "webPkiAuthenticatedAbsence",
+        CanonicalIcannTlsAction::WebPkiInsecureDelegation => "webPkiInsecureDelegation",
+        CanonicalIcannTlsAction::FailClosed => "failClosed",
+    }
+}
+
+fn canonical_icann_dnssec_status(status: CanonicalIcannDnssecStatus) -> &'static str {
+    match status {
+        CanonicalIcannDnssecStatus::Secure => "secure",
+        CanonicalIcannDnssecStatus::InsecureDelegation => "insecureDelegation",
+        CanonicalIcannDnssecStatus::Bogus => "bogus",
+        CanonicalIcannDnssecStatus::Indeterminate => "indeterminate",
     }
 }
 
@@ -1366,20 +1699,29 @@ impl NativeHostController {
                             .unwrap_or_else(|_| Value::String(status.to_json()))
                     })
                     .map_err(|error| ("runtimeError", error.to_string()));
-                // A sync attempt may persist headers or invalidate cached proofs even
-                // when a later peer/storage step returns an error. Never retain page
-                // observations across that maintenance boundary.
-                self.security_observations.invalidate_results();
+                // A sync attempt may advance the maintenance epoch even when a
+                // later peer/storage step returns an error. Retain observations
+                // published under the resulting epoch while discarding only
+                // stale-epoch results; a blanket clear here can erase a new
+                // CONNECT decision published just after maintenance releases.
+                self.security_observations
+                    .retain_maintenance_epoch(self.runtime.security_maintenance_epoch());
                 (self.response_from_result(request_id, result), false)
             }
             NativeRequest::Diagnostics { .. } => {
                 let diagnostics = diagnostics_json();
                 let core = serde_json::from_str(&diagnostics)
                     .unwrap_or_else(|_| Value::String(diagnostics.to_owned()));
+                let maintenance_epoch = self.runtime.security_maintenance_epoch();
                 let value = json!({
                     "core": core,
                     "runtime": self.status_result(),
-                    "recentSecurityResults": self.security_observations.recent()
+                    "recentSecurityResults": self
+                        .security_observations
+                        .recent(maintenance_epoch),
+                    "recentConnectSecurityDecisions": self
+                        .security_observations
+                        .recent_connect_decisions(maintenance_epoch)
                 });
                 (self.success_response(request_id, value), false)
             }
@@ -1430,13 +1772,17 @@ impl NativeHostController {
         let runtime_generation = authority.runtime_generation();
         let policy_generation = authority.policy_generation();
         let proxy_generation = proxy.generation();
-        self.security_observations.activate(ActiveSecurityContext {
-            runtime_session: runtime_session.clone(),
-            runtime_generation,
-            policy_generation,
-            proxy_generation,
-            network: self.runtime.network().as_str().to_owned(),
-        });
+        let maintenance_epoch = self.runtime.security_maintenance_epoch();
+        self.security_observations.activate(
+            ActiveSecurityContext {
+                runtime_session: runtime_session.clone(),
+                runtime_generation,
+                policy_generation,
+                proxy_generation,
+                network: self.runtime.network().as_str().to_owned(),
+            },
+            maintenance_epoch,
+        );
         let pac_script = chromium_dane_pac_script(proxy.port())
             .map_err(|error| ("pacGenerationFailed", error.to_string()))?;
         let (header_sync, header_sync_unavailable_reason) = self.header_sync_status_result();
@@ -1454,11 +1800,13 @@ impl NativeHostController {
             "runtimeSession": runtime_session,
             "runtimeGeneration": runtime_generation,
             "policyGeneration": policy_generation,
+            "securityMaintenanceEpoch": maintenance_epoch,
             "policy": policy,
             "headerSync": header_sync,
             "headerSyncUnavailableReason": header_sync_unavailable_reason,
             "latestMainFrameSecurity": Value::Null,
-            "latestMainFrameSecurityUnavailableReason": Value::Null
+            "latestMainFrameSecurityUnavailableReason": Value::Null,
+            "recentConnectSecurityDecisions": []
         });
         self.policy = policy;
         self.proxy = Some(proxy);
@@ -1468,6 +1816,7 @@ impl NativeHostController {
     fn status_result(&self) -> Value {
         let proxy = self.proxy.as_ref();
         let context = self.security_observations.active_context();
+        let maintenance_epoch = self.runtime.security_maintenance_epoch();
         let (header_sync, header_sync_unavailable_reason) = self.header_sync_status_result();
         json!({
             "state": if proxy.is_some_and(|proxy| !proxy.is_stop_requested()) {
@@ -1482,15 +1831,21 @@ impl NativeHostController {
                 .map_or_else(|| self.canonical_policy_generation(), |context| {
                     context.policy_generation
                 }),
+            "securityMaintenanceEpoch": maintenance_epoch,
             "policy": self.policy,
             "caReady": self.local_ca.is_marked_installed(),
             "ca": self.local_ca.status_json(),
             "headerSync": header_sync,
             "headerSyncUnavailableReason": header_sync_unavailable_reason,
-            "latestMainFrameSecurity": self.security_observations.latest_main_frame(),
+            "latestMainFrameSecurity": self
+                .security_observations
+                .latest_main_frame(maintenance_epoch),
             "latestMainFrameSecurityUnavailableReason": self
                 .security_observations
-                .latest_main_frame_unavailable_reason()
+                .latest_main_frame_unavailable_reason(maintenance_epoch),
+            "recentConnectSecurityDecisions": self
+                .security_observations
+                .recent_connect_decisions(maintenance_epoch)
         })
     }
 
@@ -2033,6 +2388,53 @@ mod tests {
         input
     }
 
+    fn icann_webpki_status_input() -> StatusInput {
+        let policy = canonical_policy(&ExtensionPolicy::default());
+        let mut input = hns_only_status_input(policy);
+        input.chain_anchor = None;
+        input.actual_transport = ResolutionTransport::ValidatingIcannDoh;
+        input.evidence = ValidationEvidence {
+            hns_proof: CanonicalEvidenceState::NotAttempted,
+            dnssec: CanonicalEvidenceState::Verified,
+            tlsa: CanonicalEvidenceState::Unavailable,
+            dane: CanonicalEvidenceState::NotAttempted,
+            chain_current: CanonicalEvidenceState::NotAttempted,
+            origin_sni: CanonicalEvidenceState::NotAttempted,
+        };
+        input.namespace_outcome = Some(CanonicalOutcomeKind::IcannOnly);
+        input.selected_namespace = Some(CanonicalNamespace::Icann);
+        input.selection_reason = Some(CanonicalSelectionReason::SingleRoot);
+        input.decision_fingerprint = Some([15; 32]);
+        input.icann_tls_action = Some(IcannTlsAction::WebPkiAuthenticatedAbsence);
+        input.icann_dnssec_status = Some(IcannDnssecStatus::Secure);
+        input
+    }
+
+    fn test_connect_security_decision(
+        canonical: &CanonicalBrowserStatus,
+        event_sequence: u64,
+    ) -> ChromiumConnectSecurityDecision {
+        test_connect_security_decision_at_epoch(canonical, event_sequence, 7)
+    }
+
+    fn test_connect_security_decision_at_epoch(
+        canonical: &CanonicalBrowserStatus,
+        event_sequence: u64,
+        maintenance_epoch: u64,
+    ) -> ChromiumConnectSecurityDecision {
+        let mut result =
+            chromium_security_result_from_canonical("www.example", 599, false, canonical, None);
+        result.event_sequence = event_sequence;
+        chromium_connect_security_decision_from_canonical(
+            canonical,
+            result,
+            443,
+            maintenance_epoch,
+            123_456,
+        )
+        .unwrap()
+    }
+
     fn observation_tuple(
         canonical: &CanonicalBrowserStatus,
         event_sequence: u64,
@@ -2196,6 +2598,120 @@ mod tests {
     }
 
     #[test]
+    fn connect_decision_schema_is_explicit_host_scoped_and_not_an_http_result() {
+        let canonical = CanonicalBrowserStatus::new(icann_webpki_status_input()).unwrap();
+        let decision = test_connect_security_decision(&canonical, canonical.event_sequence());
+        let encoded = serde_json::to_value(decision).unwrap();
+        let object = encoded.as_object().unwrap();
+
+        assert_eq!(encoded["schemaVersion"], 1);
+        assert_eq!(encoded["observationKind"], "browserWebPkiPassthrough");
+        assert_eq!(encoded["httpStatusObserved"], false);
+        assert_eq!(encoded["observedAtUnixMs"], 123_456);
+        assert_eq!(encoded["maintenanceEpoch"], 7);
+        assert_eq!(encoded["host"], "www.example");
+        assert_eq!(encoded["port"], 443);
+        assert!(!object.contains_key("mainFrame"));
+        assert!(!object.contains_key("statusCode"));
+        assert_eq!(encoded["selectedNamespace"], "icann");
+        assert_eq!(encoded["icannTlsAction"], "webPkiAuthenticatedAbsence");
+        assert_eq!(encoded["icannDnssecStatus"], "secure");
+        assert_eq!(encoded["actualSelectedTransport"], "icannDoh");
+        assert_eq!(encoded["nameserverAuthority"], "validatingIcannResolver");
+        assert_eq!(encoded["localHnsProofState"], "notAttempted");
+        assert_eq!(encoded["localDnssecState"], "verified");
+        assert_eq!(encoded["localTlsaState"], "unavailable");
+        assert_eq!(encoded["localDaneState"], "notAttempted");
+        assert_eq!(encoded["chainAnchor"]["localBestHeight"], Value::Null);
+        assert_eq!(encoded["chainAnchor"]["targetHeight"], Value::Null);
+        assert_eq!(encoded["chainAnchor"]["estimatedTargetHeight"], Value::Null);
+    }
+
+    #[test]
+    fn connect_decision_requires_selected_icann_webpki_and_nonzero_correlation() {
+        let webpki = CanonicalBrowserStatus::new(icann_webpki_status_input()).unwrap();
+        let webpki_result =
+            chromium_security_result_from_canonical("www.example", 200, false, &webpki, None);
+        assert!(
+            chromium_connect_security_decision_from_canonical(
+                &webpki,
+                webpki_result.clone(),
+                0,
+                7,
+                1,
+            )
+            .is_none()
+        );
+        assert!(
+            chromium_connect_security_decision_from_canonical(&webpki, webpki_result, 443, 0, 1,)
+                .is_none()
+        );
+
+        let icann_dane = CanonicalBrowserStatus::new(icann_dane_status_input(
+            CanonicalOutcomeKind::IcannOnly,
+            CanonicalSelectionReason::SingleRoot,
+        ))
+        .unwrap();
+        let icann_dane_result =
+            chromium_security_result_from_canonical("dane.example", 200, false, &icann_dane, None);
+        assert!(
+            chromium_connect_security_decision_from_canonical(
+                &icann_dane,
+                icann_dane_result,
+                443,
+                7,
+                1,
+            )
+            .is_none()
+        );
+
+        let hns = CanonicalBrowserStatus::new(hns_only_status_input(canonical_policy(
+            &ExtensionPolicy::default(),
+        )))
+        .unwrap();
+        let hns_result = chromium_security_result_from_canonical("welcome", 200, false, &hns, None);
+        assert!(
+            chromium_connect_security_decision_from_canonical(&hns, hns_result, 443, 7, 1,)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn connect_decisions_are_bounded_ordered_and_deduplicated() {
+        let canonical = CanonicalBrowserStatus::new(icann_webpki_status_input()).unwrap();
+        let mut state = SecurityObservationState::default();
+        for event_sequence in 1..=u64::try_from(MAX_RECENT_SECURITY_RESULTS + 5).unwrap() {
+            retain_connect_security_decision(
+                &mut state,
+                test_connect_security_decision(&canonical, event_sequence),
+            );
+        }
+        retain_connect_security_decision(
+            &mut state,
+            test_connect_security_decision(&canonical, 10),
+        );
+
+        assert_eq!(
+            state.recent_connect_decisions.len(),
+            MAX_RECENT_SECURITY_RESULTS
+        );
+        assert_eq!(
+            state
+                .recent_connect_decisions
+                .front()
+                .map(|decision| decision.event_sequence),
+            Some(6)
+        );
+        assert_eq!(
+            state
+                .recent_connect_decisions
+                .back()
+                .map(|decision| decision.event_sequence),
+            Some(u64::try_from(MAX_RECENT_SECURITY_RESULTS + 5).unwrap())
+        );
+    }
+
+    #[test]
     fn convergent_default_keeps_canonical_icann_default_reason() {
         let canonical = CanonicalBrowserStatus::new(icann_dane_status_input(
             CanonicalOutcomeKind::BothConvergent,
@@ -2254,6 +2770,7 @@ mod tests {
         retain_security_observation(
             &mut state,
             true,
+            7,
             CanonicalSecurityObservation::Available {
                 tuple: observation_tuple(&canonical, canonical.event_sequence()),
                 result: Box::new(result),
@@ -2271,6 +2788,7 @@ mod tests {
         retain_security_observation(
             &mut state,
             true,
+            7,
             CanonicalSecurityObservation::Unavailable {
                 tuple: observation_tuple(&canonical, unavailable_event),
                 reason: "p2pRegistryIdentityUnavailable",
@@ -2289,6 +2807,7 @@ mod tests {
         retain_security_observation(
             &mut state,
             true,
+            7,
             CanonicalSecurityObservation::Available {
                 tuple: observation_tuple(&canonical, newer_event),
                 result: Box::new(newer),
@@ -2297,6 +2816,7 @@ mod tests {
         retain_security_observation(
             &mut state,
             true,
+            7,
             CanonicalSecurityObservation::Unavailable {
                 tuple: observation_tuple(&canonical, unavailable_event + 1),
                 reason: "staleUnavailable",
@@ -2313,43 +2833,109 @@ mod tests {
     }
 
     #[test]
-    fn header_maintenance_invalidates_page_results_but_preserves_active_context() {
+    fn header_maintenance_retains_new_epoch_and_rejects_late_old_epoch_results() {
         let canonical = CanonicalBrowserStatus::new(hns_only_status_input(canonical_policy(
             &ExtensionPolicy::default(),
         )))
         .unwrap();
-        let result =
+        let webpki = CanonicalBrowserStatus::new(icann_webpki_status_input()).unwrap();
+        let old_result =
             chromium_security_result_from_canonical("page.example", 200, true, &canonical, None);
         let observations = SecurityObservations::default();
-        observations.activate(ActiveSecurityContext {
-            runtime_session: result.runtime_session.clone(),
-            runtime_generation: result.runtime_generation,
-            policy_generation: result.policy_generation,
-            proxy_generation: 9,
-            network: result.network.clone(),
-        });
+        observations.activate(
+            ActiveSecurityContext {
+                runtime_session: old_result.runtime_session.clone(),
+                runtime_generation: old_result.runtime_generation,
+                policy_generation: old_result.policy_generation,
+                proxy_generation: 9,
+                network: old_result.network.clone(),
+            },
+            Some(7),
+        );
         {
             let mut state = observations.state.lock().unwrap();
             retain_security_observation(
                 &mut state,
                 true,
+                7,
                 CanonicalSecurityObservation::Available {
-                    tuple: observation_tuple(&canonical, result.event_sequence),
-                    result: Box::new(result),
+                    tuple: observation_tuple(&canonical, old_result.event_sequence),
+                    result: Box::new(old_result.clone()),
                 },
+            );
+            retain_connect_security_decision(
+                &mut state,
+                test_connect_security_decision_at_epoch(&webpki, webpki.event_sequence(), 7),
             );
             assert!(state.latest_main_frame.is_some());
             assert_eq!(state.recent.len(), 1);
+            assert_eq!(state.recent_connect_decisions.len(), 1);
+
+            let new_event = old_result.event_sequence + 2;
+            let mut new_result = old_result.clone();
+            new_result.host = "new-epoch.example".to_owned();
+            new_result.event_sequence = new_event;
+            retain_security_observation(
+                &mut state,
+                true,
+                8,
+                CanonicalSecurityObservation::Available {
+                    tuple: observation_tuple(&canonical, new_event),
+                    result: Box::new(new_result),
+                },
+            );
+            retain_connect_security_decision(
+                &mut state,
+                test_connect_security_decision_at_epoch(&webpki, new_event + 1, 8),
+            );
         }
 
-        observations.invalidate_results();
+        // Model a CONNECT/HTTP callback that publishes under the new epoch
+        // after maintenance releases but before sync_once returns.
+        observations.retain_maintenance_epoch(Some(8));
+        {
+            let mut state = observations.state.lock().unwrap();
+            retain_security_observation(
+                &mut state,
+                true,
+                7,
+                CanonicalSecurityObservation::Available {
+                    tuple: observation_tuple(&canonical, old_result.event_sequence + 1),
+                    result: Box::new(old_result),
+                },
+            );
+            retain_connect_security_decision(
+                &mut state,
+                test_connect_security_decision_at_epoch(&webpki, webpki.event_sequence() + 1, 7),
+            );
+        }
 
         let state = observations.state.lock().unwrap();
         assert!(state.active.is_some());
-        assert!(state.latest_main_frame.is_none());
+        assert_eq!(state.highest_maintenance_epoch, Some(8));
+        assert_eq!(state.latest_main_frame_maintenance_epoch, Some(8));
+        assert_eq!(
+            state
+                .latest_main_frame
+                .as_ref()
+                .map(|result| result.host.as_str()),
+            Some("new-epoch.example")
+        );
         assert!(state.latest_main_frame_unavailable_reason.is_none());
-        assert!(state.latest_main_frame_event_floor.is_none());
-        assert!(state.recent.is_empty());
+        assert_eq!(state.recent.len(), 1);
+        assert_eq!(state.recent_connect_decisions.len(), 1);
+        drop(state);
+        assert_eq!(
+            observations
+                .latest_main_frame(Some(8))
+                .map(|result| result.host),
+            Some("new-epoch.example".to_owned())
+        );
+        assert_eq!(observations.recent(Some(8)).len(), 1);
+        assert_eq!(observations.recent_connect_decisions(Some(8)).len(), 1);
+        assert!(observations.latest_main_frame(Some(7)).is_none());
+        assert!(observations.recent(Some(7)).is_empty());
+        assert!(observations.recent_connect_decisions(Some(7)).is_empty());
     }
 
     #[test]
@@ -2371,6 +2957,7 @@ mod tests {
         retain_security_observation(
             &mut state,
             true,
+            7,
             CanonicalSecurityObservation::Available {
                 tuple: observation_tuple(&canonical, main_event),
                 result: Box::new(main_frame),
@@ -2379,6 +2966,7 @@ mod tests {
         retain_security_observation(
             &mut state,
             false,
+            7,
             CanonicalSecurityObservation::Available {
                 tuple: observation_tuple(&canonical, subresource_event),
                 result: Box::new(subresource),
@@ -2391,6 +2979,7 @@ mod tests {
         retain_security_observation(
             &mut state,
             false,
+            7,
             CanonicalSecurityObservation::Available {
                 tuple: observation_tuple(&canonical, older_event),
                 result: Box::new(older),
@@ -2407,6 +2996,7 @@ mod tests {
         retain_security_observation(
             &mut state,
             false,
+            7,
             CanonicalSecurityObservation::Available {
                 tuple: observation_tuple(&canonical, main_event),
                 result: Box::new(duplicate),
@@ -2424,7 +3014,7 @@ mod tests {
             state
                 .recent
                 .iter()
-                .map(|result| result.host.as_str())
+                .map(|entry| entry.result.host.as_str())
                 .collect::<Vec<_>>(),
             vec!["older.example", "page.example", "asset.example"]
         );
@@ -2522,7 +3112,10 @@ mod tests {
         assert_eq!(response.event_sequence, 1);
         assert_eq!(response.runtime_generation, Some(2));
         let result = response.result.unwrap();
+        let maintenance_epoch = controller.runtime.security_maintenance_epoch().unwrap();
+        assert_ne!(maintenance_epoch, 0);
         assert_eq!(result["state"], "active");
+        assert_eq!(result["securityMaintenanceEpoch"], maintenance_epoch);
         assert_eq!(result["ca"]["state"], "needsInstallation");
         assert_eq!(result["headerSync"]["network"], "regtest");
         assert_eq!(result["headerSync"]["bestHeight"], 0);
@@ -2537,6 +3130,10 @@ mod tests {
             result["proxy"]["password"]
                 .as_str()
                 .is_some_and(|password| !password.is_empty())
+        );
+        assert_eq!(
+            controller.status_result()["securityMaintenanceEpoch"],
+            maintenance_epoch
         );
 
         let shutdown_request =

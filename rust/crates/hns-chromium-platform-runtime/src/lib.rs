@@ -32,12 +32,14 @@ use hns_dane::{
     TlsaSelector, TlsaUsage,
 };
 use hns_gateway::{
-    Gateway, GatewayConfig, GatewayError, GatewayFailure, GatewayRequest, HnsHttpsMode,
+    Gateway, GatewayConfig, GatewayConnectDisposition, GatewayError, GatewayFailure,
+    GatewayRequest, HnsHttpsMode,
 };
 use hns_loopback_proxy::{
     BackendError as ProxyBackendError, CancellationToken as ProxyCancellationToken, HostScopeError,
     InternalResponseMetadata, LocalCertificateAuthority, NoopProxyObserver, ProxyBackend,
-    ProxyConfig, ProxyError, ProxyHeader, ProxyInstanceId, ProxyPublicationAuthority,
+    ProxyConfig, ProxyConnectOpen, ProxyConnectShutdown, ProxyConnectTunnel, ProxyError,
+    ProxyHeader, ProxyInstanceId, ProxyMetadataObservationKind, ProxyPublicationAuthority,
     ProxyPublicationPermit, ProxyRequest as LoopbackProxyRequest, ProxyRequestBody, ProxyResponse,
     ProxyResponseBody, ProxyResponseHead, ProxyResponseMetadataObservation,
     ProxyResponseMetadataObserver, ProxySessionId, ProxyTunnel, ProxyTunnelOpen, RunningProxy,
@@ -81,9 +83,10 @@ use hns_sync::{
 };
 pub use hns_transport::DEFAULT_MAX_REQUEST_BODY_BYTES;
 use hns_transport::{
-    BrowserTlsDecision, OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead,
-    OriginTransport, OriginTunnel, ReadWrite, TcpHttpTransport, TlsCertificateInspection,
-    TlsValidation, TlsaOwner, TlsaRecordSource, TlsaTransport, TransportError,
+    BrowserTlsDecision, OriginPassthroughShutdown, OriginProtocol, OriginRequest, OriginResponse,
+    OriginResponseHead, OriginTransport, OriginTunnel, OriginWebPkiPassthrough, ReadWrite,
+    TcpHttpTransport, TlsCertificateInspection, TlsValidation, TlsaOwner, TlsaRecordSource,
+    TlsaTransport, TransportError,
 };
 use hns_urkel::UrkelProofVerifier;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -255,6 +258,10 @@ const HNS_DOH_FALLBACK_HEADER: &str = "X-HNS-DoH-Fallback";
 const HNS_SECURITY_PATH_HEADER: &str = "X-HNS-Security-Path";
 const HNS_TLS_POLICY_HEADER: &str = "X-HNS-TLS-Policy";
 const HNS_RESOLVER_POLICY_HEADER: &str = "X-HNS-Resolver-Policy";
+const HNS_PORT53_INTERCEPTION_REASON: &str = "HNS Port 53 Interception Detected";
+const HNS_DANE_GENERATOR_URL: &str = "https://hns.denuoweb.com/dane-generator/";
+const INTERCEPTION_ERROR_CSP: &str =
+    "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const PROXY_MAINTENANCE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_PROXY_UPGRADE_HEADERS: usize = 256;
 const DOH_DNS_ID: u16 = 0;
@@ -575,6 +582,12 @@ pub enum CanonicalStatusAvailability {
     Unavailable(CanonicalStatusUnavailableReason),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserProxyObservationKind {
+    OriginResponse,
+    WebPkiConnectDecision,
+}
+
 /// Exact canonical authority tuple used to bind native security results to
 /// the same runtime and policy generations as the checked browser status.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -658,6 +671,9 @@ pub struct BrowserProxyStatus {
     host: String,
     status_code: u16,
     likely_main_frame: bool,
+    observation_kind: BrowserProxyObservationKind,
+    port: Option<u16>,
+    correlation_epoch: Option<u64>,
     tls_policy: Option<BrowserProxyTlsPolicy>,
     resolver_policy: Option<BrowserProxyResolverPolicy>,
     security_path: Option<BrowserProxySecurityPath>,
@@ -681,6 +697,18 @@ impl BrowserProxyStatus {
 
     pub fn is_likely_main_frame(&self) -> bool {
         self.likely_main_frame
+    }
+
+    pub const fn observation_kind(&self) -> BrowserProxyObservationKind {
+        self.observation_kind
+    }
+
+    pub const fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    pub const fn correlation_epoch(&self) -> Option<u64> {
+        self.correlation_epoch
     }
 
     pub fn tls_policy(&self) -> Option<BrowserProxyTlsPolicy> {
@@ -755,6 +783,9 @@ impl std::fmt::Debug for BrowserProxyStatus {
             .field("host", &self.host)
             .field("status_code", &self.status_code)
             .field("likely_main_frame", &self.likely_main_frame)
+            .field("observation_kind", &self.observation_kind)
+            .field("port", &self.port)
+            .field("correlation_epoch", &self.correlation_epoch)
             .field("tls_policy", &self.tls_policy)
             .field("resolver_policy", &self.resolver_policy)
             .field("security_path", &self.security_path)
@@ -860,11 +891,17 @@ fn bounded_browser_proxy_resolution_trace(value: Option<&str>) -> Option<String>
         .map(str::to_owned)
 }
 
+// Keep the complete trusted observation tuple explicit at this conversion
+// boundary so review can see every correlation field at each call site.
+#[allow(clippy::too_many_arguments)]
 fn browser_proxy_status_from_metadata(
     generation: u64,
     host: &str,
     status_code: u16,
     likely_main_frame: bool,
+    observation_kind: BrowserProxyObservationKind,
+    port: Option<u16>,
+    correlation_epoch: Option<u64>,
     metadata: &InternalResponseMetadata,
     canonical_observation: Option<CanonicalBrowserObservationTuple>,
     canonical_status: CanonicalStatusAvailability,
@@ -874,6 +911,9 @@ fn browser_proxy_status_from_metadata(
         host: host.to_owned(),
         status_code,
         likely_main_frame,
+        observation_kind,
+        port,
+        correlation_epoch,
         tls_policy: parse_browser_proxy_tls_policy(metadata.get(HNS_TLS_POLICY_HEADER)),
         resolver_policy: parse_browser_proxy_resolver_policy(
             metadata.get(HNS_RESOLVER_POLICY_HEADER),
@@ -905,11 +945,30 @@ impl ProxyResponseMetadataObserver for RuntimeProxyStatusMetadataObserver {
         else {
             return;
         };
+        let observation_kind = match observation.kind() {
+            ProxyMetadataObservationKind::OriginResponse => {
+                if observation.correlation_epoch().is_some() {
+                    return;
+                }
+                BrowserProxyObservationKind::OriginResponse
+            }
+            ProxyMetadataObservationKind::WebPkiConnectDecision => {
+                if observation.correlation_epoch()
+                    != Some(canonical_observation.maintenance_epoch.0)
+                {
+                    return;
+                }
+                BrowserProxyObservationKind::WebPkiConnectDecision
+            }
+        };
         let status = browser_proxy_status_from_metadata(
             observation.generation(),
             observation.host().as_str(),
             observation.status_code(),
             observation.is_likely_main_frame(),
+            observation_kind,
+            observation.port(),
+            Some(canonical_observation.maintenance_epoch.0),
             observation.metadata(),
             Some(canonical_observation.tuple),
             canonical_observation.status,
@@ -1359,8 +1418,11 @@ impl CanonicalAuthority {
     }
 
     fn admits(&self, stamp: CanonicalWorkStamp) -> bool {
-        self.readiness_or_invalidate().is_ok()
-            && self.binding_is_current(stamp.proxy_generation)
+        self.readiness_or_invalidate().is_ok() && self.admits_without_readiness(stamp)
+    }
+
+    fn admits_without_readiness(&self, stamp: CanonicalWorkStamp) -> bool {
+        self.binding_is_current(stamp.proxy_generation)
             && self
                 .runtime
                 .lock()
@@ -1498,6 +1560,7 @@ struct CanonicalProxyPublicationAuthority {
     maintenance_epoch: MaintenanceEpoch,
     stamp: CanonicalWorkStamp,
     namespace_publication: Option<CanonicalNamespacePublication>,
+    connect_publication_signal: Option<Arc<AtomicBool>>,
 }
 
 struct CanonicalNamespacePublication {
@@ -1527,7 +1590,13 @@ impl ProxyPublicationAuthority for CanonicalProxyPublicationAuthority {
                     )
                 })?;
             }
-            operation()
+            let result = operation();
+            if result.is_ok()
+                && let Some(signal) = &self.connect_publication_signal
+            {
+                signal.store(true, Ordering::Release);
+            }
+            result
         })
     }
 }
@@ -1544,6 +1613,7 @@ fn canonical_proxy_publication_permit(
         maintenance_epoch,
         stamp,
         namespace_publication: None,
+        connect_publication_signal: None,
     }))
 }
 
@@ -1564,17 +1634,43 @@ fn canonical_proxy_publication_permit_with_namespace(
             store: Arc::clone(store),
             decision,
         }),
+        connect_publication_signal: None,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn canonical_connect_publication_permit(
+    authority: &Arc<CanonicalAuthority>,
+    coordination: &Arc<RuntimeCoordination>,
+    maintenance_epoch: MaintenanceEpoch,
+    stamp: CanonicalWorkStamp,
+    store: &Arc<NamespaceBindingStore>,
+    decision: NamespaceDecision,
+    signal: Arc<AtomicBool>,
+) -> ProxyPublicationPermit {
+    ProxyPublicationPermit::new(Arc::new(CanonicalProxyPublicationAuthority {
+        authority: Arc::clone(authority),
+        coordination: Arc::clone(coordination),
+        maintenance_epoch,
+        stamp,
+        namespace_publication: Some(CanonicalNamespacePublication {
+            store: Arc::clone(store),
+            decision,
+        }),
+        connect_publication_signal: Some(signal),
     }))
 }
 
 struct PendingCanonicalStatus {
     id: u64,
+    maintenance_epoch: MaintenanceEpoch,
     stamp: CanonicalWorkStamp,
     tuple: CanonicalBrowserObservationTuple,
     status: CanonicalStatusAvailability,
 }
 
 struct CanonicalStatusObservation {
+    maintenance_epoch: MaintenanceEpoch,
     stamp: CanonicalWorkStamp,
     tuple: CanonicalBrowserObservationTuple,
     status: CanonicalStatusAvailability,
@@ -1595,11 +1691,12 @@ impl Default for CanonicalStatusRegistry {
 }
 
 impl CanonicalStatusRegistry {
-    fn insert(
+    fn insert_with_epoch(
         &self,
         authority: &CanonicalAuthority,
         stamp: CanonicalWorkStamp,
         status: CanonicalStatusAvailability,
+        maintenance_epoch: MaintenanceEpoch,
     ) -> Option<u64> {
         let tuple = authority.observation_tuple(stamp).ok()?;
         let id = self
@@ -1615,6 +1712,7 @@ impl CanonicalStatusRegistry {
         }
         pending.push_back(PendingCanonicalStatus {
             id,
+            maintenance_epoch,
             stamp,
             tuple,
             status,
@@ -1629,6 +1727,7 @@ impl CanonicalStatusRegistry {
         authority
             .admits(entry.stamp)
             .then_some(CanonicalStatusObservation {
+                maintenance_epoch: entry.maintenance_epoch,
                 stamp: entry.stamp,
                 tuple: entry.tuple,
                 status: entry.status,
@@ -2100,6 +2199,20 @@ impl BrowserRuntime {
 
     pub fn network(&self) -> NetworkKind {
         self.inner.configuration.network
+    }
+
+    /// Current nonzero epoch that invalidates navigation security decisions
+    /// across header maintenance.
+    pub fn security_maintenance_epoch(&self) -> Option<u64> {
+        match self
+            .inner
+            .coordination
+            .maintenance_epoch
+            .load(Ordering::Acquire)
+        {
+            0 => None,
+            epoch => Some(epoch),
+        }
     }
 
     pub fn policy(&self) -> Result<RuntimePolicy, RuntimeError> {
@@ -2828,6 +2941,7 @@ fn raw_gateway_request_address(request: &RawGatewayHttpRequest) -> String {
 }
 
 const CANONICAL_AUTHORITY_REVOKED: &str = "canonical browser authority revoked in-flight work";
+const CONNECT_READINESS_RECHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 struct AuthorityOriginTransport {
@@ -2882,6 +2996,30 @@ impl OriginTransport for AuthorityOriginTransport {
         })
     }
 
+    fn open_webpki_passthrough(
+        &self,
+        request: &OriginRequest,
+    ) -> Result<OriginWebPkiPassthrough, TransportError> {
+        self.require_current()?;
+        let passthrough = self.inner.open_webpki_passthrough(request)?;
+        self.require_current()?;
+        let lease = Arc::new(AuthorityPassthroughLease::new(
+            Arc::clone(&self.authority),
+            self.stamp,
+        ));
+        Ok(OriginWebPkiPassthrough {
+            reader: Box::new(AuthorityBoundPassthroughReader {
+                inner: passthrough.reader,
+                lease: Arc::clone(&lease),
+            }),
+            writer: Box::new(AuthorityBoundPassthroughWriter {
+                inner: passthrough.writer,
+                lease,
+            }),
+            shutdown: passthrough.shutdown,
+        })
+    }
+
     fn fetch_to_writer(
         &self,
         request: &OriginRequest,
@@ -2905,6 +3043,105 @@ struct AuthorityBoundTunnel {
     inner: Box<dyn ReadWrite>,
     authority: Arc<CanonicalAuthority>,
     stamp: CanonicalWorkStamp,
+}
+
+struct AuthorityBoundPassthroughReader {
+    inner: Box<dyn Read + Send>,
+    lease: Arc<AuthorityPassthroughLease>,
+}
+
+impl Read for AuthorityBoundPassthroughReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.lease.require_current()?;
+        let read = self.inner.read(buffer)?;
+        self.lease.require_current()?;
+        Ok(read)
+    }
+}
+
+struct AuthorityBoundPassthroughWriter {
+    inner: Box<dyn Write + Send>,
+    lease: Arc<AuthorityPassthroughLease>,
+}
+
+impl Write for AuthorityBoundPassthroughWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.lease.require_current()?;
+        let written = self.inner.write(buffer)?;
+        self.lease.require_current()?;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.lease.require_current()?;
+        self.inner.flush()?;
+        self.lease.require_current()
+    }
+}
+
+struct AuthorityPassthroughLease {
+    authority: Arc<CanonicalAuthority>,
+    stamp: CanonicalWorkStamp,
+    next_readiness_check_ms: AtomicU64,
+    readiness_check_in_progress: AtomicBool,
+    revoked: AtomicBool,
+}
+
+impl AuthorityPassthroughLease {
+    fn new(authority: Arc<CanonicalAuthority>, stamp: CanonicalWorkStamp) -> Self {
+        Self {
+            authority,
+            stamp,
+            next_readiness_check_ms: AtomicU64::new(
+                connect_authority_millis()
+                    .saturating_add(connect_readiness_recheck_interval_millis()),
+            ),
+            readiness_check_in_progress: AtomicBool::new(false),
+            revoked: AtomicBool::new(false),
+        }
+    }
+
+    fn require_current(&self) -> std::io::Result<()> {
+        if self.revoked.load(Ordering::Acquire)
+            || !self.authority.admits_without_readiness(self.stamp)
+        {
+            self.revoked.store(true, Ordering::Release);
+            return Err(canonical_authority_publication_error());
+        }
+        let now = connect_authority_millis();
+        if now < self.next_readiness_check_ms.load(Ordering::Acquire)
+            || self
+                .readiness_check_in_progress
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return Ok(());
+        }
+        let current = self.authority.admits(self.stamp);
+        if !current {
+            self.revoked.store(true, Ordering::Release);
+        }
+        self.next_readiness_check_ms.store(
+            now.saturating_add(connect_readiness_recheck_interval_millis()),
+            Ordering::Release,
+        );
+        self.readiness_check_in_progress
+            .store(false, Ordering::Release);
+        if current {
+            Ok(())
+        } else {
+            Err(canonical_authority_publication_error())
+        }
+    }
+}
+
+fn connect_authority_millis() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    u64::try_from(START.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn connect_readiness_recheck_interval_millis() -> u64 {
+    u64::try_from(CONNECT_READINESS_RECHECK_INTERVAL.as_millis()).unwrap_or(u64::MAX)
 }
 
 impl AuthorityBoundTunnel {
@@ -2941,6 +3178,81 @@ impl Write for AuthorityBoundTunnel {
         self.require_current()?;
         self.inner.flush()?;
         self.require_current()
+    }
+}
+
+struct MaintenanceBoundConnectReader {
+    inner: Box<dyn Read + Send>,
+    coordination: Arc<RuntimeCoordination>,
+    maintenance_epoch: MaintenanceEpoch,
+    publication_signal: Arc<AtomicBool>,
+}
+
+impl Read for MaintenanceBoundConnectReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let _maintenance = connect_publication_guard(
+            &self.coordination,
+            self.maintenance_epoch,
+            &self.publication_signal,
+        )?;
+        self.inner.read(buffer)
+    }
+}
+
+struct MaintenanceBoundConnectWriter {
+    inner: Box<dyn Write + Send>,
+    coordination: Arc<RuntimeCoordination>,
+    maintenance_epoch: MaintenanceEpoch,
+    publication_signal: Arc<AtomicBool>,
+}
+
+impl Write for MaintenanceBoundConnectWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let _maintenance = connect_publication_guard(
+            &self.coordination,
+            self.maintenance_epoch,
+            &self.publication_signal,
+        )?;
+        self.inner.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _maintenance = connect_publication_guard(
+            &self.coordination,
+            self.maintenance_epoch,
+            &self.publication_signal,
+        )?;
+        self.inner.flush()
+    }
+}
+
+fn connect_publication_guard<'a>(
+    coordination: &'a RuntimeCoordination,
+    maintenance_epoch: MaintenanceEpoch,
+    publication_signal: &AtomicBool,
+) -> std::io::Result<RwLockReadGuard<'a, ()>> {
+    if !publication_signal.load(Ordering::Acquire)
+        || coordination.maintenance_epoch.load(Ordering::Acquire) != maintenance_epoch.0
+    {
+        return Err(canonical_authority_publication_error());
+    }
+    let maintenance = coordination
+        .maintenance
+        .try_read()
+        .map_err(|_| canonical_authority_publication_error())?;
+    if !publication_signal.load(Ordering::Acquire)
+        || coordination.publication_epoch(&maintenance) != Some(maintenance_epoch)
+    {
+        return Err(canonical_authority_publication_error());
+    }
+    Ok(maintenance)
+}
+
+struct RuntimeConnectShutdown(Arc<dyn OriginPassthroughShutdown>);
+
+impl ProxyConnectShutdown for RuntimeConnectShutdown {
+    fn shutdown(&self) {
+        self.0.shutdown();
     }
 }
 
@@ -3065,6 +3377,113 @@ impl BrowserRuntime {
 }
 
 impl ProxyBackend for RuntimeProxyBackend {
+    fn open_connect(
+        &self,
+        request: LoopbackProxyRequest,
+        cancellation: &ProxyCancellationToken,
+    ) -> Result<ProxyConnectOpen, ProxyBackendError> {
+        if cancellation.is_cancelled() {
+            return Err(ProxyBackendError::Cancelled);
+        }
+        let authority_stamp = self
+            .runtime
+            .inner
+            .canonical_authority
+            .admit(self.authority_generation)
+            .map_err(runtime_error_to_proxy_backend)?;
+        let request = gateway_request_from_proxy(request);
+        let maintenance = self.runtime.acquire_proxy_maintenance(cancellation)?;
+        let maintenance_epoch = maintenance.epoch();
+        require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
+        let prepared = match self
+            .runtime
+            .prepare_proxy_gateway(&request, authority_stamp)
+        {
+            Ok(prepared) => prepared,
+            Err(_error) => {
+                require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
+                return Ok(ProxyConnectOpen::Intercept);
+            }
+        };
+        require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
+        let passthrough = match prepared
+            .gateway
+            .open_browser_connect_with_failure_context(&prepared.request)
+        {
+            Ok(GatewayConnectDisposition::Intercept) => {
+                require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
+                return Ok(ProxyConnectOpen::Intercept);
+            }
+            Err(failure) => {
+                require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
+                return Ok(if gateway_failure_selected_browser_webpki(&failure) {
+                    ProxyConnectOpen::WebPkiUnavailable
+                } else {
+                    ProxyConnectOpen::Intercept
+                });
+            }
+            Ok(GatewayConnectDisposition::WebPkiPassthrough(passthrough)) => *passthrough,
+        };
+        require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
+        let canonical_status = canonical_status_for_gateway_success(
+            &self.runtime,
+            authority_stamp,
+            prepared.network,
+            Some(&passthrough.namespace_decision),
+            passthrough.resolution.secure,
+            &passthrough.origin_request,
+            &DaneDecision::WebPkiFallback,
+            OriginTlsObservation::BrowserWebPkiPassthrough,
+            &prepared.dns_trace,
+        );
+        let observation_id =
+            match publishable_webpki_connect_observation(canonical_status, |canonical_status| {
+                self.runtime.inner.canonical_statuses.insert_with_epoch(
+                    &self.runtime.inner.canonical_authority,
+                    authority_stamp,
+                    canonical_status,
+                    maintenance_epoch,
+                )
+            }) {
+                Ok(observation_id) => observation_id,
+                Err(disposition) => return Ok(disposition),
+            };
+        let publication_signal = Arc::new(AtomicBool::new(false));
+        let publication_permit = canonical_connect_publication_permit(
+            &self.runtime.inner.canonical_authority,
+            &self.runtime.inner.coordination,
+            maintenance_epoch,
+            authority_stamp,
+            &self.runtime.inner.coordination.namespace_bindings,
+            passthrough.namespace_decision,
+            Arc::clone(&publication_signal),
+        );
+        require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
+        let hns_transport::OriginWebPkiPassthrough {
+            reader,
+            writer,
+            shutdown,
+        } = passthrough.transport;
+        Ok(ProxyConnectOpen::WebPkiPassthrough(ProxyConnectTunnel {
+            reader: Box::new(MaintenanceBoundConnectReader {
+                inner: reader,
+                coordination: Arc::clone(&self.runtime.inner.coordination),
+                maintenance_epoch,
+                publication_signal: Arc::clone(&publication_signal),
+            }),
+            writer: Box::new(MaintenanceBoundConnectWriter {
+                inner: writer,
+                coordination: Arc::clone(&self.runtime.inner.coordination),
+                maintenance_epoch,
+                publication_signal,
+            }),
+            shutdown: Arc::new(RuntimeConnectShutdown(shutdown)),
+            observation_id: Some(observation_id),
+            correlation_epoch: maintenance_epoch.0,
+            publication_permit,
+        }))
+    }
+
     fn execute(
         &self,
         request: LoopbackProxyRequest,
@@ -3252,6 +3671,30 @@ impl ProxyBackend for RuntimeProxyBackend {
     }
 }
 
+fn gateway_failure_selected_browser_webpki(failure: &GatewayFailure) -> bool {
+    failure
+        .namespace_decision()
+        .and_then(NamespaceDecision::selected_plan)
+        .is_some_and(|plan| {
+            plan.namespace() == Namespace::Icann
+                && matches!(
+                    plan.tls_policy(),
+                    TlsTrustPolicy::WebPkiAuthenticatedAbsence
+                        | TlsTrustPolicy::WebPkiInsecureDelegation
+                )
+        })
+}
+
+fn publishable_webpki_connect_observation(
+    canonical_status: CanonicalStatusAvailability,
+    insert: impl FnOnce(CanonicalStatusAvailability) -> Option<u64>,
+) -> Result<u64, ProxyConnectOpen> {
+    if !matches!(&canonical_status, CanonicalStatusAvailability::Available(_)) {
+        return Err(ProxyConnectOpen::WebPkiUnavailable);
+    }
+    insert(canonical_status).ok_or(ProxyConnectOpen::WebPkiUnavailable)
+}
+
 fn require_current_proxy_work(
     runtime: &BrowserRuntime,
     stamp: CanonicalWorkStamp,
@@ -3308,7 +3751,7 @@ fn proxy_response_from_gateway(
         response.resolution.secure,
         &response.origin_request,
         &response.origin.dane_decision,
-        response.origin.tls_inspection.is_some(),
+        OriginTlsObservation::RustValidated(response.origin.tls_inspection.is_some()),
         dns_trace,
     );
     let resolver_policy = fallback_marker
@@ -3349,10 +3792,11 @@ fn proxy_response_from_gateway(
         security_path,
         &trace,
     );
-    let observation_id = runtime.inner.canonical_statuses.insert(
+    let observation_id = runtime.inner.canonical_statuses.insert_with_epoch(
         &runtime.inner.canonical_authority,
         authority_stamp,
         canonical_status,
+        maintenance_epoch,
     );
     Ok(ProxyResponse {
         head: ProxyResponseHead {
@@ -3399,19 +3843,17 @@ fn proxy_error_response_from_gateway(
         fallback_marker,
         dns_trace,
     );
-    let address = gateway_request_address(&input);
-    let body = plain_response_body(status, reason, detail, Some(&address));
-    let mut headers = vec![(
-        "Content-Type".to_owned(),
-        "text/plain; charset=utf-8".to_owned(),
-    )];
+    let document = gateway_error_document(&input, status, reason, detail, dns_trace);
+    let mut headers = vec![("Content-Type".to_owned(), document.content_type.to_owned())];
+    headers.extend(document.headers);
     append_runtime_response_metadata(&mut headers, &DaneDecision::NoTlsa, None, None, &trace);
     let canonical_status =
         canonical_status_for_gateway_failure(runtime, authority_stamp, network, failure, dns_trace);
-    let observation_id = runtime.inner.canonical_statuses.insert(
+    let observation_id = runtime.inner.canonical_statuses.insert_with_epoch(
         &runtime.inner.canonical_authority,
         authority_stamp,
         canonical_status,
+        maintenance_epoch,
     );
     ProxyResponse {
         head: ProxyResponseHead {
@@ -3420,7 +3862,7 @@ fn proxy_error_response_from_gateway(
             headers: proxy_headers(headers),
             observation_id,
         },
-        body: ProxyResponseBody::Bytes(body),
+        body: ProxyResponseBody::Bytes(document.body),
         publication_permit: canonical_proxy_publication_permit(
             &runtime.inner.canonical_authority,
             &runtime.inner.coordination,
@@ -3496,12 +3938,13 @@ fn proxy_error_response_from_backend(
         "Content-Type".to_owned(),
         "text/plain; charset=utf-8".to_owned(),
     )];
-    let observation_id = runtime.inner.canonical_statuses.insert(
+    let observation_id = runtime.inner.canonical_statuses.insert_with_epoch(
         &runtime.inner.canonical_authority,
         authority_stamp,
         CanonicalStatusAvailability::Unavailable(
             CanonicalStatusUnavailableReason::EvidenceUnavailable,
         ),
+        maintenance_epoch,
     );
     ProxyResponse {
         head: ProxyResponseHead {
@@ -3542,7 +3985,7 @@ fn proxy_tunnel_from_gateway(
         response.resolution.secure,
         &response.origin_request,
         &response.origin.dane_decision,
-        response.origin.tls_inspection.is_some(),
+        OriginTlsObservation::RustValidated(response.origin.tls_inspection.is_some()),
         dns_trace,
     );
     let resolver_policy = fallback_marker
@@ -3572,10 +4015,11 @@ fn proxy_tunnel_from_gateway(
         None,
         &trace,
     );
-    let observation_id = runtime.inner.canonical_statuses.insert(
+    let observation_id = runtime.inner.canonical_statuses.insert_with_epoch(
         &runtime.inner.canonical_authority,
         authority_stamp,
         canonical_status,
+        maintenance_epoch,
     );
     Ok(ProxyTunnel {
         head: ProxyResponseHead {
@@ -3838,6 +4282,12 @@ fn gateway_failure_is_post_selection_dane(error: &GatewayError) -> bool {
     matches!(error, GatewayError::Transport(TransportError::DaneFailed))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OriginTlsObservation {
+    RustValidated(bool),
+    BrowserWebPkiPassthrough,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn canonical_status_for_gateway_success(
     runtime: &BrowserRuntime,
@@ -3847,7 +4297,7 @@ fn canonical_status_for_gateway_success(
     resolution_secure: bool,
     origin_request: &OriginRequest,
     dane_decision: &DaneDecision,
-    tls_inspection_present: bool,
+    tls_observation: OriginTlsObservation,
     dns_trace: &DnsTraceRecorder,
 ) -> CanonicalStatusAvailability {
     match try_canonical_status_for_gateway_success(
@@ -3858,7 +4308,7 @@ fn canonical_status_for_gateway_success(
         resolution_secure,
         origin_request,
         dane_decision,
-        tls_inspection_present,
+        tls_observation,
         dns_trace,
     ) {
         Ok(status) => CanonicalStatusAvailability::Available(Box::new(status)),
@@ -3875,7 +4325,7 @@ fn try_canonical_status_for_gateway_success(
     resolution_secure: bool,
     origin_request: &OriginRequest,
     dane_decision: &DaneDecision,
-    tls_inspection_present: bool,
+    tls_observation: OriginTlsObservation,
     dns_trace: &DnsTraceRecorder,
 ) -> Result<CanonicalBrowserStatus, CanonicalStatusUnavailableReason> {
     let decision = decision.ok_or(CanonicalStatusUnavailableReason::EvidenceUnavailable)?;
@@ -3935,7 +4385,7 @@ fn try_canonical_status_for_gateway_success(
             evidence.chain_current = verified;
             if uses_tls {
                 if !resolution_secure
-                    || !tls_inspection_present
+                    || tls_observation != OriginTlsObservation::RustValidated(true)
                     || origin_request.tls.browser_tls_decision.is_some()
                     || !origin_request.tls.dnssec_secure
                     || origin_request.tls.tlsa_records.is_empty()
@@ -3967,7 +4417,7 @@ fn try_canonical_status_for_gateway_success(
             // itself verified typed evidence. HNS-only fields deliberately
             // remain absent for an ICANN-selected response.
             evidence.dnssec = verified;
-            if uses_tls && !tls_inspection_present {
+            if uses_tls && tls_observation == OriginTlsObservation::RustValidated(false) {
                 return Err(CanonicalStatusUnavailableReason::EvidenceUnavailable);
             }
             match (
@@ -3982,6 +4432,7 @@ fn try_canonical_status_for_gateway_success(
                     DaneDecision::Matched(_),
                     IcannChainState::Secure,
                 ) if uses_tls
+                    && tls_observation == OriginTlsObservation::RustValidated(true)
                     && origin_request.tls.dnssec_secure
                     && record_count.get() == origin_request.tls.tlsa_records.len()
                     && origin_request.tls.tlsa_source == Some(TlsaRecordSource::NativeTlsa) =>
@@ -4003,7 +4454,13 @@ fn try_canonical_status_for_gateway_success(
                 {
                     evidence.tlsa = unavailable;
                     evidence.dane = not_attempted;
-                    evidence.origin_sni = verified;
+                    evidence.origin_sni = match tls_observation {
+                        OriginTlsObservation::RustValidated(true) => verified,
+                        OriginTlsObservation::BrowserWebPkiPassthrough => not_attempted,
+                        OriginTlsObservation::RustValidated(false) => {
+                            return Err(CanonicalStatusUnavailableReason::EvidenceUnavailable);
+                        }
+                    };
                     icann_tls_action = Some(CanonicalIcannTlsAction::WebPkiAuthenticatedAbsence);
                     icann_dnssec_status = Some(CanonicalIcannDnssecStatus::Secure);
                 }
@@ -4018,7 +4475,13 @@ fn try_canonical_status_for_gateway_success(
                 {
                     evidence.tlsa = unavailable;
                     evidence.dane = not_attempted;
-                    evidence.origin_sni = verified;
+                    evidence.origin_sni = match tls_observation {
+                        OriginTlsObservation::RustValidated(true) => verified,
+                        OriginTlsObservation::BrowserWebPkiPassthrough => not_attempted,
+                        OriginTlsObservation::RustValidated(false) => {
+                            return Err(CanonicalStatusUnavailableReason::EvidenceUnavailable);
+                        }
+                    };
                     icann_tls_action = Some(CanonicalIcannTlsAction::WebPkiInsecureDelegation);
                     icann_dnssec_status = Some(CanonicalIcannDnssecStatus::InsecureDelegation);
                 }
@@ -4911,6 +5374,31 @@ impl BoxedDelegatedResolver {
     }
 }
 
+struct TracedHnsDelegatedResolver<R> {
+    inner: R,
+    trace: DnsTraceRecorder,
+}
+
+impl<R> TracedHnsDelegatedResolver<R> {
+    fn new(inner: R, trace: DnsTraceRecorder) -> Self {
+        Self { inner, trace }
+    }
+}
+
+impl<R> DelegatedResolver for TracedHnsDelegatedResolver<R>
+where
+    R: DelegatedResolver,
+{
+    fn resolve_delegated(
+        &self,
+        request: &ResolutionRequest,
+        delegation: &HnsDelegation,
+    ) -> Result<ResolutionAnswer, ResolverError> {
+        self.trace.record_hns_delegation(delegation);
+        self.inner.resolve_delegated(request, delegation)
+    }
+}
+
 impl DelegatedResolver for BoxedDelegatedResolver {
     fn resolve_delegated(
         &self,
@@ -4925,6 +5413,7 @@ impl DelegatedResolver for BoxedDelegatedResolver {
 struct DnsTraceRecorder {
     events: Arc<Mutex<Vec<DnsTraceEvent>>>,
     relay: Arc<Mutex<Option<DnsRelayTraceMetadata>>>,
+    hns_delegation: Arc<Mutex<HnsDelegationTraceState>>,
     namespace_resolution: Arc<Mutex<Option<String>>>,
     selected_namespace: Arc<Mutex<Option<Namespace>>>,
 }
@@ -4953,6 +5442,50 @@ impl DnsTraceRecorder {
         self.relay.lock().ok().and_then(|relay| relay.clone())
     }
 
+    fn record_hns_delegation(&self, delegation: &HnsDelegation) {
+        let root_name = delegation.root_name.to_ascii_lowercase();
+        let valid_owner = DnsName::from_ascii(&root_name)
+            .ok()
+            .is_some_and(|owner| owner == delegation.owner);
+        let mut nameservers = delegation
+            .records
+            .iter()
+            .filter(|record| {
+                record.name == delegation.owner
+                    && record.class == DNS_CLASS_IN
+                    && record.record_type == RecordType::Ns
+            })
+            .filter_map(canonical_nameserver_target)
+            .collect::<Vec<_>>();
+        nameservers.sort();
+        nameservers.dedup();
+        if let Ok(mut recorded) = self.hns_delegation.lock() {
+            if recorded.conflicted {
+                return;
+            }
+            let observation = HnsDelegationTraceMetadata {
+                root_name,
+                nameservers,
+            };
+            match &recorded.observation {
+                None if valid_owner => recorded.observation = Some(observation),
+                Some(current) if valid_owner && current == &observation => {}
+                None | Some(_) => {
+                    recorded.observation = None;
+                    recorded.conflicted = true;
+                }
+            }
+        }
+    }
+
+    fn hns_delegation_snapshot(&self) -> Option<HnsDelegationTraceMetadata> {
+        self.hns_delegation.lock().ok().and_then(|state| {
+            (!state.conflicted)
+                .then(|| state.observation.clone())
+                .flatten()
+        })
+    }
+
     fn record_namespace_resolution(&self, value: String, selected: Option<Namespace>) {
         if let Ok(mut namespace_resolution) = self.namespace_resolution.lock() {
             *namespace_resolution = Some(value);
@@ -4979,6 +5512,18 @@ impl DnsTraceRecorder {
             .ok()
             .and_then(|namespace| *namespace)
     }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct HnsDelegationTraceState {
+    observation: Option<HnsDelegationTraceMetadata>,
+    conflicted: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HnsDelegationTraceMetadata {
+    root_name: String,
+    nameservers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -8415,7 +8960,9 @@ fn prepare_gateway_http_response_with_transport(
                 &dns_trace,
             );
             PreparedGatewayHttpResponse::without_namespace_decision(
-                plain_response_for_request_with_trace(&input, status, reason, detail, &trace),
+                gateway_error_response_for_request_with_trace(
+                    &input, status, reason, detail, &trace, &dns_trace,
+                ),
             )
         }
     }
@@ -8678,8 +9225,8 @@ fn prepare_gateway_http_response_body_to_file_with_transport(
                 &fallback_marker,
                 &dns_trace,
             );
-            plain_response_to_file_for_request_with_trace(
-                &input, status, reason, detail, body_path, &trace,
+            gateway_error_response_to_file_for_request_with_trace(
+                &input, status, reason, detail, body_path, &trace, &dns_trace,
             )
             .map(PreparedGatewayFileResponse::without_namespace_decision)
         }
@@ -8817,6 +9364,10 @@ fn android_gateway_resolver(
             fallback_marker.clone(),
         ));
     }
+    delegated = BoxedDelegatedResolver::new(TracedHnsDelegatedResolver::new(
+        delegated,
+        dns_trace.clone(),
+    ));
 
     let hns_lineage = HnsProofLineage::default();
     let proof_provider = GatewayProofProvider::new(base.clone(), values, network)
@@ -10543,19 +11094,19 @@ fn interception_recovery_error(dns_trace: &DnsTraceRecorder) -> (u16, &'static s
         .any(|event| event.protocol == "user_configured_recursive_hns_doh");
     let detail = match (p2p_attempted, configured_doh_attempted) {
         (false, false) => {
-            "This network intercepted direct authoritative DNS and no authenticated alternate completed. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB). Users can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings; both retain local DNSSEC and DANE verification."
+            "This network intercepted direct authoritative DNS and no authenticated alternate completed.\n\nSite owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB).\n\nUsers can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings; both retain local DNSSEC and DANE verification."
         }
         (true, false) => {
-            "This network intercepted direct authoritative DNS. The opted-in P2P DNS relay requester was attempted and exhausted. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB). Users can configure an explicit recursive HNS DoH URL in extension settings; local DNSSEC and DANE verification remains mandatory."
+            "This network intercepted direct authoritative DNS. The opted-in P2P DNS relay requester was attempted and exhausted.\n\nSite owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB).\n\nUsers can configure an explicit recursive HNS DoH URL in extension settings; local DNSSEC and DANE verification remains mandatory."
         }
         (false, true) => {
-            "This network intercepted direct authoritative DNS. The configured recursive HNS DoH recovery endpoint was attempted and exhausted. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB). Users can enable the requester-only P2P DNS relay or update the resolver URL in extension settings; local DNSSEC and DANE verification remains mandatory."
+            "This network intercepted direct authoritative DNS. The configured recursive HNS DoH recovery endpoint was attempted and exhausted.\n\nSite owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB).\n\nUsers can enable the requester-only P2P DNS relay or update the resolver URL in extension settings; local DNSSEC and DANE verification remains mandatory."
         }
         (true, true) => {
-            "This network intercepted direct authoritative DNS. Both the opted-in P2P DNS relay requester and configured recursive HNS DoH recovery endpoint were attempted and exhausted. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB)."
+            "This network intercepted direct authoritative DNS. Both the opted-in P2P DNS relay requester and configured recursive HNS DoH recovery endpoint were attempted and exhausted.\n\nSite owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB)."
         }
     };
-    (502, "HNS Port 53 Interception Detected", detail)
+    (502, HNS_PORT53_INTERCEPTION_REASON, detail)
 }
 
 fn classification_has_hns_transport_failure(error: &GatewayError) -> bool {
@@ -10623,8 +11174,8 @@ fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) 
         ),
         GatewayError::Resolver(ResolverError::Port53InterceptionDetected) => (
             502,
-            "HNS Port 53 Interception Detected",
-            "This network intercepted direct authoritative DNS. Site owners can publish proof-anchored authoritative DoH on HTTPS 443; users can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings.",
+            HNS_PORT53_INTERCEPTION_REASON,
+            "This network intercepted direct authoritative DNS.\n\nSite owners can publish proof-anchored authoritative DoH on HTTPS 443.\n\nUsers can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings.",
         ),
         GatewayError::Resolver(ResolverError::DnsResponseCode(_)) => (
             502,
@@ -10796,6 +11347,140 @@ fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) 
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct GatewayErrorDocument {
+    body: Vec<u8>,
+    content_type: &'static str,
+    headers: Vec<(String, String)>,
+}
+
+fn canonical_nameserver_target(record: &ResourceRecord) -> Option<String> {
+    let (target, end) = DnsName::parse_wire(&record.rdata, 0).ok()?;
+    if end != record.rdata.len() || target == DnsName::root() {
+        return None;
+    }
+    CanonicalHost::parse(&target.to_string())
+        .ok()
+        .map(|target| target.as_str().to_owned())
+}
+
+fn query_component(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
+}
+
+fn html_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn interception_generator_handoff(
+    host: &str,
+    dns_trace: &DnsTraceRecorder,
+) -> Option<(String, String)> {
+    let host = CanonicalHost::parse(host).ok()?;
+    let root_name = hns_trace_root(host.as_str()).to_ascii_lowercase();
+    if root_name.is_empty() || DnsName::from_ascii(&root_name).is_err() {
+        return None;
+    }
+    let domain = format!("{root_name}/");
+    let mut url = format!(
+        "{HNS_DANE_GENERATOR_URL}?domain={}&domain_type=hns&intent=authoritative_doh&mode=delegated",
+        query_component(&domain)
+    );
+    let nameserver = dns_trace
+        .hns_delegation_snapshot()
+        .filter(|delegation| delegation.root_name.eq_ignore_ascii_case(&root_name))
+        .and_then(|delegation| delegation.nameservers.into_iter().next());
+    if let Some(nameserver) = nameserver {
+        url.push_str("&nameserver=");
+        url.push_str(&query_component(&nameserver));
+    }
+    Some((url, domain))
+}
+
+fn interception_error_document(
+    input: &GatewayHttpRequestInput<'_>,
+    status: u16,
+    reason: &str,
+    detail: &str,
+    dns_trace: &DnsTraceRecorder,
+) -> GatewayErrorDocument {
+    let address = html_escape(&gateway_request_address(input));
+    let title = html_escape(&format!("{status} {reason}"));
+    let handoff = interception_generator_handoff(input.host, dns_trace);
+    let mut body = format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>{title}</title></head><body><p><code>{address}</code></p><h1>{title}</h1>"
+    );
+    for (index, paragraph) in detail.split("\n\n").enumerate() {
+        body.push_str("<p>");
+        body.push_str(&html_escape(paragraph));
+        if index == 1
+            && let Some((url, domain)) = handoff.as_ref()
+        {
+            body.push_str(" <a href=\"");
+            body.push_str(&html_escape(url));
+            body.push_str("\">Open the DANE generator for ");
+            body.push_str(&html_escape(domain));
+            body.push_str("</a>.");
+        }
+        body.push_str("</p>");
+    }
+    body.push_str("</body></html>\n");
+    GatewayErrorDocument {
+        body: body.into_bytes(),
+        content_type: "text/html; charset=utf-8",
+        headers: vec![
+            (
+                "Content-Security-Policy".to_owned(),
+                INTERCEPTION_ERROR_CSP.to_owned(),
+            ),
+            ("Referrer-Policy".to_owned(), "no-referrer".to_owned()),
+            ("X-Content-Type-Options".to_owned(), "nosniff".to_owned()),
+            ("Cache-Control".to_owned(), "no-store".to_owned()),
+        ],
+    }
+}
+
+fn gateway_error_document(
+    input: &GatewayHttpRequestInput<'_>,
+    status: u16,
+    reason: &str,
+    detail: &str,
+    dns_trace: &DnsTraceRecorder,
+) -> GatewayErrorDocument {
+    if status == 502 && reason == HNS_PORT53_INTERCEPTION_REASON {
+        interception_error_document(input, status, reason, detail, dns_trace)
+    } else {
+        let address = gateway_request_address(input);
+        GatewayErrorDocument {
+            body: plain_response_body(status, reason, detail, Some(&address)),
+            content_type: "text/plain; charset=utf-8",
+            headers: Vec::new(),
+        }
+    }
+}
+
 fn plain_response_for_request(
     input: &GatewayHttpRequestInput<'_>,
     status: u16,
@@ -10806,15 +11491,26 @@ fn plain_response_for_request(
     plain_response_with_address(status, reason, detail, Some(&address))
 }
 
-fn plain_response_for_request_with_trace(
+fn gateway_error_response_for_request_with_trace(
     input: &GatewayHttpRequestInput<'_>,
     status: u16,
     reason: &str,
     detail: &str,
     trace_json: &str,
+    dns_trace: &DnsTraceRecorder,
 ) -> Vec<u8> {
-    let address = gateway_request_address(input);
-    plain_response_with_address_and_trace(status, reason, detail, Some(&address), trace_json)
+    let document = gateway_error_document(input, status, reason, detail, dns_trace);
+    let mut out = response_head(
+        status,
+        reason,
+        Some(document.content_type),
+        document.body.len(),
+    );
+    append_encoded_headers(&mut out, &document.headers);
+    append_resolution_trace_headers(&mut out, trace_json);
+    out.extend(b"\r\n");
+    out.extend(document.body);
+    out
 }
 
 pub fn plain_response_with_address(
@@ -10824,22 +11520,6 @@ pub fn plain_response_with_address(
     address: Option<&str>,
 ) -> Vec<u8> {
     plain_response_with_address_and_optional_trace(status, reason, detail, address, None)
-}
-
-fn plain_response_with_address_and_trace(
-    status: u16,
-    reason: &str,
-    detail: &str,
-    address: Option<&str>,
-    trace_json: &str,
-) -> Vec<u8> {
-    plain_response_with_address_and_optional_trace(
-        status,
-        reason,
-        detail,
-        address,
-        Some(trace_json),
-    )
 }
 
 fn plain_response_with_address_and_optional_trace(
@@ -10857,17 +11537,7 @@ fn plain_response_with_address_and_optional_trace(
         body.len(),
     );
     if let Some(trace_json) = trace_json {
-        out.extend(
-            format!("{HNS_RESOLVER_MODE_HEADER}: {}\r\n", trace_mode(trace_json)).as_bytes(),
-        );
-        out.extend(
-            format!(
-                "{HNS_DOH_FALLBACK_HEADER}: {}\r\n",
-                trace_doh_fallback(trace_json)
-            )
-            .as_bytes(),
-        );
-        out.extend(format!("{HNS_RESOLUTION_TRACE_HEADER}: {trace_json}\r\n").as_bytes());
+        append_resolution_trace_headers(&mut out, trace_json);
     }
     out.extend(b"\r\n");
     out.extend(body);
@@ -10885,23 +11555,32 @@ fn plain_response_to_file_for_request(
     plain_response_to_file_with_address(status, reason, detail, Some(&address), body_path)
 }
 
-fn plain_response_to_file_for_request_with_trace(
+fn gateway_error_response_to_file_for_request_with_trace(
     input: &GatewayHttpRequestInput<'_>,
     status: u16,
     reason: &str,
     detail: &str,
     body_path: &Path,
     trace_json: &str,
+    dns_trace: &DnsTraceRecorder,
 ) -> Result<Vec<u8>, String> {
-    let address = gateway_request_address(input);
-    plain_response_to_file_with_address_and_trace(
+    let document = gateway_error_document(input, status, reason, detail, dns_trace);
+    if let Some(parent) = body_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create response directory: {error}"))?;
+    }
+    fs::write(body_path, &document.body)
+        .map_err(|error| format!("write response body: {error}"))?;
+    let mut out = response_head(
         status,
         reason,
-        detail,
-        Some(&address),
-        body_path,
-        trace_json,
-    )
+        Some(document.content_type),
+        document.body.len(),
+    );
+    append_encoded_headers(&mut out, &document.headers);
+    append_resolution_trace_headers(&mut out, trace_json);
+    out.extend(b"\r\n");
+    Ok(out)
 }
 
 pub fn plain_response_to_file_with_address(
@@ -10913,24 +11592,6 @@ pub fn plain_response_to_file_with_address(
 ) -> Result<Vec<u8>, String> {
     plain_response_to_file_with_address_and_optional_trace(
         status, reason, detail, address, body_path, None,
-    )
-}
-
-fn plain_response_to_file_with_address_and_trace(
-    status: u16,
-    reason: &str,
-    detail: &str,
-    address: Option<&str>,
-    body_path: &Path,
-    trace_json: &str,
-) -> Result<Vec<u8>, String> {
-    plain_response_to_file_with_address_and_optional_trace(
-        status,
-        reason,
-        detail,
-        address,
-        body_path,
-        Some(trace_json),
     )
 }
 
@@ -10955,20 +11616,28 @@ fn plain_response_to_file_with_address_and_optional_trace(
         body.len(),
     );
     if let Some(trace_json) = trace_json {
-        out.extend(
-            format!("{HNS_RESOLVER_MODE_HEADER}: {}\r\n", trace_mode(trace_json)).as_bytes(),
-        );
-        out.extend(
-            format!(
-                "{HNS_DOH_FALLBACK_HEADER}: {}\r\n",
-                trace_doh_fallback(trace_json)
-            )
-            .as_bytes(),
-        );
-        out.extend(format!("{HNS_RESOLUTION_TRACE_HEADER}: {trace_json}\r\n").as_bytes());
+        append_resolution_trace_headers(&mut out, trace_json);
     }
     out.extend(b"\r\n");
     Ok(out)
+}
+
+fn append_encoded_headers(out: &mut Vec<u8>, headers: &[(String, String)]) {
+    for (name, value) in headers {
+        out.extend(format!("{name}: {value}\r\n").as_bytes());
+    }
+}
+
+fn append_resolution_trace_headers(out: &mut Vec<u8>, trace_json: &str) {
+    out.extend(format!("{HNS_RESOLVER_MODE_HEADER}: {}\r\n", trace_mode(trace_json)).as_bytes());
+    out.extend(
+        format!(
+            "{HNS_DOH_FALLBACK_HEADER}: {}\r\n",
+            trace_doh_fallback(trace_json)
+        )
+        .as_bytes(),
+    );
+    out.extend(format!("{HNS_RESOLUTION_TRACE_HEADER}: {trace_json}\r\n").as_bytes());
 }
 
 fn plain_response_body(status: u16, reason: &str, detail: &str, address: Option<&str>) -> Vec<u8> {
@@ -12126,6 +12795,9 @@ mod tests {
             "welcome",
             204,
             true,
+            BrowserProxyObservationKind::OriginResponse,
+            None,
+            None,
             &metadata,
             None,
             CanonicalStatusAvailability::Pending,
@@ -12138,6 +12810,9 @@ mod tests {
                 host: "welcome".to_owned(),
                 status_code: 204,
                 likely_main_frame: true,
+                observation_kind: BrowserProxyObservationKind::OriginResponse,
+                port: None,
+                correlation_epoch: None,
                 tls_policy: Some(BrowserProxyTlsPolicy::Dane),
                 resolver_policy: Some(BrowserProxyResolverPolicy::UserConfiguredRecursiveHnsDoh,),
                 security_path: Some(BrowserProxySecurityPath::DaneAuthoritativeDoh),
@@ -12158,6 +12833,9 @@ mod tests {
             "welcome",
             200,
             false,
+            BrowserProxyObservationKind::OriginResponse,
+            None,
+            None,
             &unknown,
             None,
             CanonicalStatusAvailability::Pending,
@@ -12240,6 +12918,9 @@ mod tests {
             host: "welcome".to_owned(),
             status_code: 200,
             likely_main_frame: true,
+            observation_kind: BrowserProxyObservationKind::OriginResponse,
+            port: None,
+            correlation_epoch: None,
             tls_policy: Some(BrowserProxyTlsPolicy::Dane),
             resolver_policy: None,
             security_path: Some(BrowserProxySecurityPath::DaneAuthoritativeDoh),
@@ -12321,7 +13002,12 @@ mod tests {
         let old_status = runtime
             .inner
             .canonical_statuses
-            .insert(authority, old_stamp, CanonicalStatusAvailability::Pending)
+            .insert_with_epoch(
+                authority,
+                old_stamp,
+                CanonicalStatusAvailability::Pending,
+                MaintenanceEpoch(runtime.security_maintenance_epoch().unwrap()),
+            )
             .unwrap();
 
         let second = runtime.start_proxy("welcome").unwrap();
@@ -12335,10 +13021,16 @@ mod tests {
 
         let new_stamp = authority.admit(second.generation()).unwrap();
         assert!(authority.admits(new_stamp));
+        let new_epoch = MaintenanceEpoch(runtime.security_maintenance_epoch().unwrap());
         let new_status = runtime
             .inner
             .canonical_statuses
-            .insert(authority, new_stamp, CanonicalStatusAvailability::Pending)
+            .insert_with_epoch(
+                authority,
+                new_stamp,
+                CanonicalStatusAvailability::Pending,
+                new_epoch,
+            )
             .unwrap();
         first.stop();
         assert_eq!(
@@ -12356,9 +13048,10 @@ mod tests {
         assert!(matches!(
             runtime.inner.canonical_statuses.take(new_status, authority),
             Some(CanonicalStatusObservation {
+                maintenance_epoch,
                 status: CanonicalStatusAvailability::Pending,
                 ..
-            })
+            }) if maintenance_epoch == new_epoch
         ));
 
         second.stop();
@@ -12623,6 +13316,311 @@ mod tests {
         assert!(published.is_empty());
 
         proxy.stop();
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn connect_stream_cannot_touch_origin_before_connect_200_publication() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct CountingReader(Arc<AtomicUsize>);
+
+        impl Read for CountingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                if let Some(first) = buffer.first_mut() {
+                    *first = 0x41;
+                    return Ok(1);
+                }
+                Ok(0)
+            }
+        }
+
+        struct CountingWriter(Arc<AtomicUsize>);
+
+        impl Write for CountingWriter {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            }
+        }
+
+        let data_dir = temp_dir_path("connect-pre-publication-guard");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+        let epoch = MaintenanceEpoch(runtime.security_maintenance_epoch().unwrap());
+        let signal = Arc::new(AtomicBool::new(false));
+        let read_calls = Arc::new(AtomicUsize::new(0));
+        let write_calls = Arc::new(AtomicUsize::new(0));
+        let mut reader = MaintenanceBoundConnectReader {
+            inner: Box::new(CountingReader(Arc::clone(&read_calls))),
+            coordination: Arc::clone(&runtime.inner.coordination),
+            maintenance_epoch: epoch,
+            publication_signal: Arc::clone(&signal),
+        };
+        let mut writer = MaintenanceBoundConnectWriter {
+            inner: Box::new(CountingWriter(Arc::clone(&write_calls))),
+            coordination: Arc::clone(&runtime.inner.coordination),
+            maintenance_epoch: epoch,
+            publication_signal: Arc::clone(&signal),
+        };
+
+        assert_eq!(
+            reader.read(&mut [0_u8; 1]).unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(
+            writer.write(b"blocked").unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(
+            writer.flush().unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(read_calls.load(Ordering::Acquire), 0);
+        assert_eq!(write_calls.load(Ordering::Acquire), 0);
+
+        signal.store(true, Ordering::Release);
+        assert_eq!(reader.read(&mut [0_u8; 1]).unwrap(), 1);
+        assert_eq!(writer.write(b"published").unwrap(), 9);
+        writer.flush().unwrap();
+        assert_eq!(read_calls.load(Ordering::Acquire), 1);
+        assert_eq!(write_calls.load(Ordering::Acquire), 2);
+
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    // The write guard is intentionally held for its exclusion semantics; the
+    // epoch mutation itself is atomic inside `begin_maintenance`.
+    #[allow(clippy::readonly_write_lock)]
+    fn header_maintenance_epoch_revokes_both_connect_stream_halves() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct CountingReader(Arc<AtomicUsize>);
+
+        impl Read for CountingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(0)
+            }
+        }
+
+        struct CountingWriter(Arc<AtomicUsize>);
+
+        impl Write for CountingWriter {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let data_dir = temp_dir_path("connect-maintenance-revocation");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+        let epoch = MaintenanceEpoch(runtime.security_maintenance_epoch().unwrap());
+        let signal = Arc::new(AtomicBool::new(true));
+        let read_calls = Arc::new(AtomicUsize::new(0));
+        let write_calls = Arc::new(AtomicUsize::new(0));
+        let mut reader = MaintenanceBoundConnectReader {
+            inner: Box::new(CountingReader(Arc::clone(&read_calls))),
+            coordination: Arc::clone(&runtime.inner.coordination),
+            maintenance_epoch: epoch,
+            publication_signal: Arc::clone(&signal),
+        };
+        let mut writer = MaintenanceBoundConnectWriter {
+            inner: Box::new(CountingWriter(Arc::clone(&write_calls))),
+            coordination: Arc::clone(&runtime.inner.coordination),
+            maintenance_epoch: epoch,
+            publication_signal: signal,
+        };
+
+        assert_eq!(reader.read(&mut [0_u8; 1]).unwrap(), 0);
+        assert_eq!(writer.write(b"before").unwrap(), 6);
+        {
+            let maintenance = runtime.inner.coordination.maintenance.write().unwrap();
+            runtime
+                .inner
+                .coordination
+                .begin_maintenance(&maintenance)
+                .unwrap();
+        }
+        assert_ne!(runtime.security_maintenance_epoch(), Some(epoch.0));
+        assert_eq!(
+            reader.read(&mut [0_u8; 1]).unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(
+            writer.write(b"after").unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(
+            writer.flush().unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(read_calls.load(Ordering::Acquire), 1);
+        assert_eq!(write_calls.load(Ordering::Acquire), 1);
+
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn active_header_maintenance_never_blocks_connect_io_guards() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct ProbeReader(Arc<AtomicUsize>);
+
+        impl Read for ProbeReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(0)
+            }
+        }
+
+        struct ProbeWriter(Arc<AtomicUsize>);
+
+        impl Write for ProbeWriter {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            }
+        }
+
+        let data_dir = temp_dir_path("connect-active-maintenance");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+        let epoch = MaintenanceEpoch(runtime.security_maintenance_epoch().unwrap());
+        let signal = Arc::new(AtomicBool::new(true));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut reader = MaintenanceBoundConnectReader {
+            inner: Box::new(ProbeReader(Arc::clone(&calls))),
+            coordination: Arc::clone(&runtime.inner.coordination),
+            maintenance_epoch: epoch,
+            publication_signal: Arc::clone(&signal),
+        };
+        let mut writer = MaintenanceBoundConnectWriter {
+            inner: Box::new(ProbeWriter(Arc::clone(&calls))),
+            coordination: Arc::clone(&runtime.inner.coordination),
+            maintenance_epoch: epoch,
+            publication_signal: signal,
+        };
+        let maintenance = runtime.inner.coordination.maintenance.write().unwrap();
+        let started = Instant::now();
+
+        assert_eq!(
+            reader.read(&mut [0_u8; 1]).unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(
+            writer.write(b"blocked").unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(
+            writer.flush().unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert!(started.elapsed() < Duration::from_millis(50));
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+
+        drop(maintenance);
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn passthrough_wrappers_do_not_probe_readiness_per_chunk() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct CountingReadinessProbe(Arc<AtomicUsize>);
+
+        impl CanonicalTransportReadinessProbe for CountingReadinessProbe {
+            fn verify(&self, _plan: &CanonicalTransportPlan) -> std::io::Result<()> {
+                self.0.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            }
+        }
+
+        const TRANSFER_BYTES: usize = 4 * 1024 * 1024;
+        const CHUNK_BYTES: usize = 16 * 1024;
+
+        let data_dir = temp_dir_path("connect-readiness-probe-bounds");
+        let base = data_dir.join("hns");
+        std::fs::create_dir_all(&base).unwrap();
+        let anchor_height = store_best_header_for_network_with_tree_root(
+            &base,
+            NetworkKind::Mainnet,
+            Hash::new([0x74; 32]),
+        );
+        SqliteResourceValueProvider::open(base.join("resources.sqlite")).unwrap();
+        store_peer_height(&base, anchor_height.0);
+        let proxy_session = ProxySessionId::generate().unwrap();
+        let session = CanonicalRuntimeSessionId::new(*proxy_session.as_bytes()).unwrap();
+        let policy = canonical_policy_snapshot(&RuntimePolicy::compatibility(), 1).unwrap();
+        let probe_calls = Arc::new(AtomicUsize::new(0));
+        let authority = Arc::new(
+            CanonicalAuthority::new_with_transport_readiness(
+                session,
+                policy,
+                base,
+                NetworkKind::Mainnet,
+                Arc::new(CountingReadinessProbe(Arc::clone(&probe_calls))),
+            )
+            .unwrap(),
+        );
+        authority.prepare_proxy(1).unwrap();
+        authority.activate_proxy(1).unwrap();
+        let stamp = authority.admit(1).unwrap();
+        let lease = Arc::new(AuthorityPassthroughLease::new(
+            Arc::clone(&authority),
+            stamp,
+        ));
+        // Make the periodic deadline deterministic for the throughput portion.
+        lease
+            .next_readiness_check_ms
+            .store(u64::MAX, Ordering::Release);
+        let baseline = probe_calls.load(Ordering::Acquire);
+        let mut reader = AuthorityBoundPassthroughReader {
+            inner: Box::new(std::io::Cursor::new(vec![0x75; TRANSFER_BYTES])),
+            lease: Arc::clone(&lease),
+        };
+        let mut writer = AuthorityBoundPassthroughWriter {
+            inner: Box::new(std::io::sink()),
+            lease: Arc::clone(&lease),
+        };
+        let mut buffer = [0_u8; CHUNK_BYTES];
+        let mut read = 0;
+        while read < TRANSFER_BYTES {
+            read += reader.read(&mut buffer).unwrap();
+        }
+        for _ in 0..(TRANSFER_BYTES / CHUNK_BYTES) {
+            writer.write_all(&buffer).unwrap();
+        }
+        writer.flush().unwrap();
+
+        assert_eq!(read, TRANSFER_BYTES);
+        assert_eq!(probe_calls.load(Ordering::Acquire), baseline);
+
+        lease.next_readiness_check_ms.store(0, Ordering::Release);
+        assert_eq!(reader.read(&mut buffer).unwrap(), 0);
+        assert_eq!(probe_calls.load(Ordering::Acquire), baseline + 1);
+
+        authority.revoke_proxy(1);
         cleanup_dir(&data_dir);
     }
 
@@ -13584,6 +14582,159 @@ mod tests {
         (data_dir, runtime, anchor_height)
     }
 
+    fn selected_tls_test_decision(
+        namespace: Namespace,
+        tls_policy: TlsTrustPolicy,
+    ) -> NamespaceDecision {
+        let now = now_unix_seconds();
+        let host = CanonicalHost::parse(match namespace {
+            Namespace::Hns => "native-connect-test",
+            Namespace::Icann => "native-connect-test.example",
+        })
+        .unwrap();
+        let query = OriginQuery::new(
+            host.clone(),
+            hns_namespace_resolution::OriginScheme::Https,
+            NonZeroU16::new(443),
+            hns_namespace_resolution::ProtocolCapabilities::new(true, true, false).unwrap(),
+        );
+        let freshness = Freshness::new(now, now + 60).unwrap();
+        let tlsa_records = if tls_policy == TlsTrustPolicy::Dane {
+            vec![
+                CanonicalTlsa::new({
+                    let mut rdata = vec![3, 1, 1];
+                    rdata.extend_from_slice(&[0x71; 32]);
+                    rdata
+                })
+                .unwrap(),
+            ]
+        } else {
+            Vec::new()
+        };
+        let provenance = match namespace {
+            Namespace::Hns => EvidenceProvenance::Hns {
+                network: HnsNetwork::Mainnet,
+                tree_root: [0x72; 32],
+                height: 72,
+            },
+            Namespace::Icann => EvidenceProvenance::IcannDoh {
+                chain_state: if tls_policy == TlsTrustPolicy::WebPkiInsecureDelegation {
+                    IcannChainState::ProvenInsecure
+                } else {
+                    IcannChainState::Secure
+                },
+            },
+        };
+        let plan = ValidatedOriginPlan::new(OriginPlanInput {
+            namespace,
+            query: query.clone(),
+            alias_path: Vec::new(),
+            terminal_target: host.clone(),
+            endpoint_alias_path: Vec::new(),
+            endpoint_target: host.clone(),
+            endpoints: vec!["203.0.113.72:443".parse().unwrap()],
+            service: default_service_binding(&query, &host).unwrap(),
+            tls_policy,
+            tlsa_records,
+            provenance,
+            freshness,
+        })
+        .unwrap();
+        match namespace {
+            Namespace::Hns => {
+                let icann_absence = ValidatedAbsence::new(
+                    Namespace::Icann,
+                    query.clone(),
+                    AbsenceKind::DnssecAuthenticatedNxDomain,
+                    EvidenceProvenance::IcannDoh {
+                        chain_state: IcannChainState::Secure,
+                    },
+                    freshness,
+                )
+                .unwrap();
+                decide_namespace(
+                    &query,
+                    RootLookup::Present(plan),
+                    RootLookup::Absent(icann_absence),
+                    SelectionPolicy::default(),
+                    now,
+                )
+                .unwrap()
+            }
+            Namespace::Icann => {
+                let hns_absence = ValidatedAbsence::new(
+                    Namespace::Hns,
+                    query.clone(),
+                    AbsenceKind::HnsCurrentUrkelNonInclusion,
+                    EvidenceProvenance::Hns {
+                        network: HnsNetwork::Mainnet,
+                        tree_root: [0x73; 32],
+                        height: 73,
+                    },
+                    freshness,
+                )
+                .unwrap();
+                decide_namespace(
+                    &query,
+                    RootLookup::Absent(hns_absence),
+                    RootLookup::Present(plan),
+                    SelectionPolicy::default(),
+                    now,
+                )
+                .unwrap()
+            }
+        }
+    }
+
+    fn tls_origin_request_for_decision(decision: &NamespaceDecision) -> OriginRequest {
+        let plan = decision.selected_plan().unwrap();
+        let tls_policy = plan.tls_policy();
+        let mut tls = TlsValidation {
+            mode: match plan.namespace() {
+                Namespace::Hns => hns_dane::DomainTrustMode::HnsStrict,
+                Namespace::Icann => hns_dane::DomainTrustMode::IcannWebPki,
+            },
+            dnssec_secure: tls_policy != TlsTrustPolicy::WebPkiInsecureDelegation,
+            namespace_fingerprint: Some(decision_fingerprint(decision).to_hex()),
+            service_port: 443,
+            service_transport: TlsaTransport::Tcp,
+            ..Default::default()
+        };
+        match tls_policy {
+            TlsTrustPolicy::Dane => {
+                tls.tlsa_records = vec![TlsaRecord {
+                    usage: TlsaUsage::DaneEe,
+                    selector: TlsaSelector::SubjectPublicKeyInfo,
+                    matching: TlsaMatching::Sha256,
+                    association_data: vec![0x71; 32],
+                }];
+                tls.tlsa_source = Some(TlsaRecordSource::NativeTlsa);
+                tls.browser_tls_decision = Some(BrowserTlsDecision::EnforceDane {
+                    record_count: std::num::NonZeroUsize::new(1).unwrap(),
+                });
+            }
+            TlsTrustPolicy::WebPkiAuthenticatedAbsence => {
+                tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+            }
+            TlsTrustPolicy::WebPkiInsecureDelegation => {
+                tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiInsecureDelegation);
+            }
+            TlsTrustPolicy::Cleartext => panic!("HTTPS test plan cannot be cleartext"),
+        }
+        OriginRequest {
+            method: "CONNECT".to_owned(),
+            scheme: "https".to_owned(),
+            host: decision.query().host().as_str().to_owned(),
+            connect_host: Some("203.0.113.72".to_owned()),
+            port: 443,
+            path_and_query: "/".to_owned(),
+            protocol: OriginProtocol::Http11,
+            tls,
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
     fn force_same_generation_authority_aba(authority: &CanonicalAuthority) {
         let mut runtime = authority.runtime.lock().unwrap();
         runtime
@@ -13704,6 +14855,10 @@ mod tests {
         assert_eq!(status.host, "welcome");
         assert_eq!(status.status_code, 200);
         assert!(status.likely_main_frame);
+        assert_eq!(
+            status.correlation_epoch,
+            runtime.security_maintenance_epoch()
+        );
         assert_eq!(status.tls_policy, None);
         assert_eq!(status.resolver_policy, None);
         assert_ne!(
@@ -13827,6 +14982,10 @@ mod tests {
         assert_eq!(response.head.reason_phrase, "HNS Name Not Found");
         assert!(response.head.observation_id.is_some());
         assert!(response.head.headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("content-type")
+                && header.value == "text/plain; charset=utf-8"
+        }));
+        assert!(response.head.headers.iter().any(|header| {
             header
                 .name
                 .eq_ignore_ascii_case(HNS_RESOLUTION_TRACE_HEADER)
@@ -13839,6 +14998,75 @@ mod tests {
                 let body = String::from_utf8(body).unwrap();
                 assert!(body.contains("ws://missing/socket"));
                 assert!(body.contains("404 HNS Name Not Found"));
+            }
+            ProxyResponseBody::Stream { .. } => panic!("error response must be bounded bytes"),
+        }
+        proxy.stop();
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn runtime_interception_error_is_a_hardened_clickable_html_document() {
+        let (data_dir, runtime, _anchor_height) =
+            runtime_with_current_mainnet_authority("runtime-interception-error-response");
+        let proxy = runtime.start_proxy("welcome").unwrap();
+        let stamp = runtime
+            .inner
+            .canonical_authority
+            .admit(proxy.generation())
+            .unwrap();
+        let request = GatewayHttpRequest {
+            method: "GET".to_owned(),
+            scheme: "https".to_owned(),
+            host: "shakeshift".to_owned(),
+            port: 443,
+            path_and_query: "/".to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        let failure = GatewayFailure::from(GatewayError::Resolver(
+            ResolverError::Port53InterceptionDetected,
+        ));
+        let dns_trace = trace_with_hns_nameserver("shakeshift", "a.namenode");
+        let maintenance = runtime.inner.coordination.maintenance.read().unwrap();
+        let maintenance_epoch = runtime
+            .inner
+            .coordination
+            .publication_epoch(&maintenance)
+            .unwrap();
+        let response = proxy_error_response_from_gateway(
+            &runtime,
+            stamp,
+            maintenance_epoch,
+            &request,
+            NetworkKind::Mainnet,
+            GatewayResolutionMode::Strict,
+            &failure,
+            &FallbackMarker::default(),
+            &dns_trace,
+        );
+        drop(maintenance);
+
+        assert_eq!(response.head.status_code, 502);
+        for (name, value) in [
+            ("content-type", "text/html; charset=utf-8"),
+            ("content-security-policy", INTERCEPTION_ERROR_CSP),
+            ("referrer-policy", "no-referrer"),
+            ("x-content-type-options", "nosniff"),
+            ("cache-control", "no-store"),
+        ] {
+            assert!(
+                response.head.headers.iter().any(|header| {
+                    header.name.eq_ignore_ascii_case(name) && header.value == value
+                })
+            );
+        }
+        match response.body {
+            ProxyResponseBody::Bytes(body) => {
+                let body = String::from_utf8(body).unwrap();
+                assert!(body.contains(
+                    "https://hns.denuoweb.com/dane-generator/?domain=shakeshift%2F&amp;domain_type=hns&amp;intent=authoritative_doh&amp;mode=delegated&amp;nameserver=a.namenode"
+                ));
             }
             ProxyResponseBody::Stream { .. } => panic!("error response must be bounded bytes"),
         }
@@ -16260,6 +17488,144 @@ mod tests {
     }
 
     #[test]
+    fn browser_webpki_passthrough_status_has_no_rust_tls_validation_claim() {
+        let (data_dir, runtime, _latest_height) =
+            runtime_with_current_mainnet_authority("canonical-webpki-connect-status");
+        let proxy = runtime.start_proxy("welcome").unwrap();
+        let stamp = runtime
+            .inner
+            .canonical_authority
+            .admit(proxy.generation())
+            .unwrap();
+        let decision = selected_tls_test_decision(
+            Namespace::Icann,
+            TlsTrustPolicy::WebPkiAuthenticatedAbsence,
+        );
+        let request = tls_origin_request_for_decision(&decision);
+
+        let status = try_canonical_status_for_gateway_success(
+            &runtime,
+            stamp,
+            NetworkKind::Mainnet,
+            Some(&decision),
+            true,
+            &request,
+            &DaneDecision::WebPkiFallback,
+            OriginTlsObservation::BrowserWebPkiPassthrough,
+            &DnsTraceRecorder::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.selected_namespace(), Some(Namespace::Icann));
+        assert_eq!(
+            status.icann_tls_action(),
+            Some(CanonicalIcannTlsAction::WebPkiAuthenticatedAbsence)
+        );
+        assert_eq!(
+            status.evidence().origin_sni,
+            CanonicalEvidenceState::NotAttempted
+        );
+        assert_eq!(status.evidence().tlsa, CanonicalEvidenceState::Unavailable);
+        assert_eq!(
+            try_canonical_status_for_gateway_success(
+                &runtime,
+                stamp,
+                NetworkKind::Mainnet,
+                Some(&decision),
+                true,
+                &request,
+                &DaneDecision::WebPkiFallback,
+                OriginTlsObservation::RustValidated(false),
+                &DnsTraceRecorder::default(),
+            ),
+            Err(CanonicalStatusUnavailableReason::EvidenceUnavailable)
+        );
+        let insertion_attempted = AtomicBool::new(false);
+        assert!(matches!(
+            publishable_webpki_connect_observation(
+                CanonicalStatusAvailability::Unavailable(
+                    CanonicalStatusUnavailableReason::EvidenceUnavailable,
+                ),
+                |_| {
+                    insertion_attempted.store(true, Ordering::Release);
+                    Some(1)
+                },
+            ),
+            Err(ProxyConnectOpen::WebPkiUnavailable)
+        ));
+        assert!(!insertion_attempted.load(Ordering::Acquire));
+        assert!(matches!(
+            publishable_webpki_connect_observation(
+                CanonicalStatusAvailability::Available(Box::new(status)),
+                |_| None,
+            ),
+            Err(ProxyConnectOpen::WebPkiUnavailable)
+        ));
+
+        proxy.stop();
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn selected_webpki_transport_failure_is_not_downgraded_to_local_tls() {
+        let webpki = selected_tls_test_decision(
+            Namespace::Icann,
+            TlsTrustPolicy::WebPkiAuthenticatedAbsence,
+        );
+        let webpki_failure = GatewayFailure::with_namespace_decision(
+            GatewayError::Transport(TransportError::Io(
+                "selected origin socket refused".to_owned(),
+            )),
+            webpki,
+        );
+        assert!(gateway_failure_selected_browser_webpki(&webpki_failure));
+
+        for namespace in [Namespace::Icann, Namespace::Hns] {
+            let dane = selected_tls_test_decision(namespace, TlsTrustPolicy::Dane);
+            let dane_failure = GatewayFailure::with_namespace_decision(
+                GatewayError::Transport(TransportError::DaneFailed),
+                dane,
+            );
+            assert!(!gateway_failure_selected_browser_webpki(&dane_failure));
+        }
+    }
+
+    #[test]
+    fn browser_tls_passthrough_cannot_attest_icann_dane_or_hns_dane() {
+        let (data_dir, runtime, _latest_height) =
+            runtime_with_current_mainnet_authority("canonical-dane-connect-intercept");
+        let proxy = runtime.start_proxy("welcome").unwrap();
+        let stamp = runtime
+            .inner
+            .canonical_authority
+            .admit(proxy.generation())
+            .unwrap();
+
+        for namespace in [Namespace::Icann, Namespace::Hns] {
+            let decision = selected_tls_test_decision(namespace, TlsTrustPolicy::Dane);
+            let request = tls_origin_request_for_decision(&decision);
+            assert_eq!(
+                try_canonical_status_for_gateway_success(
+                    &runtime,
+                    stamp,
+                    NetworkKind::Mainnet,
+                    Some(&decision),
+                    true,
+                    &request,
+                    &DaneDecision::Matched(TlsaUsage::DaneEe),
+                    OriginTlsObservation::BrowserWebPkiPassthrough,
+                    &DnsTraceRecorder::default(),
+                ),
+                Err(CanonicalStatusUnavailableReason::EvidenceUnavailable),
+                "{namespace:?} DANE must stay on the local Rust TLS intercept path"
+            );
+        }
+
+        proxy.stop();
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
     fn canonical_status_uses_decision_fingerprint_and_selected_plan_anchor() {
         let (data_dir, runtime, _latest_height) =
             runtime_with_current_mainnet_authority("canonical-status-selected-plan");
@@ -16350,7 +17716,7 @@ mod tests {
             true,
             &origin_request,
             &DaneDecision::NoTlsa,
-            false,
+            OriginTlsObservation::RustValidated(false),
             &trace,
         )
         .unwrap();
@@ -16375,7 +17741,7 @@ mod tests {
             true,
             &origin_request,
             &DaneDecision::NoTlsa,
-            false,
+            OriginTlsObservation::RustValidated(false),
             &DnsTraceRecorder::default(),
         )
         .unwrap();
@@ -19932,10 +21298,233 @@ mod tests {
             map_gateway_error_for_namespace(None, &error, &detected),
             (
                 502,
-                "HNS Port 53 Interception Detected",
-                "This network intercepted direct authoritative DNS and no authenticated alternate completed. Site owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB). Users can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings; both retain local DNSSEC and DANE verification.",
+                HNS_PORT53_INTERCEPTION_REASON,
+                "This network intercepted direct authoritative DNS and no authenticated alternate completed.\n\nSite owners can publish proof-anchored authoritative DoH on HTTPS 443 (an HNS hnsdns=1 declaration with proven glue plus a TLSA pin, or supported authenticated _dns.<NS> SVCB).\n\nUsers can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings; both retain local DNSSEC and DANE verification.",
             )
         );
+    }
+
+    #[test]
+    fn interception_recovery_details_keep_action_groups_in_separate_paragraphs() {
+        let p2p = DnsTraceRecorder::default();
+        p2p.record_relay(DnsRelayTraceMetadata {
+            peer: None,
+            retries: 0,
+            service_advertised: None,
+            error: Some("exhausted".to_owned()),
+        });
+        let configured = DnsTraceRecorder::default();
+        configured.push(DnsTraceEvent {
+            protocol: "user_configured_recursive_hns_doh",
+            server: "https://resolver.example/dns-query".to_owned(),
+            question_name: Some("shakeshift".to_owned()),
+            question_type: Some(RecordType::A.code()),
+            status: "transport_error".to_owned(),
+            elapsed_ms: 1,
+            error: Some("exhausted".to_owned()),
+        });
+        let both = DnsTraceRecorder::default();
+        both.record_relay(DnsRelayTraceMetadata {
+            peer: None,
+            retries: 0,
+            service_advertised: None,
+            error: Some("exhausted".to_owned()),
+        });
+        both.push(DnsTraceEvent {
+            protocol: "user_configured_recursive_hns_doh",
+            server: "https://resolver.example/dns-query".to_owned(),
+            question_name: Some("shakeshift".to_owned()),
+            question_type: Some(RecordType::A.code()),
+            status: "transport_error".to_owned(),
+            elapsed_ms: 1,
+            error: Some("exhausted".to_owned()),
+        });
+
+        for trace in [DnsTraceRecorder::default(), p2p, configured] {
+            let (_, _, detail) = interception_recovery_error(&trace);
+            let paragraphs = detail.split("\n\n").collect::<Vec<_>>();
+            assert_eq!(paragraphs.len(), 3, "{detail}");
+            assert!(paragraphs[0].starts_with("This network intercepted"));
+            assert!(paragraphs[1].starts_with("Site owners"));
+            assert!(paragraphs[2].starts_with("Users"));
+        }
+        let (_, _, detail) = interception_recovery_error(&both);
+        let paragraphs = detail.split("\n\n").collect::<Vec<_>>();
+        assert_eq!(paragraphs.len(), 2, "{detail}");
+        assert!(paragraphs[0].starts_with("This network intercepted"));
+        assert!(paragraphs[1].starts_with("Site owners"));
+
+        let (_, _, direct_detail) = map_gateway_error(&GatewayError::Resolver(
+            ResolverError::Port53InterceptionDetected,
+        ));
+        assert_eq!(
+            direct_detail,
+            "This network intercepted direct authoritative DNS.\n\nSite owners can publish proof-anchored authoritative DoH on HTTPS 443.\n\nUsers can enable the requester-only P2P DNS relay or configure an explicit recursive HNS DoH URL in extension settings."
+        );
+    }
+
+    #[test]
+    fn interception_document_links_exact_hns_root_and_verified_nameserver() {
+        let input = GatewayHttpRequestInput {
+            data_dir: "",
+            method: "GET",
+            scheme: "https",
+            host: "shakeshift",
+            port: 443,
+            path_and_query: "/",
+            header_text: "",
+            body: &[],
+        };
+        let dns_trace = trace_with_hns_nameserver("shakeshift", "a.namenode");
+        let (_, reason, detail) = interception_recovery_error(&dns_trace);
+        let document = gateway_error_document(&input, 502, reason, detail, &dns_trace);
+        let body = String::from_utf8(document.body).unwrap();
+
+        assert_eq!(document.content_type, "text/html; charset=utf-8");
+        assert!(body.contains(
+            "href=\"https://hns.denuoweb.com/dane-generator/?domain=shakeshift%2F&amp;domain_type=hns&amp;intent=authoritative_doh&amp;mode=delegated&amp;nameserver=a.namenode\""
+        ));
+        assert!(body.contains("Open the DANE generator for shakeshift/"));
+        assert!(body.contains(
+            "</p><p>Site owners can publish proof-anchored authoritative DoH on HTTPS 443"
+        ));
+        assert!(body.contains("</p><p>Users can enable the requester-only P2P DNS relay"));
+        for (name, value) in [
+            ("Content-Security-Policy", INTERCEPTION_ERROR_CSP),
+            ("Referrer-Policy", "no-referrer"),
+            ("X-Content-Type-Options", "nosniff"),
+            ("Cache-Control", "no-store"),
+        ] {
+            assert!(
+                document
+                    .headers
+                    .contains(&(name.to_owned(), value.to_owned()))
+            );
+        }
+    }
+
+    #[test]
+    fn conflicting_hns_delegation_trace_permanently_omits_nameserver_guidance() {
+        let trace = trace_with_hns_nameserver("shakeshift", "a.namenode");
+        let owner = DnsName::from_ascii("shakeshift").unwrap();
+        let target = DnsName::from_ascii("b.namenode").unwrap();
+        let mut rdata = Vec::new();
+        target.encode_wire(&mut rdata).unwrap();
+        trace.record_hns_delegation(&HnsDelegation {
+            root_name: "shakeshift".to_owned(),
+            owner: owner.clone(),
+            records: vec![ResourceRecord {
+                name: owner,
+                record_type: RecordType::Ns,
+                class: DNS_CLASS_IN,
+                ttl: 300,
+                rdata,
+            }],
+        });
+
+        assert_eq!(trace.hns_delegation_snapshot(), None);
+        let (url, _) = interception_generator_handoff("shakeshift", &trace).unwrap();
+        assert!(!url.contains("nameserver="));
+
+        let owner = DnsName::from_ascii("shakeshift").unwrap();
+        let target = DnsName::from_ascii("a.namenode").unwrap();
+        let mut rdata = Vec::new();
+        target.encode_wire(&mut rdata).unwrap();
+        trace.record_hns_delegation(&HnsDelegation {
+            root_name: "shakeshift".to_owned(),
+            owner: owner.clone(),
+            records: vec![ResourceRecord {
+                name: owner,
+                record_type: RecordType::Ns,
+                class: DNS_CLASS_IN,
+                ttl: 300,
+                rdata,
+            }],
+        });
+        assert_eq!(trace.hns_delegation_snapshot(), None);
+    }
+
+    #[test]
+    fn interception_document_omits_unproven_nameserver_and_escapes_request_path() {
+        let input = GatewayHttpRequestInput {
+            data_dir: "",
+            method: "GET",
+            scheme: "https",
+            host: "www.shakeshift",
+            port: 443,
+            path_and_query: "/<script>alert('x')</script>?a=\"&b=1",
+            header_text: "",
+            body: &[],
+        };
+        let dns_trace = DnsTraceRecorder::default();
+        let (_, reason, detail) = interception_recovery_error(&dns_trace);
+        let document = gateway_error_document(&input, 502, reason, detail, &dns_trace);
+        let body = String::from_utf8(document.body).unwrap();
+        let href = body
+            .split_once("href=\"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(href, _)| href)
+            .unwrap();
+
+        assert_eq!(
+            href,
+            "https://hns.denuoweb.com/dane-generator/?domain=shakeshift%2F&amp;domain_type=hns&amp;intent=authoritative_doh&amp;mode=delegated"
+        );
+        assert!(!href.contains("nameserver="));
+        assert!(!href.contains("script"));
+        assert!(!body.contains("<script>"));
+        assert!(body.contains(
+            "https://www.shakeshift/&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;?a=&quot;&amp;b=1"
+        ));
+
+        let plain = gateway_error_document(
+            &input,
+            404,
+            "HNS Name Not Found",
+            "A verified non-inclusion proof says this name does not exist.",
+            &dns_trace,
+        );
+        assert_eq!(plain.content_type, "text/plain; charset=utf-8");
+        assert!(plain.headers.is_empty());
+    }
+
+    #[test]
+    fn encoded_and_file_interception_responses_are_identical() {
+        let directory = temp_dir_path("interception-response-parity");
+        let body_path = directory.join("body.html");
+        let input = GatewayHttpRequestInput {
+            data_dir: "",
+            method: "GET",
+            scheme: "https",
+            host: "shakeshift",
+            port: 443,
+            path_and_query: "/",
+            header_text: "",
+            body: &[],
+        };
+        let dns_trace = trace_with_hns_nameserver("shakeshift", "a.namenode");
+        let (_, reason, detail) = interception_recovery_error(&dns_trace);
+        let trace_json = r#"{"mode":"strict","fallback":{"used":false}}"#;
+        let encoded = gateway_error_response_for_request_with_trace(
+            &input, 502, reason, detail, trace_json, &dns_trace,
+        );
+        let encoded_head = gateway_error_response_to_file_for_request_with_trace(
+            &input, 502, reason, detail, &body_path, trace_json, &dns_trace,
+        )
+        .unwrap();
+        let file_body = fs::read(&body_path).unwrap();
+
+        assert!(encoded.starts_with(&encoded_head));
+        assert_eq!(&encoded[encoded_head.len()..], file_body);
+        let head = String::from_utf8(encoded_head).unwrap();
+        assert!(head.contains("Content-Type: text/html; charset=utf-8\r\n"));
+        assert!(head.contains(&format!(
+            "Content-Security-Policy: {INTERCEPTION_ERROR_CSP}\r\n"
+        )));
+        assert!(head.contains("Referrer-Policy: no-referrer\r\n"));
+        assert!(head.contains("X-Content-Type-Options: nosniff\r\n"));
+        assert!(head.contains("Cache-Control: no-store\r\n"));
+        cleanup_dir(&directory);
     }
 
     #[test]
@@ -20699,6 +22288,26 @@ mod tests {
 
     fn write_u16_le(out: &mut Vec<u8>, value: u16) {
         out.extend(value.to_le_bytes());
+    }
+
+    fn trace_with_hns_nameserver(root_name: &str, nameserver: &str) -> DnsTraceRecorder {
+        let owner = DnsName::from_ascii(root_name).unwrap();
+        let target = DnsName::from_ascii(nameserver).unwrap();
+        let mut rdata = Vec::new();
+        target.encode_wire(&mut rdata).unwrap();
+        let trace = DnsTraceRecorder::default();
+        trace.record_hns_delegation(&HnsDelegation {
+            root_name: root_name.to_owned(),
+            owner: owner.clone(),
+            records: vec![ResourceRecord {
+                name: owner,
+                record_type: RecordType::Ns,
+                class: DNS_CLASS_IN,
+                ttl: 300,
+                rdata,
+            }],
+        });
+        trace
     }
 
     fn temp_dir_path(label: &str) -> std::path::PathBuf {

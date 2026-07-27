@@ -23,6 +23,8 @@ Chromium request
   -> full hostname resolved independently through HNS and ICANN
   -> one immutable selected namespace plan
   -> DNSSEC + HTTPS/SVCB + TLSA/DANE or defined WebPKI policy
+  -> DANE: local TLS termination and Rust origin validation
+     WebPKI fallback: raw exact-IP CONNECT and Chromium origin validation
   -> origin HTTP/1.1, HTTP/2, HTTP/3, or WebSocket transport
   -> authority check at response head, body/download, and tunnel publication
   -> sanitized checked status to the native host and extension
@@ -117,6 +119,23 @@ Status names this path `DANE via ICANN DoH`. Bogus DNSSEC is not absence.
 Typed DANE failure is preserved across HTTP/1.1, HTTP/2, HTTP/3, CONNECT, and
 WebSocket paths rather than inferred from error strings.
 
+Secure ICANN TLSA and every selected HNS HTTPS/WSS plan stay on the intercept
+path because Rust must inspect the certificate and enforce DANE. Authenticated
+ICANN TLSA denial and proven-insecure delegation instead return a pre-TLS
+passthrough disposition. The origin transport connects only to the explicit
+IP and effective TCP port in the selected plan; no system DNS lookup is
+possible. Its socket is split into independently pumped bounded read/write
+halves. Chromium carries out the end-to-end TLS handshake, so its certificate
+viewer shows the origin chain rather than the local CA.
+
+The proxy publishes CONNECT 200, the persistent namespace binding, and a
+host/port-scoped decision before either tunnel half may move bytes. The
+decision has no HTTP-status or main-frame claim; the extension may correlate
+it only with a successful Chromium navigation in the same runtime tuple and
+native maintenance epoch. Header synchronization advances that epoch and
+revokes both halves. If the selected raw origin socket cannot open, the proxy
+returns a pre-TLS CONNECT failure and never substitutes local TLS.
+
 ## Request authority and publication
 
 The native host derives the canonical runtime session from the exact
@@ -143,9 +162,11 @@ explicitly unavailable.
 - `hns-chromium-platform-runtime`: Chromium storage/network adapter, sync,
   dual-root plan construction, canonical authority integration, and status
   observation.
-- `hns-loopback-proxy`: authenticated HTTP/CONNECT endpoint, local TLS
-  termination, response-head publication, and Upgrade tunneling.
-- `hns-gateway` and `hns-transport`: selected-plan HTTP/TLS/QUIC execution.
+- `hns-loopback-proxy`: authenticated HTTP/CONNECT endpoint, local DANE TLS
+  termination, raw browser-WebPKI duplex tunneling, response-head publication,
+  and Upgrade tunneling.
+- `hns-gateway` and `hns-transport`: selected-plan HTTP/TLS/QUIC execution and
+  exact-IP split browser-WebPKI sockets.
 - `hns-resolver`, `hns-dnssec`, `hns-dane`: verified Handshake resolution,
   delegated DNSSEC, and DANE primitives.
 - `hns-chain`, `hns-sync`, `hns-p2p`, and `hns-urkel`: local Handshake header

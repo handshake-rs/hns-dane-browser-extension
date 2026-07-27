@@ -13,7 +13,7 @@ use hns_icann_dane::{
 use hns_namespace_resolution::{
     ApplicationProtocol, CanonicalHost, CanonicalTlsa, ClassificationError, Namespace,
     NamespaceDecision, OriginQuery, OriginScheme, ProtocolCapabilities, ServiceTransport,
-    TlsTrustPolicy, decision_fingerprint,
+    TlsTrustPolicy, ValidatedOriginPlan, decision_fingerprint,
 };
 use hns_resolver::{
     NameClass, PreparedNamespaceResolution, ResolutionAnswer, ResolutionRequest, Resolver,
@@ -21,7 +21,7 @@ use hns_resolver::{
 };
 use hns_transport::{
     OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead, OriginTransport,
-    OriginTunnel, TlsaRecordSource, TlsaTransport, TransportError,
+    OriginTunnel, OriginWebPkiPassthrough, TlsaRecordSource, TlsaTransport, TransportError,
 };
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -87,6 +87,25 @@ pub struct GatewayTunnel {
     pub namespace_decision: Option<NamespaceDecision>,
     pub origin_request: OriginRequest,
     pub origin: OriginTunnel,
+}
+
+/// Pre-TLS disposition for one authenticated browser CONNECT.
+pub enum GatewayConnectDisposition {
+    /// The browser must connect to the local TLS terminator because Rust must
+    /// inspect and enforce DANE for the selected origin.
+    Intercept,
+    /// The browser may retain end-to-end WebPKI over this exact, already
+    /// resolved ICANN TCP endpoint.
+    WebPkiPassthrough(Box<GatewayWebPkiPassthrough>),
+}
+
+/// One raw TCP stream whose endpoint and WebPKI fallback were selected by the
+/// same dual-root gateway decision.
+pub struct GatewayWebPkiPassthrough {
+    pub resolution: ResolutionAnswer,
+    pub namespace_decision: NamespaceDecision,
+    pub origin_request: OriginRequest,
+    pub transport: OriginWebPkiPassthrough,
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -377,6 +396,58 @@ where
             .map_err(GatewayFailure::into_error)
     }
 
+    /// Decides whether an outer browser CONNECT requires local TLS
+    /// interception or may retain browser-owned end-to-end WebPKI.
+    ///
+    /// Passthrough is available only after a complete ICANN namespace
+    /// selection and an authenticated TLSA-absence or proven-insecure
+    /// delegation decision. DANE, bogus/indeterminate DNSSEC, classification
+    /// failures, and unsupported service transports never reach this branch.
+    pub fn open_browser_connect_with_failure_context(
+        &self,
+        request: &GatewayRequest,
+    ) -> Result<GatewayConnectDisposition, GatewayFailure> {
+        self.authorize(request).map_err(GatewayFailure::from)?;
+        let (resolution, origin_request, namespace_decision) =
+            self.resolve_origin_request(request, &[OriginProtocol::Http11, OriginProtocol::Http2])?;
+        let Some(decision) = namespace_decision else {
+            return Ok(GatewayConnectDisposition::Intercept);
+        };
+        let Some(plan) = decision.selected_plan() else {
+            return Err(GatewayFailure::with_namespace_decision(
+                GatewayError::Resolver(ResolverError::InvalidDnsResponse),
+                decision,
+            ));
+        };
+        match selected_browser_connect_uses_webpki(plan, &origin_request.tls) {
+            Ok(false) => return Ok(GatewayConnectDisposition::Intercept),
+            Ok(true) => {}
+            Err(error) => {
+                return Err(GatewayFailure::with_namespace_decision(
+                    GatewayError::Transport(error),
+                    decision,
+                ));
+            }
+        }
+        let transport = self
+            .transport
+            .open_webpki_passthrough(&origin_request)
+            .map_err(|error| {
+                GatewayFailure::with_namespace_decision(
+                    GatewayError::Transport(error),
+                    decision.clone(),
+                )
+            })?;
+        Ok(GatewayConnectDisposition::WebPkiPassthrough(Box::new(
+            GatewayWebPkiPassthrough {
+                resolution,
+                namespace_decision: decision,
+                origin_request,
+                transport,
+            },
+        )))
+    }
+
     /// Opens one tunnel while retaining typed namespace evidence on error.
     pub fn handle_tunnel_with_failure_context(
         &self,
@@ -656,6 +727,26 @@ where
         }
         apply_https_service_policy(&answer.records, request, supported_origin_protocols)?;
         Ok(())
+    }
+}
+
+fn selected_browser_connect_uses_webpki(
+    plan: &ValidatedOriginPlan,
+    tls: &hns_transport::TlsValidation,
+) -> Result<bool, TransportError> {
+    let expected = match (plan.namespace(), plan.tls_policy()) {
+        (Namespace::Icann, TlsTrustPolicy::WebPkiAuthenticatedAbsence) => {
+            BrowserTlsDecision::WebPkiAuthenticatedAbsence
+        }
+        (Namespace::Icann, TlsTrustPolicy::WebPkiInsecureDelegation) => {
+            BrowserTlsDecision::WebPkiInsecureDelegation
+        }
+        _ => return Ok(false),
+    };
+    if tls.browser_tls_decision == Some(expected) && tls.service_transport == TlsaTransport::Tcp {
+        Ok(true)
+    } else {
+        Err(TransportError::InvalidRequest)
     }
 }
 
@@ -1218,6 +1309,7 @@ mod tests {
     struct CapturingTransport {
         last_request: Mutex<Option<OriginRequest>>,
         last_tunnel_request: Mutex<Option<OriginRequest>>,
+        last_passthrough_request: Mutex<Option<OriginRequest>>,
     }
 
     impl OriginTransport for CapturingTransport {
@@ -1239,6 +1331,24 @@ mod tests {
                 stream: Box::new(Cursor::new(Vec::<u8>::new())),
                 dane_decision: DaneDecision::NoTlsa,
                 tls_inspection: None,
+            })
+        }
+
+        fn open_webpki_passthrough(
+            &self,
+            request: &OriginRequest,
+        ) -> Result<OriginWebPkiPassthrough, TransportError> {
+            struct NoopShutdown;
+
+            impl hns_transport::OriginPassthroughShutdown for NoopShutdown {
+                fn shutdown(&self) {}
+            }
+
+            *self.last_passthrough_request.lock().unwrap() = Some(request.clone());
+            Ok(OriginWebPkiPassthrough {
+                reader: Box::new(Cursor::new(Vec::<u8>::new())),
+                writer: Box::new(Cursor::new(Vec::<u8>::new())),
+                shutdown: Arc::new(NoopShutdown),
             })
         }
     }
@@ -1325,6 +1435,321 @@ mod tests {
                 secure: true,
             }),
         }
+    }
+
+    fn prepared_icann_webpki(host: &str) -> PreparedNamespaceResolution {
+        let host = CanonicalHost::parse(host).unwrap();
+        let capabilities = ProtocolCapabilities::new(true, true, false).unwrap();
+        let query = OriginQuery::new(
+            host.clone(),
+            OriginScheme::Https,
+            NonZeroU16::new(443),
+            capabilities,
+        );
+        let freshness = Freshness::new(1, u64::MAX).unwrap();
+        let service = ServiceBinding::new(ServiceBindingInput {
+            priority: None,
+            service_target: host.clone(),
+            mandatory_keys: Vec::new(),
+            advertised_alpn: Vec::new(),
+            selected_protocol: ApplicationProtocol::Http11,
+            effective_port: NonZeroU16::new(443).unwrap(),
+            transport: ServiceTransport::Tcp,
+            connection_hints: Vec::new(),
+            ech_config: None,
+            parameters: Vec::new(),
+        })
+        .unwrap();
+        let plan = ValidatedOriginPlan::new(OriginPlanInput {
+            namespace: Namespace::Icann,
+            query: query.clone(),
+            alias_path: Vec::new(),
+            terminal_target: host.clone(),
+            endpoint_alias_path: Vec::new(),
+            endpoint_target: host,
+            endpoints: vec!["1.1.1.1:443".parse().unwrap()],
+            service,
+            tls_policy: TlsTrustPolicy::WebPkiAuthenticatedAbsence,
+            tlsa_records: Vec::new(),
+            provenance: EvidenceProvenance::IcannDoh {
+                chain_state: IcannChainState::Secure,
+            },
+            freshness,
+        })
+        .unwrap();
+        let hns_absence = ValidatedAbsence::new(
+            Namespace::Hns,
+            query.clone(),
+            AbsenceKind::HnsCurrentUrkelNonInclusion,
+            EvidenceProvenance::Hns {
+                network: HnsNetwork::Mainnet,
+                tree_root: [7; 32],
+                height: 42,
+            },
+            freshness,
+        )
+        .unwrap();
+        let decision = decide_namespace(
+            &query,
+            RootLookup::Absent(hns_absence),
+            RootLookup::Present(plan),
+            SelectionPolicy::default(),
+            2,
+        )
+        .unwrap();
+        PreparedNamespaceResolution {
+            decision,
+            selected_answer: Some(ResolutionAnswer {
+                name: DnsName::from_ascii("example.com").unwrap(),
+                records: Vec::new(),
+                secure: true,
+            }),
+        }
+    }
+
+    fn prepared_hns_dane(host: &str) -> PreparedNamespaceResolution {
+        let host = CanonicalHost::parse(host).unwrap();
+        let query = OriginQuery::new(
+            host.clone(),
+            OriginScheme::Https,
+            NonZeroU16::new(443),
+            ProtocolCapabilities::new(true, true, false).unwrap(),
+        );
+        let freshness = Freshness::new(1, u64::MAX).unwrap();
+        let service = ServiceBinding::new(ServiceBindingInput {
+            priority: None,
+            service_target: host.clone(),
+            mandatory_keys: Vec::new(),
+            advertised_alpn: Vec::new(),
+            selected_protocol: ApplicationProtocol::Http11,
+            effective_port: NonZeroU16::new(443).unwrap(),
+            transport: ServiceTransport::Tcp,
+            connection_hints: Vec::new(),
+            ech_config: None,
+            parameters: Vec::new(),
+        })
+        .unwrap();
+        let plan = ValidatedOriginPlan::new(OriginPlanInput {
+            namespace: Namespace::Hns,
+            query: query.clone(),
+            alias_path: Vec::new(),
+            terminal_target: host.clone(),
+            endpoint_alias_path: Vec::new(),
+            endpoint_target: host.clone(),
+            endpoints: vec!["1.1.1.1:443".parse().unwrap()],
+            service,
+            tls_policy: TlsTrustPolicy::Dane,
+            tlsa_records: vec![
+                CanonicalTlsa::new({
+                    let mut rdata = vec![3, 1, 1];
+                    rdata.extend_from_slice(&[0xbb; 32]);
+                    rdata
+                })
+                .unwrap(),
+            ],
+            provenance: EvidenceProvenance::Hns {
+                network: HnsNetwork::Mainnet,
+                tree_root: [8; 32],
+                height: 43,
+            },
+            freshness,
+        })
+        .unwrap();
+        let icann_absence = ValidatedAbsence::new(
+            Namespace::Icann,
+            query.clone(),
+            AbsenceKind::DnssecAuthenticatedNxDomain,
+            EvidenceProvenance::IcannDoh {
+                chain_state: IcannChainState::Secure,
+            },
+            freshness,
+        )
+        .unwrap();
+        let decision = decide_namespace(
+            &query,
+            RootLookup::Present(plan),
+            RootLookup::Absent(icann_absence),
+            SelectionPolicy::default(),
+            2,
+        )
+        .unwrap();
+        PreparedNamespaceResolution {
+            decision,
+            selected_answer: Some(ResolutionAnswer {
+                name: DnsName::from_ascii(host.as_str()).unwrap(),
+                records: Vec::new(),
+                secure: true,
+            }),
+        }
+    }
+
+    #[test]
+    fn browser_connect_passthrough_requires_selected_icann_webpki_fallback() {
+        let record_calls = Arc::new(AtomicUsize::new(0));
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            PreparedResolver {
+                prepared: prepared_icann_webpki("example.com"),
+                record_calls: Arc::clone(&record_calls),
+            },
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        let disposition = gateway
+            .open_browser_connect_with_failure_context(&request("example.com", "example.com"))
+            .unwrap();
+        let GatewayConnectDisposition::WebPkiPassthrough(passthrough) = disposition else {
+            panic!("authenticated ICANN WebPKI fallback must preserve browser TLS");
+        };
+
+        assert_eq!(record_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            passthrough.namespace_decision.selected_namespace(),
+            Some(Namespace::Icann)
+        );
+        assert_eq!(
+            passthrough.origin_request.connect_host.as_deref(),
+            Some("1.1.1.1")
+        );
+        assert_eq!(
+            passthrough.origin_request.tls.browser_tls_decision,
+            Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence)
+        );
+        assert!(gateway.transport().last_request.lock().unwrap().is_none());
+        assert!(
+            gateway
+                .transport()
+                .last_passthrough_request
+                .lock()
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn browser_connect_open_failure_retains_selected_webpki_decision() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            PreparedResolver {
+                prepared: prepared_icann_webpki("example.com"),
+                record_calls: Arc::new(AtomicUsize::new(0)),
+            },
+            DaneFailingTransport,
+        )
+        .unwrap();
+
+        let failure = gateway
+            .open_browser_connect_with_failure_context(&request("example.com", "example.com"))
+            .err()
+            .expect("unsupported raw transport must fail after namespace selection");
+        assert!(matches!(
+            failure.error(),
+            GatewayError::Transport(TransportError::UnsupportedTransport)
+        ));
+        assert_eq!(
+            failure
+                .namespace_decision()
+                .and_then(NamespaceDecision::selected_namespace),
+            Some(Namespace::Icann)
+        );
+        assert!(matches!(
+            failure
+                .namespace_decision()
+                .and_then(NamespaceDecision::selected_plan)
+                .map(ValidatedOriginPlan::tls_policy),
+            Some(TlsTrustPolicy::WebPkiAuthenticatedAbsence)
+        ));
+    }
+
+    #[test]
+    fn selected_webpki_plan_rejects_mismatched_browser_tls_invariants() {
+        let webpki = prepared_icann_webpki("example.com");
+        let plan = webpki.decision.selected_plan().unwrap();
+        let mut tls = hns_transport::TlsValidation {
+            browser_tls_decision: Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence),
+            service_transport: TlsaTransport::Tcp,
+            ..Default::default()
+        };
+        assert_eq!(selected_browser_connect_uses_webpki(plan, &tls), Ok(true));
+
+        tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiInsecureDelegation);
+        assert_eq!(
+            selected_browser_connect_uses_webpki(plan, &tls),
+            Err(TransportError::InvalidRequest)
+        );
+        tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
+        tls.service_transport = TlsaTransport::Udp;
+        assert_eq!(
+            selected_browser_connect_uses_webpki(plan, &tls),
+            Err(TransportError::InvalidRequest)
+        );
+
+        let dane = prepared_icann_only("example.com");
+        assert_eq!(
+            selected_browser_connect_uses_webpki(dane.decision.selected_plan().unwrap(), &tls),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn browser_connect_keeps_icann_dane_on_the_intercept_path() {
+        let prepared = prepared_icann_only_with_capabilities(
+            "example.com",
+            ProtocolCapabilities::new(true, true, false).unwrap(),
+        );
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            PreparedResolver {
+                prepared,
+                record_calls: Arc::new(AtomicUsize::new(0)),
+            },
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            gateway
+                .open_browser_connect_with_failure_context(&request("example.com", "example.com"))
+                .unwrap(),
+            GatewayConnectDisposition::Intercept
+        ));
+        assert!(
+            gateway
+                .transport()
+                .last_passthrough_request
+                .lock()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn browser_connect_keeps_hns_dane_on_the_intercept_path() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            PreparedResolver {
+                prepared: prepared_hns_dane("welcome"),
+                record_calls: Arc::new(AtomicUsize::new(0)),
+            },
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            gateway
+                .open_browser_connect_with_failure_context(&request("welcome", "welcome"))
+                .unwrap(),
+            GatewayConnectDisposition::Intercept
+        ));
+        assert!(
+            gateway
+                .transport()
+                .last_passthrough_request
+                .lock()
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -22,7 +22,7 @@ Generated input SHA-256:
   scripts/verify_cargo_git_policy.py = 7db7c19d5423e93e72ad4350b109d1d6f262fe882f87ef3524f09a2a3c483630
   rust/Cargo.toml = 659ca81d5a7992bdbcd9c7da403296402b526944126815dca9c5154900ad64ec
   rust/Cargo.lock = 58939a4689158c7304b0e789ddcb5bfd2c58d9aadc7ab6707b34919d02274b57
-  extension/manifest.json = cfb0cc8d04a218e20d1cc98dae8a7e618a6e93ae4796ddb7d3d4dcb1d028c707
+  extension/manifest.json = 391a2f9f2efe57facd1beb74269cb9ab10a9fb7e01182534b6505917962f8cb9
   package.json = b8dd475a05d3dcaffc3ae50094802835816b29a1128f2cbb511f68040275880c
   rust/crates/hns-cache/Cargo.toml = ecb37feb5e48f51bc3f4e8319aa3e8edca4178f419a3390215640e2e7c2ff058
   rust/crates/hns-chain/Cargo.toml = 0fdd59304d88167acd7cf0a0ceb2c333aa5cc79d45c46a26828d9788df944814
