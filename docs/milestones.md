@@ -51,9 +51,34 @@ change.
   or provider role.
 - HNSR and P2P ODoH remain unimplemented and fail closed.
 
-## Release qualification still required
+### Desktop Setup and signed macOS distribution
 
-- exact-current-main hosted CI;
+- Version-matched graphical Setup packages install, repair, inspect, and
+  completely remove the user-level native host and exact local CA on Linux,
+  macOS, and Windows for x64 and arm64.
+- The published v0.5.4 macOS native-host and Setup packages completed
+  Developer ID signing and Apple notarization on 2026-07-28. Credentialed jobs
+  used the protected `macos-signing` environment; the separate write-enabled
+  `release` environment still needs protection rules. Setup tickets are
+  stapled; standalone native hosts use Apple's online ticket.
+- Windows release packages remain accurately labeled unsigned.
+
+### Staged header maintenance and mandatory proxy lifecycle
+
+- Header network work, quorum collection, snapshot preparation, and peer
+  merging occur in a private staged database outside the live maintenance
+  gate.
+- Generation-and-tip-bound delta publication atomically updates headers,
+  peers, and readiness; incomplete, stale, or superseded stages fail closed.
+- Manifest V3 suspension preserves the live proxy, and every native-host
+  replacement enters a confirmed fixed blocking PAC before disconnecting the
+  captured process. Runtime failure and retry paths never expose direct or
+  system routing.
+
+## Current qualification evidence and remaining release work
+
+- Exact-current-main hosted CI passed for `be27931c88929e1e0e7d1504687a5a49a5e86bc3`
+  on 2026-07-28. Repeat and retain this gate for each future release commit.
 - native install, browsing, restart, upgrade, and complete removal on supported
   Windows and macOS versions;
 - current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;

@@ -21,8 +21,10 @@ the native Rust host, not executable extension code.
 - `nativeMessaging`: communicate with the installed Rust resolver, proxy, CA,
   policy, and diagnostics host. JavaScript does not implement the trust path.
 - `proxy`: install the mandatory, Rust-generated PAC that routes ordinary web
-  DNS hostnames to the authenticated loopback proxy. Clearing this setting is
-  part of every fail-closed lifecycle transition.
+  DNS hostnames to the authenticated loopback proxy. Fail-closed lifecycle
+  transitions replace it with a confirmed fixed blocking PAC; startup,
+  failure, and retry paths never clear proxy control to system or direct
+  routing.
 - `storage`: retain user settings locally and keep bounded session-only
   navigation/security receipts needed to bind native results to the exact
   active document.

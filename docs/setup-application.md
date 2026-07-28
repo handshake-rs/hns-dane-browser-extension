@@ -122,4 +122,6 @@ Automated Windows setup artifacts must be described as unsigned until
 project-controlled Authenticode signing is configured. A macOS Setup artifact
 must be described as unsigned unless the credentialed release workflow has
 verified its Developer ID signature, Apple acceptance, stapled ticket, final
-archive extraction, and Gatekeeper assessment.
+archive extraction, and Gatekeeper assessment. The published v0.5.4 macOS
+Setup assets completed those checks on 2026-07-28; the v0.5.4 Windows Setup
+assets remain unsigned.

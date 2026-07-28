@@ -1,6 +1,6 @@
 # Build and Supply-Chain Audit
 
-Last audited: 2026-07-27
+Last audited: 2026-07-28
 
 ## Scope
 
@@ -26,9 +26,29 @@ desktop notices. Mobile build and release evidence is maintained in
 - cargo-deny reviews active licenses, advisories, bans, and sources.
 - Node.js 22 or later is required for extension lint, tests, and the unpacked
   Manifest V3 build.
-- External GitHub Actions are pinned to full commit SHAs and workflow
-  permissions are read-only.
+- External GitHub Actions are pinned to full commit SHAs. Normal policy,
+  build, test, and packaging jobs have read-only permissions; only the
+  final release publishers receive the narrowly required release-write
+  permission. The macOS signing jobs themselves run behind the
+  default-branch-restricted `macos-signing` environment; the final asset
+  replacement job uses the separate `release` environment described below.
 - Dependabot watches GitHub Actions and Cargo.
+
+The default-branch-only macOS replacement workflow normalizes a modern OpenSSL
+3 PKCS#12 credential into an ephemeral legacy-compatible import bundle with a
+one-time password, then selects the one keychain identity matching the pinned
+SHA-256 certificate and its exact SHA-1 signing identity. Native-host and
+Setup notarization submissions are queued together and conservatively polled
+through transient Apple status-network failures. Submission IDs, status, and
+logs are retained even when a signing job fails.
+
+The `macos-signing` environment is branch-restricted. The final `replace` job
+has `contents: write` and uses the `release` environment, which currently has
+no environment protection rules or branch policy. Workflow validation still
+requires an explicit replacement confirmation, the canonical repository,
+current default branch, exact tag/source/version identity, and bounded asset
+replacement. Protect and default-branch-restrict the `release` environment to
+make publisher approval enforcement match the signing-job boundary.
 
 ## Notices
 
@@ -71,6 +91,14 @@ CI has separate policy, Rust/native-host, and extension jobs plus a required
 aggregate result. A release must record the exact commit and exact-current-main
 CI run; historical runs do not qualify later source.
 
+Exact-current-main commit
+`be27931c88929e1e0e7d1504687a5a49a5e86bc3` passed
+[CI run 30350645836](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30350645836)
+on 2026-07-28. The default-branch macOS replacement, including its protected
+credentialed signing jobs, then passed in
+[run 30350653092](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30350653092).
+Future releases must repeat rather than inherit these dated results.
+
 ## Residual risks
 
 - Release archives and their inventory are deterministic for identical staged
@@ -83,6 +111,8 @@ CI run; historical runs do not qualify later source.
   user-level registration, trust, restart, upgrade, and removal tests on every
   Windows and macOS target.
 - Store signing and review require external credentials and policy decisions;
-  source CI must not fabricate their completion.
+  source CI must not fabricate their completion. The published v0.5.4 macOS
+  native-host and Setup assets completed Developer ID signing and Apple
+  notarization on 2026-07-28; Windows artifacts remain unsigned.
 - An immutable Git revision is stronger than a branch selector but still
   requires deliberate review before changing the pinned engine commit.

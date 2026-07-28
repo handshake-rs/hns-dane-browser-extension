@@ -52,15 +52,18 @@ resolution fails closed.
 
 `Sync headers now` performs one explicit synchronization without rotating the
 proxy generation or changing policy. A failed sync is reported in the header
-section and does not disable an otherwise active proxy. Rust reports the last
-Unix second through which the current independent-peer quorum remains valid,
-and the extension schedules one sync two minutes before that point. The
-existing five-minute local runtime health check is the safety path; there is
-no second periodic peer poll. Routine stale or unknown state retains a
-ten-minute retry floor. If an automatic or manual attempt fails around a known
-quorum deadline, the extension retains that deadline across worker restarts
-and retries at most once per minute through two minutes after expiry. Opening
-the popup does not contact peers.
+section and does not disable an otherwise active proxy while authenticated
+target evidence remains unexpired. Rust reports the last Unix second through
+which the current independent-peer quorum remains valid, and the extension
+schedules one sync two minutes before that point. A separate hard-expiry alarm
+fails closed even if a native synchronization request hangs; native sync
+requests are also bounded to fifteen minutes. The existing five-minute local
+runtime health check is the safety path; there is no second periodic peer
+poll. Routine stale or unknown state retains a ten-minute retry floor. If an
+automatic or manual attempt fails around a known quorum deadline, the
+extension retains that deadline across worker restarts and retries at most
+once per minute through two minutes after expiry. Opening the popup does not
+contact peers.
 
 ## Security-result boundary
 
@@ -298,8 +301,8 @@ manifest and a trust anchor identified by exact persisted fingerprints;
 foreign or unverifiable entries are left untouched. If its ownership or
 fingerprint metadata is damaged, use expert manual recovery rather than
 broad name-based deletion. The browser removes extension-owned proxy settings
-when the extension is disabled or uninstalled; orderly suspension also clears
-them.
+when the extension is disabled or uninstalled. Manifest V3 worker suspension
+does not tear down the native connection or clear proxy control.
 
 ## Recovery and security invariants
 
@@ -310,7 +313,10 @@ them.
 - A healthy status check preserves the current generation; reconnect creates
   fresh credentials and reinstalls the PAC.
 - CA-not-installed, host disconnect, malformed native response, rejected
-  policy, PAC installation failure, or proxy restart clears proxy state.
+  policy, or proxy restart enters a confirmed fixed blocking PAC before the
+  captured native process is disconnected or replaced. Runtime lifecycle and
+  retry paths never clear proxy control to system or direct routing. Failure
+  to confirm the required PAC write remains fail closed.
 - Namespace fingerprints partition pools, TLS verification and resumption, and
   Alt-Svc state.
 - Selected HNS HTTPS never falls back to WebPKI. It never contacts a recursive
@@ -329,12 +335,16 @@ them.
   browser-visible headers.
 - Policy storage is updated only after native acceptance and an active proxy
   generation are returned.
-- Header synchronization takes the runtime maintenance write lock, so a chain
-  advance or reorganization cannot overlap request proof validation or
-  publication. Native status exposes only page and CONNECT observations from
-  the current maintenance epoch. Selective post-sync retention preserves a
-  new-epoch observation published after maintenance releases while stale or
-  late old-epoch observations remain unavailable.
+- Header synchronization stages network work, quorum evidence, the candidate
+  snapshot, and peer merging outside the live maintenance lock. Conditional
+  publication briefly takes the process-wide publication locks and runtime
+  maintenance write lock, revalidates the stage's generation/tip baseline, and
+  atomically publishes headers, peers, and readiness. A chain advance or
+  reorganization therefore cannot overlap request proof validation or
+  publication, while an unchanged-header peer refresh does not invalidate
+  current-epoch requests. Native status exposes only page and CONNECT
+  observations from the current maintenance epoch; stale or late old-epoch
+  observations remain unavailable.
 
 ## Qualification
 

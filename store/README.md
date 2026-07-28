@@ -70,6 +70,11 @@ verification, dashboard privacy declarations, and store review remain
 credentialed external steps. Chrome's current listing checklist also calls for
 a YouTube feature-video URL; recording approval, upload, and the final URL
 remain a Denuo Web account step and are intentionally not fabricated here.
-macOS notarization and Windows Authenticode also require publisher
-credentials; unsigned release bundles must be labeled accurately until those
-credentials are configured.
+The published v0.5.4 macOS native-host and Setup assets are Developer ID
+signed and Apple-notarized (Setup tickets are stapled; standalone native hosts
+use Apple's online ticket). Windows v0.5.4 assets remain unsigned because
+Authenticode credentials are not configured. A future tag's initial macOS
+output is unsigned until its credentialed replacement workflow completes, so
+each release must retain its own accurate signing labels. The signing jobs use
+the protected `macos-signing` environment; the write-enabled `release`
+environment still needs protection rules.

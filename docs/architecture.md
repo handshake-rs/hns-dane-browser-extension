@@ -72,11 +72,22 @@ change to silently reclassify an HNS name.
 
 ## Header currentness
 
-Header synchronization and request resolution share a maintenance lock.
-Synchronization takes the write side while it advances or reorganizes the
-canonical chain and invalidates proof-cache entries; request validation takes
-the read side. A page therefore cannot publish against a chain that changes
-under it.
+Header synchronization performs network I/O, quorum collection, snapshot
+preparation, and peer merging in a private staged database without holding the
+live proxy's maintenance lock. The stage is bound to the live header
+generation and canonical tip, and a SQLite delta journal records the exact
+candidate suffix. Publication briefly takes the process-wide header/peer
+publication locks and the runtime maintenance write lock, rechecks that
+baseline, validates the delta, and atomically publishes the canonical headers,
+peer observations, and readiness generation. A stale, incomplete, or
+superseded stage is rejected. Request validation uses the read side of the
+maintenance lock, so a page cannot publish against a chain that changes under
+it while routine synchronization no longer pauses the live proxy.
+
+An unchanged-header peer refresh publishes updated quorum evidence without
+rotating the header-maintenance epoch. A header advance or reorganization
+rotates that epoch and invalidates proof-cache and status evidence bound to the
+old chain.
 
 Live currentness is intentionally separate from cache retention:
 

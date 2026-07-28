@@ -18,7 +18,7 @@ repository administrators should:
 3. configure the `release` GitHub Actions environment with required maintainer
    approval; and
 4. enable immutable releases only after any required signing replacement has
-   completed; and
+   completed; then
 5. review the tag commit, workflow changes, store identity, and release notes
    before approving that environment.
 
@@ -41,15 +41,31 @@ apps to Apple, staple the setup apps, and replace only the four macOS archives,
 their four checksum sidecars, and `SHA256SUMS`. The workflow preserves the
 release tag, source commit, title, version, and all non-macOS assets.
 
-The credentialed workflow uses the protected `macos-signing` environment.
+The published v0.5.4 macOS assets completed that default-branch workflow on
+2026-07-28. Its credentialed signing jobs used the protected
+`macos-signing` environment. Setup apps contain stapled tickets and standalone
+native hosts use Apple's online notarization ticket. Windows v0.5.4 artifacts
+remain unsigned.
+
+The credentialed signing jobs use the protected `macos-signing` environment.
 Store the certificate bundle, its password, and App Store Connect private key
 only as the environment secrets documented in `docs/release.md`. Store the
 approved certificate identity, fingerprint, Team ID, API key ID, and Team API
 issuer ID as environment variables. It imports the certificate into an
-ephemeral keychain, verifies the pinned fingerprint and Team ID, destroys that
-keychain after each job, and retains the Apple submission results as workflow
-artifacts. The `.p8` key is unencrypted API key material; no `.p8` password is
+ephemeral keychain after normalizing modern OpenSSL 3 PKCS#12 input into an
+ephemeral legacy-compatible bundle with a one-time password. It verifies the
+pinned SHA-256 fingerprint and Team ID, selects the exact corresponding SHA-1
+keychain identity for `codesign`, queues native-host and Setup notarization
+submissions together, and tolerates transient Apple status-network failures
+during bounded polling. It destroys the keychain after each job and retains
+submission IDs, status, and logs as workflow artifacts, including after
+failure. The `.p8` key is unencrypted API key material; no `.p8` password is
 used.
+
+The final write-enabled `replace` job uses the separate `release` environment;
+that environment currently has no approval or branch rules and must be
+protected before the asset publisher can be described as
+environment-protected.
 
 Each setup executable embeds the exact version-matched native host. Windows
 setup executables and their embedded native hosts statically link the Microsoft

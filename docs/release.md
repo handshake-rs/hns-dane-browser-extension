@@ -88,13 +88,24 @@ workflow from the default branch to replace an existing published release's
 macOS x64 and arm64 native-host and Setup archives without changing its tag,
 version, source commit, title, or non-macOS assets.
 
-The workflow signs both native hosts before embedding them, signs each Setup
-app with hardened runtime and a trusted timestamp, submits both deliverables to
-Apple, requires `Accepted`, staples and validates the Setup app, extracts the
-final tarball again, and repeats code-signing, stapler, and Gatekeeper checks.
-Apple does not support stapling a ticket directly to a standalone executable,
-so a signed native host uses Apple's online notarization ticket. Setup apps
-carry a stapled ticket.
+The published v0.5.4 macOS x64 and arm64 assets completed this
+default-branch-only flow on 2026-07-28. Its credential-bearing signing jobs
+used the protected `macos-signing` environment. Their Setup apps carry stapled
+tickets; their standalone native hosts use Apple's online notarization ticket.
+Windows v0.5.4 assets remain unsigned.
+
+The workflow normalizes the stored modern OpenSSL 3 PKCS#12 certificate into
+an ephemeral legacy-compatible import bundle protected by a one-time password.
+It verifies the pinned certificate name, SHA-256 fingerprint, and Team ID,
+then resolves `codesign` to the one imported SHA-1 keychain identity that
+matches that certificate. It signs each native host before embedding it,
+signs each Setup app with hardened runtime and a trusted timestamp, queues the
+two notarization submissions together, and polls for up to 19,800 seconds
+while tolerating transient Apple status-network failures. It requires
+`Accepted`, staples and validates the Setup app, extracts the final tarball
+again, and repeats code-signing, stapler, and Gatekeeper checks. Submission
+IDs, status, and logs remain workflow evidence even after a failed job. Apple
+does not support stapling a ticket directly to a standalone executable.
 
 Create a protected `macos-signing` GitHub environment restricted to `main`, and
 configure these environment secrets:
@@ -110,6 +121,13 @@ Configure these non-secret environment variables:
 - `APPLE_TEAM_ID`
 - `APPLE_NOTARY_API_KEY_ID`
 - `APPLE_NOTARY_API_ISSUER_ID`
+
+The final `replace` job uses a separate `release` environment and
+`contents: write`. That environment currently has no approval rules or branch
+policy, so protect it and restrict it to `main` before treating asset
+publication as environment-protected. The workflow itself already rejects a
+non-default-branch dispatch and requires explicit confirmation, exact
+tag/source/version identity, and post-replacement digest verification.
 
 The issuer ID must be copied from App Store Connect under **Users and Access >
 Integrations > App Store Connect API > Team Keys** for the Team key matching

@@ -39,8 +39,9 @@ an extension ID.
 - Open a working HNS HTTPS name. The popup should show HNS proof, DNSSEC, TLSA,
   DANE, page anchor, and header-chain status.
 - Use a bad DNSSEC/TLSA test case and confirm the request fails closed.
-- Disable/remove the native host or CA and confirm the PAC is cleared and
-  browsing is blocked rather than silently bypassed.
+- Remove or make the native host/CA unavailable and confirm the extension
+  installs its fixed blocking PAC and browsing is blocked rather than silently
+  bypassed through system or direct routing.
 - Run the supplied uninstaller and confirm native registrations, exact CA,
   binary, and runtime data are removed.
 

@@ -175,8 +175,12 @@ cannot change another request's published choice.
   request admission.
 - PAC activation requires successful user-level CA trust installation and the
   matching certificate marker.
-- Proxy stop, native disconnect, malformed health state, or failed policy/PAC
-  update clears active browser proxy configuration.
+- Before a native process is stopped, disconnected, or replaced, JavaScript
+  moves from the mandatory live PAC to a confirmed fixed blocking PAC. A
+  malformed health state or failed policy transition remains on that blocker;
+  runtime lifecycle paths never expose system or direct routing. Disabling or
+  uninstalling the extension is the browser-owned path that removes its proxy
+  setting.
 
 The local CA authenticates the browser-to-loopback hop only on branches where
 Rust must terminate TLS, including HNS DANE and ICANN DANE. It is not an

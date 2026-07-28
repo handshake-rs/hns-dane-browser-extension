@@ -52,6 +52,18 @@ bodies, downloads, and tunnels. Policy changes, readiness loss, or proxy
 rotation invalidate older work rather than allowing stale bytes or status to
 escape.
 
+Header synchronization stages network I/O, quorum collection, snapshot
+preparation, and peer merging in a private database. Only conditional,
+generation-and-tip-bound publication briefly enters the live maintenance
+gate, where headers, peers, and readiness become visible atomically. A
+transient due-but-unexpired sync failure leaves the healthy proxy running; an
+independent authenticated-evidence expiry still fails closed.
+
+The extension retains proxy control across worker suspension and native-host
+replacement. Mandatory transitions move through a confirmed fixed blocking
+PAC and never expose system or direct routing while Rust security state is
+unavailable.
+
 ## Requester and provider policy
 
 The extension exposes one explicit opt-in for consuming the experimental HNS
@@ -130,6 +142,9 @@ Chrome Web Store distribution also serves Brave and Vivaldi, while Edge and
 Opera can use their own catalog listings.
 See the [Chromium release process](docs/release.md) for the immutable-tag,
 multi-platform build, checksum, signing-status, and catalog-ID boundaries.
+The published v0.5.4 macOS native-host and Setup assets are Developer ID
+signed and Apple-notarized; Setup tickets are stapled and native hosts use
+Apple's online ticket. Windows v0.5.4 assets remain unsigned.
 
 ## Support and license
 
