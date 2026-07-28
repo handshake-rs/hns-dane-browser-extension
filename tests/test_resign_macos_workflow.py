@@ -127,8 +127,22 @@ class ResignMacosWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(self.build_script.count("--options runtime"), 2)
         self.assertGreaterEqual(self.build_script.count("--timestamp"), 2)
         self.assertIn("xcrun notarytool submit", self.build_script)
-        self.assertIn("--wait", self.build_script)
-        self.assertIn('status" != Accepted', self.build_script)
+        self.assertNotIn("--wait", self.build_script)
+        self.assertIn("xcrun notarytool info", self.build_script)
+        self.assertIn('notary_poll_seconds=120', self.build_script)
+        self.assertIn('notary_wait_timeout_seconds=19800', self.build_script)
+        self.assertIn('"In Progress"', self.build_script)
+        self.assertIn("Invalid | Rejected", self.build_script)
+        self.assertLess(
+            self.build_script.index(
+                'submit_for_notarization \\\n  "$setup_upload"'
+            ),
+            self.build_script.index(
+                'wait_for_notary_acceptance \\\n  "$native_upload"'
+            ),
+        )
+        self.assertIn("if: ${{ failure() }}", self.workflow)
+        self.assertIn("failed-macos-notary-evidence-", self.workflow)
         self.assertIn("xcrun stapler staple", self.build_script)
         self.assertGreaterEqual(
             self.build_script.count("xcrun stapler validate"),

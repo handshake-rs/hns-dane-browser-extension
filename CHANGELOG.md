@@ -19,6 +19,9 @@ All notable changes to this project will be documented in this file.
   misleading bad-password rejection without weakening the stored credential.
 - Resolve `codesign` against the one exact imported certificate hash after
   matching both its SHA-256 fingerprint and SHA-1 keychain identity.
+- Queue native-host and Setup notarization submissions together, tolerate
+  transient Apple status-network failures with conservative polling, and
+  retain notarization evidence from failed signing jobs.
 
 ### Security
 

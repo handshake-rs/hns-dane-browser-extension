@@ -290,44 +290,119 @@ setup_upload="$temporary/${setup_stem}.zip"
 ditto -c -k --keepParent "$native_host" "$native_upload"
 ditto -c -k --keepParent "$app" "$setup_upload"
 
-submit_and_require_acceptance() {
+notary_auth=(
+  --key "$notary_key"
+  --key-id "$APPLE_NOTARY_API_KEY_ID"
+  --issuer "$APPLE_NOTARY_API_ISSUER_ID"
+)
+notary_poll_seconds=120
+notary_wait_timeout_seconds=19800
+
+submit_for_notarization() {
   local upload="$1"
   local report="$2"
-  local log="$3"
   xcrun notarytool submit "$upload" \
-    --key "$notary_key" \
-    --key-id "$APPLE_NOTARY_API_KEY_ID" \
-    --issuer "$APPLE_NOTARY_API_ISSUER_ID" \
-    --wait \
+    "${notary_auth[@]}" \
     --output-format json >"$report"
-  local status
-  local submission_id
-  status="$(jq -er '.status' "$report")"
-  submission_id="$(jq -er '.id' "$report")"
-  if [[ "$status" != Accepted ]]; then
-    echo "::error::Apple notarization did not accept $(basename "$upload")."
-    xcrun notarytool log "$submission_id" \
-      --key "$notary_key" \
-      --key-id "$APPLE_NOTARY_API_KEY_ID" \
-      --issuer "$APPLE_NOTARY_API_ISSUER_ID" \
-      "$log" || true
-    exit 1
-  fi
-  xcrun notarytool log "$submission_id" \
-    --key "$notary_key" \
-    --key-id "$APPLE_NOTARY_API_KEY_ID" \
-    --issuer "$APPLE_NOTARY_API_ISSUER_ID" \
-    "$log"
+  jq -e \
+    '.id | type == "string" and length > 0' \
+    "$report" >/dev/null
 }
 
-submit_and_require_acceptance \
+fetch_notary_log() {
+  local submission_id="$1"
+  local log="$2"
+  local attempt
+  for attempt in {1..10}; do
+    if xcrun notarytool log "$submission_id" \
+      "${notary_auth[@]}" \
+      "$log"; then
+      return 0
+    fi
+    echo "::warning::Apple notarization log download failed; retrying ($attempt/10)."
+    sleep 30
+  done
+  return 1
+}
+
+wait_for_notary_acceptance() {
+  local upload="$1"
+  local submission_report="$2"
+  local status_report="$3"
+  local log="$4"
+  local submission_id
+  local status
+  local deadline
+  local latest_status
+  submission_id="$(jq -er '.id' "$submission_report")"
+  deadline=$((SECONDS + notary_wait_timeout_seconds))
+  latest_status="$temporary/notary-status-${submission_id}.json"
+
+  while ((SECONDS < deadline)); do
+    if xcrun notarytool info "$submission_id" \
+      "${notary_auth[@]}" \
+      --output-format json >"$latest_status"; then
+      status="$(jq -er '.status' "$latest_status")"
+      cp "$latest_status" "$status_report"
+      case "$status" in
+        Accepted)
+          if ! fetch_notary_log "$submission_id" "$log"; then
+            echo "::error::Apple accepted $(basename "$upload"), but its notarization log could not be retained."
+            return 1
+          fi
+          return 0
+          ;;
+        Invalid | Rejected)
+          fetch_notary_log "$submission_id" "$log" || true
+          echo "::error::Apple notarization did not accept $(basename "$upload")."
+          return 1
+          ;;
+        "In Progress")
+          ;;
+        *)
+          echo "::error::Apple returned an unknown notarization status for $(basename "$upload"): $status"
+          return 1
+          ;;
+      esac
+    else
+      echo "::warning::Apple notarization status was temporarily unavailable for $(basename "$upload"); retrying."
+    fi
+    sleep "$notary_poll_seconds"
+  done
+
+  echo "::error::Apple notarization did not finish within $notary_wait_timeout_seconds seconds for $(basename "$upload")."
+  if xcrun notarytool info "$submission_id" \
+    "${notary_auth[@]}" \
+    --output-format json >"$latest_status"; then
+    cp "$latest_status" "$status_report"
+  fi
+  return 1
+}
+
+native_submission="$notary_reports/${native_stem}-submission.json"
+native_status="$notary_reports/${native_stem}-status.json"
+native_log="$notary_reports/${native_stem}-log.json"
+setup_submission="$notary_reports/${setup_stem}-submission.json"
+setup_status="$notary_reports/${setup_stem}-status.json"
+setup_log="$notary_reports/${setup_stem}-log.json"
+
+# Queue both products before waiting so Apple processes them concurrently.
+submit_for_notarization \
   "$native_upload" \
-  "$notary_reports/${native_stem}-submission.json" \
-  "$notary_reports/${native_stem}-log.json"
-submit_and_require_acceptance \
+  "$native_submission"
+submit_for_notarization \
   "$setup_upload" \
-  "$notary_reports/${setup_stem}-submission.json" \
-  "$notary_reports/${setup_stem}-log.json"
+  "$setup_submission"
+wait_for_notary_acceptance \
+  "$native_upload" \
+  "$native_submission" \
+  "$native_status" \
+  "$native_log"
+wait_for_notary_acceptance \
+  "$setup_upload" \
+  "$setup_submission" \
+  "$setup_status" \
+  "$setup_log"
 
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"

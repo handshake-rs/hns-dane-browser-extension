@@ -184,7 +184,7 @@ jobs:
             native-rust-target: aarch64-apple-darwin
             setup-rust-target: aarch64-apple-darwin
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 360
     environment: macos-signing
     permissions:
       contents: read
@@ -236,6 +236,16 @@ jobs:
             dist/signed/*.tar.gz.sha256
             dist/signed/notary-reports/*.json
           if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Retain Apple notarization evidence after a failed build
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: failed-macos-notary-evidence-${{ matrix.architecture }}
+          path: dist/signed/notary-reports/*.json
+          if-no-files-found: warn
           retention-days: 30
           compression-level: 0
 
