@@ -109,6 +109,8 @@ chmod 600 "$extracted_identity" "$compatible_p12"
 security create-keychain -p "$keychain_password" "$keychain"
 security set-keychain-settings -lut 21600 "$keychain"
 security unlock-keychain -p "$keychain_password" "$keychain"
+security list-keychains -d user -s "$keychain"
+security default-keychain -d user -s "$keychain"
 security import "$compatible_p12" \
   -k "$keychain" \
   -P "$import_password" \
@@ -154,9 +156,35 @@ if [[ "$certificate_subject" != *"UID=$APPLE_TEAM_ID"* ]]; then
   echo "::error::Imported Developer ID certificate subject is not approved."
   exit 1
 fi
-if ! security find-identity -v -p codesigning "$keychain" |
-  grep -Fq "\"$APPLE_CERTIFICATE_NAME\""; then
+identity_output="$(
+  security find-identity -v -p codesigning "$keychain"
+)"
+signing_identities="$(
+  awk '$2 ~ /^[0-9A-F]+$/ && length($2) == 40 { print $2 }' \
+    <<<"$identity_output"
+)"
+identity_count="$(
+  awk 'NF { count += 1 } END { print count + 0 }' \
+    <<<"$signing_identities"
+)"
+if [[ "$identity_count" != 1 ||
+      "$identity_output" != *"\"$APPLE_CERTIFICATE_NAME\""* ]]; then
   echo "::error::The imported certificate has no usable code-signing private key."
+  exit 1
+fi
+signing_identity="$signing_identities"
+certificate_sha1="$(
+  openssl x509 \
+    -in "$certificate_pem" \
+    -noout \
+    -fingerprint \
+    -sha1 |
+    cut -d= -f2 |
+    tr -d ':' |
+    tr '[:lower:]' '[:upper:]'
+)"
+if [[ "$signing_identity" != "$certificate_sha1" ]]; then
+  echo "::error::The imported code-signing identity does not match the approved certificate."
   exit 1
 fi
 
@@ -177,7 +205,7 @@ codesign \
   --force \
   --keychain "$keychain" \
   --options runtime \
-  --sign "$APPLE_CERTIFICATE_NAME" \
+  --sign "$signing_identity" \
   --timestamp \
   "$native_host"
 codesign --verify --strict --verbose=2 "$native_host"
@@ -250,7 +278,7 @@ codesign \
   --force \
   --keychain "$keychain" \
   --options runtime \
-  --sign "$APPLE_CERTIFICATE_NAME" \
+  --sign "$signing_identity" \
   --timestamp \
   "$app"
 codesign --verify --deep --strict --verbose=2 "$app"

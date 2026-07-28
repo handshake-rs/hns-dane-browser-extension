@@ -17,6 +17,8 @@ All notable changes to this project will be documented in this file.
 - Normalize modern OpenSSL 3 PKCS#12 bundles into a legacy-compatible,
   ephemeral copy before macOS keychain import, avoiding Security.framework's
   misleading bad-password rejection without weakening the stored credential.
+- Resolve `codesign` against the one exact imported certificate hash after
+  matching both its SHA-256 fingerprint and SHA-1 keychain identity.
 
 ### Security
 
