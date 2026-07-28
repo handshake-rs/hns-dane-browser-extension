@@ -14,6 +14,9 @@ All notable changes to this project will be documented in this file.
 - Added explicit release metadata and installation guidance for Developer ID
   signed native hosts using Apple's online ticket and signed Setup apps carrying
   a stapled ticket.
+- Normalize modern OpenSSL 3 PKCS#12 bundles into a legacy-compatible,
+  ephemeral copy before macOS keychain import, avoiding Security.framework's
+  misleading bad-password rejection without weakening the stored credential.
 
 ### Security
 

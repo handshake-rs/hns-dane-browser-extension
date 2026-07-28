@@ -53,6 +53,7 @@ OUTPUT_DIR="$(mkdir -p "$OUTPUT_DIR" && cd "$OUTPUT_DIR" && pwd)"
 temporary="$(mktemp -d "${RUNNER_TEMP:-/tmp}/hns-macos-signing.XXXXXX")"
 keychain="$temporary/signing.keychain-db"
 keychain_password="$(openssl rand -hex 32)"
+umask 077
 
 cleanup() {
   security delete-keychain "$keychain" >/dev/null 2>&1 || true
@@ -74,12 +75,43 @@ if [[ ! -s "$p12_path" || ! -s "$notary_key" ]]; then
   exit 1
 fi
 
+openssl3="$(command -v openssl)"
+if [[ "$("$openssl3" version)" != OpenSSL\ 3.* ]]; then
+  openssl3="$(brew --prefix openssl@3)/bin/openssl"
+fi
+if [[ ! -x "$openssl3" ||
+      "$("$openssl3" version)" != OpenSSL\ 3.* ]]; then
+  echo "::error::OpenSSL 3 is required to normalize the PKCS#12 bundle."
+  exit 1
+fi
+
+# macOS Security.framework can report a false bad-password error for modern
+# OpenSSL 3 PBES2/AES PKCS#12 containers. Decode the approved bundle with
+# OpenSSL, then rewrap it only inside this ephemeral runner using legacy
+# algorithms and a random one-time import password.
+extracted_identity="$temporary/developer-id-application.pem"
+compatible_p12="$temporary/developer-id-application-compatible.p12"
+import_password="$("$openssl3" rand -hex 32)"
+"$openssl3" pkcs12 \
+  -in "$p12_path" \
+  -passin env:APPLE_CERTIFICATE_P12_PASSWORD \
+  -nodes \
+  -out "$extracted_identity"
+HNS_PKCS12_IMPORT_PASSWORD="$import_password" \
+  "$openssl3" pkcs12 \
+    -export \
+    -legacy \
+    -in "$extracted_identity" \
+    -out "$compatible_p12" \
+    -passout env:HNS_PKCS12_IMPORT_PASSWORD
+chmod 600 "$extracted_identity" "$compatible_p12"
+
 security create-keychain -p "$keychain_password" "$keychain"
 security set-keychain-settings -lut 21600 "$keychain"
 security unlock-keychain -p "$keychain_password" "$keychain"
-security import "$p12_path" \
+security import "$compatible_p12" \
   -k "$keychain" \
-  -P "$APPLE_CERTIFICATE_P12_PASSWORD" \
+  -P "$import_password" \
   -T /usr/bin/codesign \
   -T /usr/bin/security >/dev/null
 security set-key-partition-list \
@@ -90,6 +122,7 @@ security set-key-partition-list \
 unset APPLE_CERTIFICATE_P12_BASE64
 unset APPLE_CERTIFICATE_P12_PASSWORD
 unset APPLE_NOTARY_API_PRIVATE_KEY_P8_BASE64
+unset import_password
 
 certificate_pem="$temporary/developer-id-application.pem"
 security find-certificate \
