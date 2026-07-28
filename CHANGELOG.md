@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.5.4 - 2026-07-27
+
+### Changed
+
+- Moved bounded header synchronization into a private staged database so
+  network I/O, quorum collection, snapshot preparation, and peer merging no
+  longer hold the live proxy's maintenance gate.
+- Added a generation- and tip-bound SQLite delta journal. Normal one-block
+  publication now validates and commits only the new header and canonical
+  suffix instead of rescanning the complete chain database.
+- Refresh authenticated target evidence ten minutes before its hard expiry,
+  while retaining the independently enforced two-block currentness limit.
+
+### Fixed
+
+- Removed the Manifest V3 suspend teardown that could leave Chromium's PAC
+  pointing at a native listener the extension had just disconnected.
+- Made every native-host replacement transition from the live mandatory PAC
+  to a confirmed fixed blocking PAC before disconnecting the captured process,
+  then to the replacement PAC. No startup, failure, or retry path clears proxy
+  control to system or direct routing.
+- Bound PAC writes, native callbacks, status adoption, header maintenance, and
+  alarm mutations to explicit control and connection generations. Late work
+  from an old runtime can no longer disconnect a replacement or overwrite its
+  PAC, refresh deadline, or hard-expiry alarm.
+- Kept a live proxy active through transient, due-but-unexpired sync and status
+  failures. Authenticated evidence expiry remains an independent fail-closed
+  transition even while a native synchronization request is hung.
+- Added process-wide header and peer publication locks, fixed-size crash-state
+  tokens, conditional publication, exact three-way peer merging, stale-stage
+  reclamation, and recovery from interrupted `UPDATING` state.
+- Avoided holding the peer database lock across network probes and added
+  bounded SQLite busy handling for concurrent runtime access.
+- Reported CONNECT backend failures with their actual status and observability
+  classification instead of mislabeling them as malformed browser requests.
+
+### Security
+
+- Reject conditional header publication when its baseline marker, delta
+  coverage, parent linkage, proof of work, chainwork, or canonical suffix is
+  missing, conflicting, or tampered.
+- Validate native refresh envelopes, including exact zero-work coalesced
+  responses, before treating a synchronization attempt as successful.
+- Added executable lifecycle race tests for dropped PAC callbacks, late
+  mutations, native generation replacement, alarm ordering, evidence expiry,
+  and stale status isolation.
+
 ## 0.5.3 - 2026-07-27
 
 ### Added

@@ -1,7 +1,10 @@
 import { authoritativeHeaderSync } from "./header-status.js";
 
 export const AUTOMATIC_HEADER_SYNC_MIN_INTERVAL_MS = 10 * 60 * 1000;
-export const HEADER_TARGET_REFRESH_LEAD_MS = 2 * 60 * 1000;
+// Corroborated peer target evidence is valid for twenty minutes. Begin one
+// block interval early so a slow or failed peer round still has ten minutes
+// of authenticated evidence in reserve.
+export const HEADER_TARGET_REFRESH_LEAD_MS = 10 * 60 * 1000;
 export const HEADER_TARGET_URGENT_RETRY_INTERVAL_MS = 60 * 1000;
 export const HEADER_TARGET_URGENT_RETRY_GRACE_MS = 2 * 60 * 1000;
 

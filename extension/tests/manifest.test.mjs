@@ -36,10 +36,20 @@ test("manifest is MV3 with native messaging, mandatory proxy, and auth permissio
   }
 });
 
-test("service worker installs only Rust-generated mandatory PAC and fails closed without CA", () => {
+test("service worker uses mandatory live and blocking PACs and fails closed without CA", () => {
   assert.match(worker, /mandatory:\s*true/);
   assert.match(worker, /result\.ca\.state !== "installed"/);
-  assert.match(worker, /client\.request\("stop"\)/);
+  assert.match(worker, /installBlockingPac\(startControlEpoch\)/);
+  assert.match(
+    worker,
+    /installLivePac\(result\.pacScript, startControlEpoch\)/
+  );
+  assert.match(
+    worker,
+    /client\.disconnectIfCurrent\(replacedConnectionEpoch\)/
+  );
+  assert.doesNotMatch(worker, /proxy\.settings\.clear/);
+  assert.doesNotMatch(worker, /client\.request\("stop"\)/);
   assert.doesNotMatch(worker, /dnsResolve\s*\(/);
   assert.doesNotMatch(worker, /sha(?:1|256|512)/i);
   assert.doesNotMatch(worker, /route.*record/i);
@@ -54,6 +64,15 @@ test("health checks preserve a live generation and reconnect only after failure"
     worker,
     /alarm\.name === HEALTH_ALARM \|\| alarm\.name === RECONNECT_ALARM/
   );
+});
+
+test("popup requires an active PAC and never advertises direct sync bypass", () => {
+  assert.match(
+    popupScript,
+    /status\.state === "active" && status\.proxyActive === true/
+  );
+  assert.doesNotMatch(popupScript, /Ordinary ICANN browsing remains direct/);
+  assert.doesNotMatch(popupScript, /mandatory HNS proxy is paused/);
 });
 
 test("a rejected native policy is never persisted", () => {
@@ -109,7 +128,11 @@ test("popup security status is scoped to the active Chromium tab", () => {
     /latestMainFrameConnectDecisionReceipt: scoped\.connectDecisionReceipt/
   );
   assert.match(worker, /chrome\.storage\.session\.set/);
-  assert.match(worker, /store\.beginMaintenance\(publicStatus\)/);
+  assert.match(worker, /store\.ensureRuntime\(authoritativeStatus\)/);
+  assert.doesNotMatch(
+    worker,
+    /headerSyncInProgress: true,[\s\S]{0,180}latestMainFrameSecurity: null/
+  );
   assert.match(worker, /securityMaintenanceEpoch/);
   assert.match(
     worker,

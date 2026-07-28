@@ -4,6 +4,8 @@ import {
   authoritativeHeaderSync,
   currentHeaderSync,
   headerChainView,
+  headerSyncRefreshError,
+  headerSyncReadyForProxyActivation,
   pageProofAnchor,
   validHeaderSyncEnvelope
 } from "../src/header-status.js";
@@ -12,6 +14,11 @@ function headerSync(overrides = {}) {
   return {
     network: "mainnet",
     status: "up_to_date",
+    attempted: 3,
+    successful: 3,
+    accepted: 3,
+    failed: 0,
+    failures: [],
     bestHeight: 339_927,
     bestPeerHeight: 339_929,
     estimatedTipHeight: 339_930,
@@ -173,5 +180,152 @@ test("native lifecycle rejects weak freshness policy or insufficient corroborati
       headerSync: headerSync({ targetPeerGroups: 2 })
     }),
     false
+  );
+});
+
+test("proxy activation requires current target evidence beyond the current second", () => {
+  const now = 1_753_399_900;
+  assert.equal(headerSyncReadyForProxyActivation(headerSync(), now), true);
+  assert.equal(
+    headerSyncReadyForProxyActivation(
+      headerSync({ targetEvidenceValidUntilUnix: now }),
+      now
+    ),
+    false
+  );
+  assert.equal(
+    headerSyncReadyForProxyActivation(
+      headerSync({
+        bestHeight: 339_925,
+        lagBlocks: 4,
+        freshness: "stale"
+      }),
+      now
+    ),
+    false
+  );
+  assert.equal(
+    headerSyncReadyForProxyActivation(
+      headerSync({
+        effectiveTargetHeight: null,
+        lagBlocks: null,
+        freshness: "unknown",
+        targetSource: "unknown",
+        targetPeerGroups: 0,
+        targetEvidenceExpired: true,
+        targetEvidenceValidUntilUnix: null
+      }),
+      now
+    ),
+    false
+  );
+  assert.equal(
+    headerSyncReadyForProxyActivation(headerSync(), Number.NaN),
+    false
+  );
+});
+
+test("explicit sync rejects peer-failed and zero-success result envelopes", () => {
+  assert.equal(headerSyncRefreshError(headerSync()), null);
+  assert.equal(
+    headerSyncRefreshError(
+      headerSync({
+        status: "coalesced",
+        attempted: 0,
+        successful: 0,
+        accepted: 0,
+        failed: 0,
+        failures: []
+      })
+    ),
+    null
+  );
+  assert.equal(
+    headerSyncRefreshError(
+      headerSync({
+        status: "syncing",
+        attempted: 3,
+        successful: 2
+      })
+    ),
+    null
+  );
+  assert.equal(
+    headerSyncRefreshError(
+      headerSync({
+        status: "coalesced",
+        attempted: 1,
+        successful: 1,
+        accepted: 1,
+        failed: 0,
+        failures: []
+      })
+    ),
+    "native host returned invalid coalesced header sync envelope"
+  );
+  for (const invalid of [
+    { accepted: 1 },
+    { failed: 1 },
+    { failures: [{ address: "peer" }] },
+    { failures: null }
+  ]) {
+    assert.equal(
+      headerSyncRefreshError(
+        headerSync({
+          status: "coalesced",
+          attempted: 0,
+          successful: 0,
+          accepted: 0,
+          failed: 0,
+          failures: [],
+          ...invalid
+        })
+      ),
+      "native host returned invalid coalesced header sync envelope"
+    );
+  }
+  assert.equal(
+    headerSyncRefreshError(
+      headerSync({
+        status: "coalesced",
+        attempted: 0,
+        successful: 0,
+        accepted: 0,
+        failed: 0,
+        failures: [],
+        error: "coalesced refresh failed"
+      })
+    ),
+    "coalesced refresh failed"
+  );
+  assert.equal(
+    headerSyncRefreshError(
+      headerSync({
+        status: "peer_failed",
+        attempted: 3,
+        successful: 0,
+        error: "all attempted sync peers failed"
+      })
+    ),
+    "all attempted sync peers failed"
+  );
+  assert.equal(
+    headerSyncRefreshError(
+      headerSync({
+        attempted: 3,
+        successful: 0
+      })
+    ),
+    "header synchronization completed without a successful peer"
+  );
+  assert.equal(
+    headerSyncRefreshError(
+      headerSync({
+        status: "seed_failed",
+        attempted: 0,
+        successful: 0
+      })
+    ),
+    "header synchronization reported seed_failed"
   );
 });

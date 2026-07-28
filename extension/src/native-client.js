@@ -1,7 +1,10 @@
 const SCHEMA_VERSION = 1;
 const MAX_PENDING_REQUESTS = 32;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
-export const MAX_REQUEST_TIMEOUT_MS = 120_000;
+// A full bounded header catch-up can span many peer batches. Keep one native
+// request outstanding instead of timing it out while the Rust operation is
+// still safely progressing in the background.
+export const MAX_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
 
 export class NativeClient {
   constructor(chromeApi, hostName) {
@@ -13,19 +16,34 @@ export class NativeClient {
     this.runtimeSession = null;
     this.lastEventSequence = 0;
     this.disconnectHandlers = new Set();
+    this.lifecycleEpoch = 0;
   }
 
   connect() {
     if (this.port) return;
     const port = this.chrome.runtime.connectNative(this.hostName);
     this.port = port;
-    port.onMessage.addListener((message) => this.handleMessage(message));
-    port.onDisconnect.addListener(() => this.handleDisconnect());
+    this.lifecycleEpoch += 1;
+    port.onMessage.addListener((message) => this.handleMessage(port, message));
+    port.onDisconnect.addListener(() => this.handleDisconnect(port));
   }
 
   onDisconnect(handler) {
     this.disconnectHandlers.add(handler);
     return () => this.disconnectHandlers.delete(handler);
+  }
+
+  currentConnectionEpoch() {
+    return this.port == null ? null : this.lifecycleEpoch;
+  }
+
+  connectionIsCurrent(epoch) {
+    return (
+      Number.isSafeInteger(epoch) &&
+      epoch > 0 &&
+      this.port != null &&
+      this.lifecycleEpoch === epoch
+    );
   }
 
   request(command, fields = {}, options = {}) {
@@ -65,14 +83,22 @@ export class NativeClient {
   }
 
   disconnect() {
-    if (this.port) {
-      this.port.disconnect();
-      this.port = null;
+    const port = this.port;
+    if (port) {
+      this.disconnectPort(port);
+      return;
     }
     this.rejectPending(new Error("native host disconnected"));
   }
 
-  handleMessage(message) {
+  disconnectIfCurrent(epoch) {
+    if (!this.connectionIsCurrent(epoch)) return false;
+    this.disconnectPort(this.port);
+    return true;
+  }
+
+  handleMessage(port, message) {
+    if (port !== this.port) return;
     if (
       !isRecord(message) ||
       message.schemaVersion !== SCHEMA_VERSION ||
@@ -81,12 +107,12 @@ export class NativeClient {
       !Number.isSafeInteger(message.eventSequence) ||
       message.eventSequence < 1
     ) {
-      this.disconnect();
+      this.disconnectPort(port, true);
       return;
     }
     if (this.runtimeSession === message.runtimeSession) {
       if (message.eventSequence <= this.lastEventSequence) {
-        this.disconnect();
+        this.disconnectPort(port, true);
         return;
       }
     } else {
@@ -109,15 +135,35 @@ export class NativeClient {
     pending.reject(error);
   }
 
-  handleDisconnect() {
+  handleDisconnect(port) {
+    if (port !== this.port) return;
+    const disconnectedEpoch = this.lifecycleEpoch;
     this.port = null;
+    this.lifecycleEpoch += 1;
     this.rejectPending(new Error("native host disconnected"));
+    this.notifyDisconnect(disconnectedEpoch);
+  }
+
+  notifyDisconnect(disconnectedEpoch) {
     for (const handler of this.disconnectHandlers) {
       try {
-        handler();
+        handler(disconnectedEpoch);
       } catch {
         // Disconnect observers are isolated from the protocol lifecycle.
       }
+    }
+  }
+
+  disconnectPort(port, notify = false) {
+    if (port !== this.port) return;
+    const disconnectedEpoch = this.lifecycleEpoch;
+    this.port = null;
+    this.lifecycleEpoch += 1;
+    try {
+      port.disconnect();
+    } finally {
+      this.rejectPending(new Error("native host disconnected"));
+      if (notify) this.notifyDisconnect(disconnectedEpoch);
     }
   }
 

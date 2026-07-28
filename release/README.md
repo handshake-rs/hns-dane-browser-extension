@@ -47,7 +47,7 @@ GNU target in a runnable AppDir. That AppDir carries NSS `certutil`, all NSS/NSP
 modules and integrity files shipped by its package, an isolated helper
 loader/shared-library closure, common X11/Wayland GUI client libraries, package
 versions, hashes, and licenses. It never preloads bundled glibc into the setup
-process, so the v0.5.3 Linux Setup requires the build baseline of glibc 2.39 or
+process, so the v0.5.4 Linux Setup requires the build baseline of glibc 2.39 or
 newer (Ubuntu 24.04 / Debian 13 generation). The release gate rejects any
 packaged ELF object requiring a later glibc version. Its clean-environment
 release smoke test creates a temporary NSS

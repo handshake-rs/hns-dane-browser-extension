@@ -32,10 +32,10 @@ so one host can serve verified installations from more than one catalog.
 For example:
 
 ```sh
-git tag -a v0.5.3 -m "HNS DANE Browser 0.5.3"
-git push origin v0.5.3
+git tag -a v0.5.4 -m "HNS DANE Browser 0.5.4"
+git push origin v0.5.4
 gh run watch --repo handshake-rs/hns-dane-browser-extension
-gh release view v0.5.3 \
+gh release view v0.5.4 \
   --repo handshake-rs/hns-dane-browser-extension \
   --json isDraft,isPrerelease,url,assets
 ```
@@ -65,7 +65,7 @@ format, architecture, Rust target, or embedded host bytes.
   and integrity files, an isolated helper loader/shared-library closure,
   X11/Wayland GUI client libraries, package versions, hashes, and dependency
   licenses. It does not preload bundled glibc into setup. The workflow tests
-  every packaged ELF object against the v0.5.3 glibc 2.39 ABI ceiling and tests
+  every packaged ELF object against the v0.5.4 glibc 2.39 ABI ceiling and tests
   the layout in a clean environment by creating an NSS database and adding,
   listing, and deleting a temporary certificate. A system `libnss3-tools`
   installation is not required, but Linux Setup requires glibc 2.39 or newer

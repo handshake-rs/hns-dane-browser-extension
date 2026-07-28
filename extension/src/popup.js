@@ -64,7 +64,7 @@ async function showSyncError(error) {
 }
 
 function renderStatus(status) {
-  const active = status.state === "active";
+  const active = status.state === "active" && status.proxyActive === true;
   const security = currentSecurityResult(status.latestMainFrameSecurity, status);
   const connectDecision = connectDecisionForStatus(status);
   const displayedSecurity = security ?? connectDecision;

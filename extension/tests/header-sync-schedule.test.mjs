@@ -57,11 +57,11 @@ test("automatic maintenance syncs stale, unknown, expired, or deadline-due state
   assert.equal(needsAutomaticHeaderSync(null, dueAt - 1), true);
 });
 
-test("automatic deadline is two minutes before quorum evidence expires", () => {
-  assert.equal(HEADER_TARGET_REFRESH_LEAD_MS, 120_000);
+test("automatic deadline reserves ten minutes before quorum evidence expires", () => {
+  assert.equal(HEADER_TARGET_REFRESH_LEAD_MS, 10 * 60 * 1000);
   assert.equal(
     automaticHeaderSyncDueAt(status("current")),
-    1_999_880_000
+    2_000_000_000 - HEADER_TARGET_REFRESH_LEAD_MS
   );
   assert.equal(automaticHeaderSyncDueAt(status("unknown")), 0);
   assert.equal(

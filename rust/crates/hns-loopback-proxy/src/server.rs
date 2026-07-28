@@ -766,7 +766,21 @@ fn handle_connect(
     let connect = match connect {
         Ok(connect) => connect,
         Err(BackendError::Cancelled) => return,
-        Err(_error) => ProxyConnectOpen::WebPkiUnavailable,
+        Err(error) => {
+            let (status, reason) = connect_backend_error_status(error);
+            observe_request(
+                context,
+                &canonical_host,
+                method,
+                RequestPhase::BackendFailed {
+                    kind: backend_failure_kind(error),
+                    elapsed: connect_started.elapsed(),
+                },
+            );
+            observe_proxy_generated_response(context, &canonical_host, method, status, false);
+            let _result = write_error_response(&mut stream, status, reason, &[]);
+            return;
+        }
     };
     if matches!(&connect, ProxyConnectOpen::WebPkiUnavailable) {
         reject_scoped_request(
@@ -2163,6 +2177,21 @@ fn backend_error_status(error: BackendError) -> (u16, &'static str) {
         BackendError::ResponseTooLarge => (502, "Upstream Response Too Large"),
         BackendError::UnsupportedUpgrade => (501, "HNS Protocol Upgrade Unsupported"),
         BackendError::Internal => (500, "Proxy Internal Error"),
+    }
+}
+
+fn connect_backend_error_status(error: BackendError) -> (u16, &'static str) {
+    match error {
+        BackendError::Cancelled => (503, "Browser Security Request Cancelled"),
+        BackendError::InvalidRequest => (400, "Invalid Browser Security Request"),
+        BackendError::PolicyDenied => (403, "Browser Security Policy Denied"),
+        BackendError::ResolutionFailed => (502, "Namespace Resolution Failed"),
+        BackendError::TlsValidationFailed => (502, "Origin TLS Validation Failed"),
+        BackendError::UpstreamUnavailable => (502, "Origin Unavailable"),
+        BackendError::InvalidResponse => (502, "Invalid Origin Response"),
+        BackendError::ResponseTooLarge => (502, "Origin Response Too Large"),
+        BackendError::UnsupportedUpgrade => (501, "Protocol Upgrade Unsupported"),
+        BackendError::Internal => (503, "Browser Security Runtime Unavailable"),
     }
 }
 
@@ -4764,7 +4793,8 @@ mod tests {
             );
             let response = send_raw(&proxy, request.as_bytes());
 
-            assert_eq!(response_status(&response), 502);
+            assert_eq!(response_status(&response), 503);
+            assert!(response.starts_with(b"HTTP/1.1 503 Browser Security Runtime Unavailable\r\n"));
             assert!(proxy.local_certificate_pin("welcome").is_none());
             proxy.stop();
         }

@@ -26,13 +26,28 @@ import {
 import {
   authoritativeHeaderSync,
   currentHeaderSync,
+  headerSyncRefreshError,
+  headerSyncReadyForProxyActivation,
   validHeaderSyncEnvelope
 } from "./header-status.js";
+import {
+  BLOCKING_PAC_SCRIPT,
+  SerializedEpochMutationController,
+  SerializedMandatoryPacController,
+  deactivateIfHeaderEvidenceExpired,
+  headerReadinessFailClosed,
+  installPacForCurrentNativeGeneration,
+  runtimeControlToken,
+  runtimeControlTokenIsCurrent,
+  sameLiveProxyGeneration,
+  settleLifecycleBarrier
+} from "./proxy-lifecycle.js";
 
 const NATIVE_HOST = "com.denuoweb.hns_dane_browser";
 const HEALTH_ALARM = "hns-runtime-health";
 const RECONNECT_ALARM = "hns-runtime-reconnect";
 const HEADER_SYNC_DEADLINE_ALARM = "hns-header-sync-deadline";
+const HEADER_EVIDENCE_EXPIRY_ALARM = "hns-header-evidence-expiry";
 const LEGACY_HEADER_SYNC_ALARM = "hns-header-sync";
 const HEALTH_PERIOD_MINUTES = 5;
 const HEADER_SYNC_LAST_ATTEMPT_KEY = "headerSyncLastAttemptAt";
@@ -41,10 +56,21 @@ const HEADER_SYNC_URGENT_RETRY_WINDOW_KEY =
 const NAVIGATION_RECEIPTS_STORAGE_KEY = "navigationSecurityReceipts";
 const MAX_NATIVE_CONNECT_SECURITY_DECISIONS = 32;
 const client = new NativeClient(chrome, NATIVE_HOST);
+let controlEpoch = 0;
+const pacController = new SerializedMandatoryPacController(
+  (pacScript) => setMandatoryPac(pacScript),
+  () => readMandatoryPacScript(),
+  (expectedControlEpoch) => expectedControlEpoch === controlEpoch
+);
+const alarmMutations = new SerializedEpochMutationController(
+  (expectedControlEpoch) => expectedControlEpoch === controlEpoch
+);
 
-let activeOperation = null;
+let runtimeLifecyclePending = 0;
+let recoveryOperation = null;
 let headerSyncOperation = null;
 let headerMaintenanceOperation = null;
+let nativeDisconnectCleanupOperation = null;
 let lastHeaderSyncAttemptAt = null;
 let lastHeaderSyncAttemptLoaded = false;
 let retainedHeaderSyncUrgentRetryWindow = null;
@@ -60,6 +86,7 @@ let publicStatus = {
   policyGeneration: 0,
   securityMaintenanceEpoch: null,
   caReady: false,
+  proxyActive: false,
   headerSync: null,
   headerSyncInProgress: false,
   headerSyncError: null,
@@ -68,21 +95,8 @@ let publicStatus = {
   recentConnectSecurityDecisions: []
 };
 
-client.onDisconnect(() => {
-  credentials = null;
-  setStatus({
-    state: "degraded",
-    reason: "nativeHostDisconnected",
-    headerSync: null,
-    headerSyncInProgress: false,
-    headerSyncError: "Native host disconnected",
-    securityMaintenanceEpoch: null,
-    latestMainFrameSecurity: null,
-    latestMainFrameSecurityUnavailableReason: null,
-    recentConnectSecurityDecisions: []
-  });
-  void clearProxy();
-  chrome.alarms.create(RECONNECT_ALARM, { delayInMinutes: 1 });
+client.onDisconnect((disconnectedConnectionEpoch) => {
+  void handleNativeDisconnect(disconnectedConnectionEpoch);
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -99,22 +113,32 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.runtime.onSuspend.addListener(() => {
-  credentials = null;
-  chrome.proxy.settings.clear({ scope: "regular" }, () => {});
-  client.disconnect();
+  // Keep the PAC and its native port as one generation. A suspend callback
+  // cannot wait for confirmed proxy removal, so tearing down the port here
+  // can strand Chromium on a PAC whose listener has already disappeared.
 });
 
 chrome.runtime.onSuspendCanceled.addListener(() => {
-  void recover();
+  // No teardown was started by onSuspend, so the live generation remains
+  // authoritative when Chromium cancels suspension.
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
-    void maintainHeaderFreshness(true).catch(() => {});
+    void enforceHeaderEvidenceExpiry()
+      .then((expired) => {
+        if (!expired) return maintainHeaderFreshness(true);
+        return publicStatus;
+      })
+      .catch(() => {});
   } else if (alarm.name === RECONNECT_ALARM) {
     void recover();
   } else if (alarm.name === HEADER_SYNC_DEADLINE_ALARM) {
     void maintainHeaderFreshness(true).catch(() => {});
+  } else if (alarm.name === HEADER_EVIDENCE_EXPIRY_ALARM) {
+    // This path is deliberately independent from headerMaintenanceOperation
+    // and headerSyncOperation so a hung native sync cannot outlive evidence.
+    void enforceHeaderEvidenceExpiry().catch(() => {});
   }
 });
 
@@ -214,50 +238,261 @@ async function migrateAndRecover() {
   return recover();
 }
 
-function recover() {
-  if (activeOperation) return activeOperation;
-  activeOperation = startRuntime()
-    .catch((error) => {
-      setStatus({
-        state: publicStatus.state === "blocked" ? "blocked" : "degraded",
-        reason: error instanceof Error ? error.message : String(error),
-        headerSyncInProgress: false,
-        headerSyncError: "Native runtime startup failed",
-        securityMaintenanceEpoch: null,
-        latestMainFrameSecurity: null,
-        latestMainFrameSecurityUnavailableReason: null,
-        recentConnectSecurityDecisions: []
-      });
-      return publicStatus;
-    })
-    .finally(() => {
-      activeOperation = null;
-    });
-  return activeOperation;
-}
-
-async function startRuntime(policyOverride) {
-  void chrome.alarms.clear(HEADER_SYNC_DEADLINE_ALARM);
+function handleNativeDisconnect(disconnectedConnectionEpoch) {
+  if (nativeDisconnectCleanupOperation) {
+    return nativeDisconnectCleanupOperation;
+  }
+  const cleanupControlEpoch = beginControlGeneration();
   setStatus({
-    state: "starting",
-    reason: null,
-    headerSync: null,
+    state: "deactivating",
+    reason: "nativeHostDisconnected",
+    proxyActive: credentials != null,
     headerSyncInProgress: false,
-    headerSyncError: null,
+    headerSyncError: "Native host disconnected",
     securityMaintenanceEpoch: null,
     latestMainFrameSecurity: null,
     latestMainFrameSecurityUnavailableReason: null,
     recentConnectSecurityDecisions: []
   });
-  const stored = await storageGet(["policy"]);
-  const policy = normalizePolicy(policyOverride ?? stored.policy ?? DEFAULT_POLICY);
+  let restartAfterCleanup = false;
+  let trackedCleanup;
+  const cleanup = (async () => {
+    // Persist recovery intent before changing the PAC. If the worker is
+    // terminated during cleanup, a fresh worker will finish replacement.
+    try {
+      await createAlarmForControl(
+        RECONNECT_ALARM,
+        { delayInMinutes: 1 },
+        cleanupControlEpoch
+      );
+    } catch (error) {
+      if (isSupersededControlError(error)) return publicStatus;
+    }
+    let failure = new Error("Native host disconnected");
+    try {
+      // Replace the now-dead live PAC with a fixed mandatory blocker. There is
+      // never an interval in which Chromium falls back to DIRECT.
+      await installBlockingPac(cleanupControlEpoch);
+      requireControlGeneration(cleanupControlEpoch);
+      credentials = null;
+    } catch (error) {
+      if (isSupersededControlError(error)) return publicStatus;
+      failure = new Error(
+        `native host disconnected and the mandatory blocking PAC could not be installed: ${boundedError(error)}`
+      );
+      setStatus({
+        state: "degraded",
+        reason: "blockingPacInstallFailed",
+        proxyActive: false,
+        headerSyncInProgress: false,
+        headerSyncError: boundedError(failure),
+        securityMaintenanceEpoch: null,
+        latestMainFrameSecurity: null,
+        latestMainFrameSecurityUnavailableReason: null,
+        recentConnectSecurityDecisions: []
+      });
+      try {
+        await createAlarmForControl(
+          RECONNECT_ALARM,
+          { delayInMinutes: 1 },
+          cleanupControlEpoch
+        );
+      } catch {
+        // A newer control generation now owns recovery scheduling.
+      }
+      return publicStatus;
+    }
+    setStatus({
+      state: "degraded",
+      reason: "nativeHostDisconnected",
+      proxyActive: false,
+      headerSyncInProgress: false,
+      headerSyncError: boundedError(failure),
+      securityMaintenanceEpoch: null,
+      latestMainFrameSecurity: null,
+      latestMainFrameSecurityUnavailableReason: null,
+      recentConnectSecurityDecisions: []
+    });
+    await clearAlarmForControl(
+      HEADER_SYNC_DEADLINE_ALARM,
+      cleanupControlEpoch
+    );
+    await clearAlarmForControl(
+      HEADER_EVIDENCE_EXPIRY_ALARM,
+      cleanupControlEpoch
+    );
+    await createAlarmForControl(
+      RECONNECT_ALARM,
+      { delayInMinutes: 1 },
+      cleanupControlEpoch
+    );
+    restartAfterCleanup =
+      disconnectedConnectionEpoch != null &&
+      cleanupControlEpoch === controlEpoch;
+    return publicStatus;
+  })();
+  trackedCleanup = cleanup.finally(() => {
+    if (nativeDisconnectCleanupOperation === trackedCleanup) {
+      nativeDisconnectCleanupOperation = null;
+    }
+    if (restartAfterCleanup) void recover();
+  });
+  nativeDisconnectCleanupOperation = trackedCleanup;
+  return trackedCleanup;
+}
+
+function recover() {
+  if (recoveryOperation) return recoveryOperation;
+  if (headerMaintenanceRuntimeAvailable() && headerReadinessFailClosed(publicStatus)) {
+    recoveryOperation = maintainHeaderFreshness(true)
+      .catch((error) => {
+        if (headerReadinessFailClosed(publicStatus)) {
+          setStatus({
+            headerSyncInProgress: false,
+            headerSyncError: boundedError(error)
+          });
+          void createAlarmForControl(
+            RECONNECT_ALARM,
+            { delayInMinutes: 1 },
+            controlEpoch
+          ).catch(() => {});
+        }
+        return publicStatus;
+      })
+      .finally(() => {
+        recoveryOperation = null;
+      });
+    return recoveryOperation;
+  }
+  recoveryOperation = enqueueRuntimeLifecycle(() =>
+    startRuntime().catch((error) => {
+        if (isSupersededControlError(error)) return publicStatus;
+        setStatus({
+          state: publicStatus.state === "blocked" ? "blocked" : "degraded",
+          reason: error instanceof Error ? error.message : String(error),
+          headerSyncInProgress: false,
+          headerSyncError: "Native runtime startup failed",
+          securityMaintenanceEpoch: null,
+          latestMainFrameSecurity: null,
+          latestMainFrameSecurityUnavailableReason: null,
+          recentConnectSecurityDecisions: []
+        });
+        if (publicStatus.state !== "blocked") {
+          void createAlarmForControl(
+            RECONNECT_ALARM,
+            { delayInMinutes: 1 },
+            controlEpoch
+          ).catch(() => {});
+        }
+        return publicStatus;
+      })
+  ).finally(() => {
+    recoveryOperation = null;
+  });
+  return recoveryOperation;
+}
+
+function enqueueRuntimeLifecycle(operation) {
+  runtimeLifecyclePending += 1;
+  const disconnectCleanupAtEnqueue = nativeDisconnectCleanupOperation;
+  const result = settleLifecycleBarrier(
+    disconnectCleanupAtEnqueue
+  ).then(() => {
+    // Long native work is deliberately not serialized. A newer start changes
+    // controlEpoch, installs the blocker, and disconnects captured A so a
+    // pending 15-minute sync rejects promptly. PAC mutations serialize inside
+    // SerializedMandatoryPacController.
+    return operation();
+  });
+  return result.finally(() => {
+    runtimeLifecyclePending -= 1;
+  });
+}
+
+async function startRuntime(policyOverride) {
+  const priorStatus = publicStatus;
+  const priorCredentials = credentials;
+  const startControlEpoch = beginControlGeneration();
+  const replacedConnectionEpoch = client.currentConnectionEpoch();
+  let activationConnectionEpoch = null;
+  let activationStatus = null;
+  let blockerConfirmed = false;
+  let replacedConnectionDisconnected = false;
+  setStatus({
+    state: "starting",
+    reason: null,
+    proxyActive:
+      priorStatus.proxyActive === true && priorCredentials != null,
+    headerSyncInProgress: false,
+    headerSyncError: null,
+    latestMainFrameSecurity: null,
+    latestMainFrameSecurityUnavailableReason: null,
+    recentConnectSecurityDecisions: []
+  });
   try {
+    // A replacement always transitions live PAC -> mandatory blocker before
+    // disconnecting the captured old native connection. DIRECT is never used.
+    await installBlockingPac(startControlEpoch);
+    requireControlGeneration(startControlEpoch);
+    blockerConfirmed = true;
+    credentials = null;
+    setStatus({
+      state: "starting",
+      reason: null,
+      proxyActive: false,
+      headerSync: null,
+      headerSyncInProgress: false,
+      headerSyncError: null,
+      securityMaintenanceEpoch: null
+    });
+    if (replacedConnectionEpoch != null) {
+      replacedConnectionDisconnected =
+        client.disconnectIfCurrent(replacedConnectionEpoch);
+    }
+    await clearAlarmForControl(
+      HEADER_SYNC_DEADLINE_ALARM,
+      startControlEpoch
+    );
+    await clearAlarmForControl(
+      HEADER_EVIDENCE_EXPIRY_ALARM,
+      startControlEpoch
+    );
+    const stored = await storageGet(["policy"]);
+    requireControlGeneration(startControlEpoch);
+    const policy = normalizePolicy(
+      policyOverride ?? stored.policy ?? DEFAULT_POLICY
+    );
     await client.request("hello");
+    requireControlGeneration(startControlEpoch);
+    activationConnectionEpoch = client.currentConnectionEpoch();
+    requireRuntimeControl(
+      startControlEpoch,
+      activationConnectionEpoch
+    );
     const result = await client.request("start", { policy });
+    requireRuntimeControl(
+      startControlEpoch,
+      activationConnectionEpoch
+    );
     validateStartResult(result);
 
     if (result.ca.state !== "installed") {
       throw new Error("local CA installation is required before the HNS PAC can activate");
+    }
+
+    activationStatus = await establishStartupHeaderReadiness(
+      result,
+      startControlEpoch,
+      activationConnectionEpoch
+    );
+    requireRuntimeControl(
+      startControlEpoch,
+      activationConnectionEpoch
+    );
+    if (!headerSyncReadyForProxyActivation(activationStatus.headerSync)) {
+      throw new Error(
+        "validated header target evidence expired before PAC activation"
+      );
     }
 
     // Credentials must exist before the PAC becomes visible so an immediate
@@ -267,45 +502,209 @@ async function startRuntime(policyOverride) {
       username: result.proxy.username,
       password: result.proxy.password
     };
-    await installPac(result.pacScript);
-    setStatus({
-      state: "active",
-      reason: null,
-      runtimeSession: result.runtimeSession,
-      runtimeGeneration: result.runtimeGeneration,
-      policyGeneration: result.policyGeneration,
-      securityMaintenanceEpoch: result.securityMaintenanceEpoch,
-      caReady: true,
-      headerSync: currentHeaderSync(result.headerSync),
-      headerSyncInProgress: false,
-      headerSyncError:
-        result.headerSync == null ? "Validated header status unavailable" : null,
-      latestMainFrameSecurity: null,
-      latestMainFrameSecurityUnavailableReason: null,
-      recentConnectSecurityDecisions: []
-    });
+    // Until this mutation is confirmed, either the blocker or B's live PAC
+    // may be selected. A failure must re-confirm the blocker before B stops.
+    blockerConfirmed = false;
+    await installPacForCurrentNativeGeneration(
+      () => installLivePac(result.pacScript, startControlEpoch),
+      () =>
+        runtimeControlIsCurrent(
+          startControlEpoch,
+          activationConnectionEpoch
+        ),
+      () => {
+        if (!headerSyncReadyForProxyActivation(activationStatus.headerSync)) {
+          throw new Error(
+            "validated header target evidence expired during PAC activation"
+          );
+        }
+        setStatus({
+          state: "active",
+          reason: null,
+          proxyActive: true,
+          runtimeSession: activationStatus.runtimeSession,
+          runtimeGeneration: activationStatus.runtimeGeneration,
+          policyGeneration: activationStatus.policyGeneration,
+          securityMaintenanceEpoch:
+            activationStatus.securityMaintenanceEpoch,
+          caReady: true,
+          headerSync: currentHeaderSync(activationStatus.headerSync),
+          headerSyncInProgress: false,
+          headerSyncError: null,
+          latestMainFrameSecurity: null,
+          latestMainFrameSecurityUnavailableReason: null,
+          recentConnectSecurityDecisions: []
+        });
+      }
+    );
+    requireRuntimeControl(
+      startControlEpoch,
+      activationConnectionEpoch
+    );
     await withNavigationReceiptStore((store) => store.ensureRuntime(publicStatus));
-    void maintainHeaderFreshness(false).catch(() => {});
+    requireRuntimeControl(
+      startControlEpoch,
+      activationConnectionEpoch
+    );
+    await clearRetainedHeaderSyncUrgentRetryWindow();
+    requireRuntimeControl(
+      startControlEpoch,
+      activationConnectionEpoch
+    );
+    await scheduleHeaderSyncDeadline(
+      publicStatus.headerSync,
+      Date.now(),
+      startControlEpoch
+    );
+    await clearAlarmForControl(RECONNECT_ALARM, startControlEpoch);
+    requireRuntimeControl(
+      startControlEpoch,
+      activationConnectionEpoch
+    );
     return publicStatus;
   } catch (error) {
-    await clearProxy();
+    if (
+      startControlEpoch !== controlEpoch ||
+      isSupersededControlError(error)
+    ) {
+      throw supersededControlError();
+    }
+    let failure = error;
+    if (!blockerConfirmed) {
+      try {
+        await installBlockingPac(startControlEpoch);
+        requireControlGeneration(startControlEpoch);
+        blockerConfirmed = true;
+      } catch (blockingError) {
+        if (isSupersededControlError(blockingError)) {
+          throw supersededControlError();
+        }
+        failure = new Error(
+          `could not confirm the mandatory blocking PAC: ${boundedError(blockingError)}`
+        );
+      }
+    }
+    if (!blockerConfirmed) {
+      // The selected PAC is uncertain but still mandatory: it can only be the
+      // previous live PAC, B's live PAC, or the fixed blocker. Keep the
+      // corresponding native connection alive until a blocker is confirmed.
+      if (!replacedConnectionDisconnected) {
+        credentials = priorCredentials;
+      }
+      const retainedStatus = replacedConnectionDisconnected
+        ? publicStatus
+        : priorStatus;
+      setStatus({
+        ...retainedStatus,
+        state: "degraded",
+        reason: "blockingPacInstallFailed",
+        proxyActive: credentials != null,
+        headerSyncInProgress: false,
+        headerSyncError: boundedError(failure)
+      });
+      await createAlarmForControl(
+        RECONNECT_ALARM,
+        { delayInMinutes: 1 },
+        startControlEpoch
+      );
+      throw failure;
+    }
     credentials = null;
-    try {
-      await client.request("stop");
-    } catch {
-      client.disconnect();
+    if (activationConnectionEpoch != null) {
+      client.disconnectIfCurrent(activationConnectionEpoch);
+    } else if (
+      replacedConnectionEpoch != null &&
+      !replacedConnectionDisconnected
+    ) {
+      client.disconnectIfCurrent(replacedConnectionEpoch);
     }
     const localCaRequired =
-      error instanceof Error && error.message.includes("local CA installation is required");
+      failure instanceof Error &&
+      failure.message.includes("local CA installation is required");
     if (localCaRequired) {
       setStatus({
         state: "blocked",
         reason: "localCaRequired",
+        proxyActive: false,
         caReady: false
       });
+    } else {
+      setStatus({
+        state: "degraded",
+        reason: boundedError(failure),
+        proxyActive: false,
+        headerSyncInProgress: false,
+        headerSyncError: "Proxy activation requires current validated headers",
+        securityMaintenanceEpoch: null,
+        latestMainFrameSecurity: null,
+        latestMainFrameSecurityUnavailableReason: null,
+        recentConnectSecurityDecisions: []
+      });
+      await createAlarmForControl(
+        RECONNECT_ALARM,
+        { delayInMinutes: 1 },
+        startControlEpoch
+      );
     }
-    throw error;
+    throw failure;
   }
+}
+
+async function establishStartupHeaderReadiness(
+  startResult,
+  expectedControlEpoch,
+  expectedConnectionEpoch
+) {
+  if (headerSyncReadyForProxyActivation(startResult.headerSync)) {
+    return startResult;
+  }
+
+  setStatus({
+    runtimeSession: startResult.runtimeSession,
+    runtimeGeneration: startResult.runtimeGeneration,
+    policyGeneration: startResult.policyGeneration,
+    securityMaintenanceEpoch: startResult.securityMaintenanceEpoch,
+    caReady: true,
+    headerSync: currentHeaderSync(startResult.headerSync),
+    headerSyncInProgress: true,
+    headerSyncError: null
+  });
+  await recordHeaderSyncAttempt(Date.now());
+  requireRuntimeControl(
+    expectedControlEpoch,
+    expectedConnectionEpoch
+  );
+  const synchronized = await client.request(
+    "syncOnce",
+    {},
+    { timeoutMs: MAX_REQUEST_TIMEOUT_MS }
+  );
+  requireRuntimeControl(
+    expectedControlEpoch,
+    expectedConnectionEpoch
+  );
+  const refreshError = headerSyncRefreshError(synchronized);
+  if (refreshError) {
+    throw new Error(refreshError);
+  }
+  if (!headerSyncReadyForProxyActivation(synchronized)) {
+    throw new Error(
+      "header synchronization did not establish current unexpired target evidence"
+    );
+  }
+
+  const status = await client.request("status");
+  requireRuntimeControl(
+    expectedControlEpoch,
+    expectedConnectionEpoch
+  );
+  validateStatusResult(status, startResult);
+  if (!headerSyncReadyForProxyActivation(status.headerSync)) {
+    throw new Error(
+      "native status did not retain current unexpired target evidence"
+    );
+  }
+  return status;
 }
 
 async function handleUiMessage(message) {
@@ -315,16 +714,20 @@ async function handleUiMessage(message) {
       return statusForTab(status, message.tabId);
     }
     case "restart":
-      return recover();
+      // An explicit restart preempts a long-running header sync: startRuntime
+      // first confirms the blocker, then disconnects only captured A.
+      return enqueueRuntimeLifecycle(() => startRuntime());
     case "syncHeadersNow": {
       const status = await synchronizeHeaders();
       return statusForTab(status, message.tabId);
     }
     case "setPolicy": {
       const policy = normalizePolicy(message.policy);
-      const result = await startRuntime(policy);
-      await storageSet({ policy });
-      return result;
+      return enqueueRuntimeLifecycle(async () => {
+        const result = await startRuntime(policy);
+        await storageSet({ policy });
+        return result;
+      });
     }
     case "diagnostics":
       return client.request("diagnostics");
@@ -334,32 +737,56 @@ async function handleUiMessage(message) {
 }
 
 async function refreshNativeStatus(allowDuringHeaderSync = false) {
-  if (publicStatus.state !== "active") return publicStatus;
+  if (!headerMaintenanceRuntimeAvailable()) return publicStatus;
   if (headerSyncOperation && !allowDuringHeaderSync) return publicStatus;
+  const requestedRuntime = publicStatus;
+  const requestedHeaderSyncOperation = headerSyncOperation;
+  const requestedControlEpoch = controlEpoch;
+  const requestedConnectionEpoch = client.currentConnectionEpoch();
+  if (requestedConnectionEpoch == null) return publicStatus;
+  const requestedRuntimeControl = runtimeControlToken(
+    requestedControlEpoch,
+    requestedConnectionEpoch,
+    requestedRuntime
+  );
+  if (requestedRuntimeControl == null) return publicStatus;
   try {
     const result = await client.request("status");
-    validateStatusResult(result);
+    if (
+      requestedControlEpoch !== controlEpoch ||
+      !client.connectionIsCurrent(requestedConnectionEpoch) ||
+      !sameLiveProxyGeneration(requestedRuntime, publicStatus) ||
+      requestedHeaderSyncOperation !== headerSyncOperation
+    ) {
+      return publicStatus;
+    }
+    validateStatusResult(result, requestedRuntime);
     const latestMainFrameSecurity = currentSecurityResult(
       result.latestMainFrameSecurity,
       result
     );
     const recentConnectSecurityDecisions =
       validatedConnectSecurityDecisions(result);
+    const headerSync = currentHeaderSync(result.headerSync);
+    const ready = headerSyncReadyForProxyActivation(headerSync);
     setStatus({
-      state: "active",
-      reason: null,
+      state: ready ? "active" : "degraded",
+      reason: ready ? null : "headerReadinessUnavailable",
+      proxyActive: true,
       runtimeSession: result.runtimeSession,
       runtimeGeneration: result.runtimeGeneration,
       policyGeneration: result.policyGeneration,
       securityMaintenanceEpoch: result.securityMaintenanceEpoch,
       caReady: result.caReady === true,
-      headerSync: currentHeaderSync(result.headerSync),
+      headerSync,
       headerSyncInProgress: false,
       headerSyncError:
-        result.headerSync == null &&
-        typeof result.headerSyncUnavailableReason === "string"
-          ? "Validated header status unavailable"
-          : null,
+        ready
+          ? null
+          : result.headerSync == null &&
+              typeof result.headerSyncUnavailableReason === "string"
+            ? "Validated header status unavailable"
+            : "Validated header target evidence is unavailable or expired",
       latestMainFrameSecurity,
       latestMainFrameSecurityUnavailableReason:
         latestMainFrameSecurity == null &&
@@ -368,37 +795,104 @@ async function refreshNativeStatus(allowDuringHeaderSync = false) {
           : null,
       recentConnectSecurityDecisions
     });
+    if (ready) {
+      await scheduleHeaderSyncDeadline(
+        headerSync,
+        Date.now(),
+        requestedControlEpoch
+      );
+      await clearAlarmForControl(
+        RECONNECT_ALARM,
+        requestedControlEpoch
+      );
+    } else {
+      await deactivateProxyForHeaderReadiness(
+        new Error("validated header target evidence is unavailable or expired"),
+        requestedRuntimeControl
+      );
+    }
   } catch (error) {
-    await clearProxy();
-    client.disconnect();
-    setStatus({
-      state: "degraded",
-      reason: error instanceof Error ? error.message : String(error),
-      headerSync: null,
-      headerSyncInProgress: false,
-      headerSyncError: "Native runtime status unavailable",
-      securityMaintenanceEpoch: null,
-      latestMainFrameSecurity: null,
-      latestMainFrameSecurityUnavailableReason: null,
-      recentConnectSecurityDecisions: []
-    });
+    if (
+      requestedControlEpoch !== controlEpoch ||
+      !client.connectionIsCurrent(requestedConnectionEpoch) ||
+      !sameLiveProxyGeneration(requestedRuntime, publicStatus) ||
+      requestedHeaderSyncOperation !== headerSyncOperation
+    ) {
+      return publicStatus;
+    }
+    if (
+      publicStatus.proxyActive === true &&
+      credentials != null &&
+      headerSyncReadyForProxyActivation(publicStatus.headerSync)
+    ) {
+      // A status timeout is not proof that the proxy listener died. Retain the
+      // last authenticated generation until its independent hard deadline;
+      // the NativeClient disconnect observer handles an actual dead process.
+      setStatus({
+        state: "active",
+        reason: null,
+        headerSyncInProgress: false,
+        headerSyncError: `Native runtime status unavailable: ${boundedError(error)}`
+      });
+      await scheduleHeaderSyncDeadline(
+        publicStatus.headerSync,
+        Date.now() + 60 * 1000,
+        requestedControlEpoch
+      );
+      return publicStatus;
+    }
+    await deactivateProxyForHeaderReadiness(
+      error,
+      requestedRuntimeControl
+    );
   }
   return publicStatus;
 }
 
 function maintainHeaderFreshness(refreshStatus) {
   if (headerMaintenanceOperation) return headerMaintenanceOperation;
+  if (runtimeLifecyclePending > 0) return Promise.resolve(publicStatus);
+  const maintenanceControl = captureHeaderMaintenanceControl();
+  if (maintenanceControl == null) return Promise.resolve(publicStatus);
   headerMaintenanceOperation = (async () => {
-    if (publicStatus.state !== "active") return publicStatus;
-    const status = refreshStatus ? await refreshNativeStatus() : publicStatus;
-    if (!needsAutomaticHeaderSync(status.headerSync)) {
-      scheduleHeaderSyncDeadline(status.headerSync);
-      await clearSupersededHeaderSyncUrgentRetryWindow(status.headerSync);
-      return status;
+    requireHeaderMaintenanceControl(maintenanceControl);
+    let status = refreshStatus ? await refreshNativeStatus() : publicStatus;
+    requireHeaderMaintenanceControl(maintenanceControl, status);
+    requireHeaderMaintenanceControl(maintenanceControl);
+    if (!headerSyncReadyForProxyActivation(status.headerSync)) {
+      const readinessError = new Error(
+        "validated header target evidence is unavailable or expired"
+      );
+      await deactivateProxyForHeaderReadiness(
+        readinessError,
+        maintenanceControl
+      );
+      requireHeaderMaintenanceControl(maintenanceControl);
+      status = publicStatus;
+    }
+    if (
+      headerSyncReadyForProxyActivation(status.headerSync) &&
+      !needsAutomaticHeaderSync(status.headerSync)
+    ) {
+      await scheduleHeaderSyncDeadline(
+        status.headerSync,
+        Date.now(),
+        maintenanceControl.controlEpoch
+      );
+      requireHeaderMaintenanceControl(maintenanceControl);
+      await clearSupersededHeaderSyncUrgentRetryWindow(
+        publicStatus.headerSync,
+        maintenanceControl
+      );
+      requireHeaderMaintenanceControl(maintenanceControl);
+      return publicStatus;
     }
     const lastAttemptAt = await loadLastHeaderSyncAttempt();
+    requireHeaderMaintenanceControl(maintenanceControl);
     const retainedUrgentWindow =
       await loadRetainedHeaderSyncUrgentRetryWindow();
+    requireHeaderMaintenanceControl(maintenanceControl);
+    status = publicStatus;
     const now = Date.now();
     const allowedAt = nextAutomaticHeaderSyncAttemptAt(
       status.headerSync,
@@ -407,9 +901,15 @@ function maintainHeaderFreshness(refreshStatus) {
       now
     );
     if (allowedAt != null && allowedAt > now) {
-      scheduleHeaderSyncDeadline(status.headerSync, allowedAt);
-      return status;
+      await scheduleHeaderSyncDeadline(
+        status.headerSync,
+        allowedAt,
+        maintenanceControl.controlEpoch
+      );
+      requireHeaderMaintenanceControl(maintenanceControl);
+      return publicStatus;
     }
+    requireHeaderMaintenanceControl(maintenanceControl);
     return synchronizeHeaders();
   })().finally(() => {
     headerMaintenanceOperation = null;
@@ -419,23 +919,26 @@ function maintainHeaderFreshness(refreshStatus) {
 
 function synchronizeHeaders() {
   if (headerSyncOperation) return headerSyncOperation;
-  if (publicStatus.state !== "active") {
-    return Promise.reject(new Error("header sync requires an active native runtime"));
+  if (runtimeLifecyclePending > 0) {
+    return Promise.reject(new Error("header sync is unavailable during runtime replacement"));
+  }
+  if (!headerMaintenanceRuntimeAvailable()) {
+    return Promise.reject(new Error("header sync requires a live native runtime"));
   }
 
   const attemptedAgainstHeaderSync = publicStatus.headerSync;
+  const syncRuntimeControl = captureHeaderMaintenanceControl();
+  if (syncRuntimeControl == null) {
+    return Promise.reject(new Error("header sync requires a connected native runtime"));
+  }
+  const syncControlEpoch = syncRuntimeControl.controlEpoch;
   setStatus({
     headerSyncInProgress: true,
-    headerSyncError: null,
-    latestMainFrameSecurity: null,
-    latestMainFrameSecurityUnavailableReason: "headerSyncInProgress",
-    recentConnectSecurityDecisions: []
+    headerSyncError: null
   });
   headerSyncOperation = (async () => {
-    await withNavigationReceiptStore((store) =>
-      store.beginMaintenance(publicStatus)
-    );
     await recordHeaderSyncAttempt(Date.now());
+    requireHeaderMaintenanceControl(syncRuntimeControl);
     let syncError = null;
     try {
       const result = await client.request(
@@ -443,17 +946,27 @@ function synchronizeHeaders() {
         {},
         { timeoutMs: MAX_REQUEST_TIMEOUT_MS }
       );
-      const headerSync = authoritativeHeaderSync(result);
-      if (!headerSync) throw new Error("native host returned invalid header sync status");
+      requireHeaderMaintenanceControl(syncRuntimeControl);
+      const refreshError = headerSyncRefreshError(result);
+      if (refreshError) {
+        throw new Error(refreshError);
+      }
     } catch (error) {
       syncError = error;
     }
 
+    requireHeaderMaintenanceControl(syncRuntimeControl);
     const authoritativeStatus = await refreshNativeStatus(true);
-    if (authoritativeStatus.state === "active") {
+    requireHeaderMaintenanceControl(
+      syncRuntimeControl,
+      authoritativeStatus
+    );
+    requireHeaderMaintenanceControl(syncRuntimeControl);
+    if (headerMaintenanceRuntimeAvailable(authoritativeStatus)) {
       const adopted = await withNavigationReceiptStore((store) =>
         store.ensureRuntime(authoritativeStatus)
       );
+      requireHeaderMaintenanceControl(syncRuntimeControl);
       if (!adopted) {
         syncError ??= new Error(
           "native host returned an invalid security maintenance epoch"
@@ -466,25 +979,68 @@ function synchronizeHeaders() {
       );
     }
     if (syncError) {
+      if (!headerMaintenanceRuntimeAvailable()) {
+        throw syncError;
+      }
+      if (!headerSyncReadyForProxyActivation(publicStatus.headerSync)) {
+        await deactivateProxyForHeaderReadiness(
+          syncError,
+          syncRuntimeControl
+        );
+        requireHeaderMaintenanceControl(syncRuntimeControl);
+      }
       setStatus({
         headerSyncInProgress: false,
         headerSyncError: boundedError(syncError)
       });
       await scheduleHeaderSyncRetry(
-        publicStatus.headerSync,
-        attemptedAgainstHeaderSync
+        attemptedAgainstHeaderSync,
+        syncRuntimeControl
       );
+      requireHeaderMaintenanceControl(syncRuntimeControl);
       throw syncError;
     }
-    if (needsAutomaticHeaderSync(publicStatus.headerSync)) {
-      await scheduleHeaderSyncRetry(
-        publicStatus.headerSync,
-        attemptedAgainstHeaderSync
+    if (!headerSyncReadyForProxyActivation(publicStatus.headerSync)) {
+      const readinessError = new Error(
+        "header synchronization did not establish current unexpired target evidence"
       );
-    } else {
-      await clearRetainedHeaderSyncUrgentRetryWindow();
-      scheduleHeaderSyncDeadline(publicStatus.headerSync);
+      await deactivateProxyForHeaderReadiness(
+        readinessError,
+        syncRuntimeControl
+      );
+      requireHeaderMaintenanceControl(syncRuntimeControl);
+      await scheduleHeaderSyncRetry(
+        attemptedAgainstHeaderSync,
+        syncRuntimeControl
+      );
+      requireHeaderMaintenanceControl(syncRuntimeControl);
+      throw readinessError;
     }
+    if (needsAutomaticHeaderSync(publicStatus.headerSync)) {
+      const refreshError = new Error(
+        "header synchronization did not refresh authenticated target evidence"
+      );
+      setStatus({
+        headerSyncInProgress: false,
+        headerSyncError: boundedError(refreshError)
+      });
+      await scheduleHeaderSyncRetry(
+        attemptedAgainstHeaderSync,
+        syncRuntimeControl
+      );
+      requireHeaderMaintenanceControl(syncRuntimeControl);
+      throw refreshError;
+    }
+    await clearRetainedHeaderSyncUrgentRetryWindow();
+    requireHeaderMaintenanceControl(syncRuntimeControl);
+    await scheduleHeaderSyncDeadline(
+      publicStatus.headerSync,
+      Date.now(),
+      syncControlEpoch
+    );
+    requireHeaderMaintenanceControl(syncRuntimeControl);
+    await clearAlarmForControl(RECONNECT_ALARM, syncControlEpoch);
+    requireHeaderMaintenanceControl(syncRuntimeControl);
     return publicStatus;
   })().finally(() => {
     headerSyncOperation = null;
@@ -492,44 +1048,147 @@ function synchronizeHeaders() {
   return headerSyncOperation;
 }
 
-async function scheduleHeaderSyncRetry(candidate, attemptedAgainst) {
+async function deactivateProxyForHeaderReadiness(
+  error,
+  expectedRuntimeControl = captureHeaderMaintenanceControl()
+) {
+  if (expectedRuntimeControl == null) return publicStatus;
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
+  const degradedControlEpoch = expectedRuntimeControl.controlEpoch;
+  // Keep the live mandatory PAC and native listener. Rust independently
+  // rejects stale header work, so degraded browsing remains genuinely
+  // fail-closed instead of silently falling back to DIRECT/WebPKI.
+  setStatus({
+    state: "degraded",
+    reason: "headerReadinessUnavailable",
+    proxyActive: true,
+    headerSyncInProgress: false,
+    headerSyncError: boundedError(error),
+    latestMainFrameSecurity: null,
+    latestMainFrameSecurityUnavailableReason: null,
+    recentConnectSecurityDecisions: []
+  });
+  await clearAlarmForControl(
+    HEADER_EVIDENCE_EXPIRY_ALARM,
+    degradedControlEpoch
+  );
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
+  await scheduleHeaderSyncDeadline(
+    publicStatus.headerSync,
+    Date.now() + 60 * 1000,
+    degradedControlEpoch
+  );
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
+  await createAlarmForControl(
+    RECONNECT_ALARM,
+    { delayInMinutes: 1 },
+    degradedControlEpoch
+  );
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
+  return publicStatus;
+}
+
+async function enforceHeaderEvidenceExpiry() {
+  if (
+    publicStatus.state !== "active" ||
+    publicStatus.proxyActive !== true
+  ) {
+    // State transitions own their alarm mutations. A health callback that
+    // observed "starting" must not clear an expiry alarm installed moments
+    // later by the same control generation.
+    return false;
+  }
+  const expired = await deactivateIfHeaderEvidenceExpired(
+    publicStatus.headerSync,
+    () =>
+      deactivateProxyForHeaderReadiness(
+        new Error("validated header target evidence expired")
+      )
+  );
+  if (!expired) {
+    await scheduleHeaderEvidenceExpiry(publicStatus.headerSync);
+  }
+  return expired;
+}
+
+async function scheduleHeaderSyncRetry(
+  attemptedAgainst,
+  expectedRuntimeControl
+) {
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
   const now = Date.now();
   const attemptedWindow = headerSyncUrgentRetryWindow(attemptedAgainst);
   if (attemptedWindow && attemptedWindow.endsAt >= now) {
     await rememberHeaderSyncUrgentRetryWindow(attemptedWindow);
+    requireHeaderMaintenanceControl(expectedRuntimeControl);
   }
   const retainedUrgentWindow =
     await loadRetainedHeaderSyncUrgentRetryWindow();
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
+  const currentCandidate = publicStatus.headerSync;
   const allowedAt = nextAutomaticHeaderSyncAttemptAt(
-    candidate,
+    currentCandidate,
     lastHeaderSyncAttemptAt,
     retainedUrgentWindow,
-    now
+    Date.now()
   );
-  scheduleHeaderSyncDeadline(
-    candidate,
-    allowedAt == null ? now : allowedAt
+  await scheduleHeaderSyncDeadline(
+    currentCandidate,
+    allowedAt == null ? Date.now() : allowedAt,
+    expectedRuntimeControl.controlEpoch
   );
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
 }
 
-async function clearSupersededHeaderSyncUrgentRetryWindow(candidate) {
-  const currentWindow = headerSyncUrgentRetryWindow(candidate);
+async function clearSupersededHeaderSyncUrgentRetryWindow(
+  candidate,
+  expectedRuntimeControl
+) {
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
+  let currentWindow = headerSyncUrgentRetryWindow(candidate);
   if (!currentWindow) return;
   const retainedWindow =
     await loadRetainedHeaderSyncUrgentRetryWindow();
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
+  currentWindow = headerSyncUrgentRetryWindow(publicStatus.headerSync);
+  if (!currentWindow) return;
   if (
     retainedWindow &&
     (retainedWindow.network !== currentWindow.network ||
       retainedWindow.endsAt < currentWindow.endsAt)
   ) {
     await clearRetainedHeaderSyncUrgentRetryWindow();
+    requireHeaderMaintenanceControl(expectedRuntimeControl);
   }
 }
 
-function scheduleHeaderSyncDeadline(candidate, notBefore = Date.now()) {
-  if (publicStatus.state !== "active") {
-    void chrome.alarms.clear(HEADER_SYNC_DEADLINE_ALARM);
+async function scheduleHeaderSyncDeadline(
+  candidate,
+  notBefore = Date.now(),
+  expectedControlEpoch = controlEpoch
+) {
+  requireControlGeneration(expectedControlEpoch);
+  if (!headerMaintenanceRuntimeAvailable()) {
+    await clearAlarmForControl(
+      HEADER_SYNC_DEADLINE_ALARM,
+      expectedControlEpoch
+    );
+    await clearAlarmForControl(
+      HEADER_EVIDENCE_EXPIRY_ALARM,
+      expectedControlEpoch
+    );
     return;
+  }
+  if (publicStatus.state === "active") {
+    await scheduleHeaderEvidenceExpiry(
+      candidate,
+      expectedControlEpoch
+    );
+  } else {
+    await clearAlarmForControl(
+      HEADER_EVIDENCE_EXPIRY_ALARM,
+      expectedControlEpoch
+    );
   }
   const now = Date.now();
   const dueAt = automaticHeaderSyncDueAt(candidate);
@@ -537,9 +1196,42 @@ function scheduleHeaderSyncDeadline(candidate, notBefore = Date.now()) {
     Number.isSafeInteger(notBefore) && notBefore >= now ? notBefore : now;
   const requestedAt =
     Number.isSafeInteger(dueAt) && dueAt >= 0 ? dueAt : now;
-  chrome.alarms.create(HEADER_SYNC_DEADLINE_ALARM, {
-    when: Math.max(now + 1000, floor, requestedAt)
-  });
+  await createAlarmForControl(
+    HEADER_SYNC_DEADLINE_ALARM,
+    { when: Math.max(now + 1000, floor, requestedAt) },
+    expectedControlEpoch
+  );
+}
+
+async function scheduleHeaderEvidenceExpiry(
+  candidate,
+  expectedControlEpoch = controlEpoch
+) {
+  requireControlGeneration(expectedControlEpoch);
+  if (
+    publicStatus.state !== "active" ||
+    publicStatus.proxyActive !== true
+  ) {
+    await clearAlarmForControl(
+      HEADER_EVIDENCE_EXPIRY_ALARM,
+      expectedControlEpoch
+    );
+    return;
+  }
+  const sync = authoritativeHeaderSync(candidate);
+  const now = Date.now();
+  const expiresAt =
+    sync &&
+    Number.isSafeInteger(sync.targetEvidenceValidUntilUnix) &&
+    sync.targetEvidenceValidUntilUnix <=
+      Math.floor(Number.MAX_SAFE_INTEGER / 1000)
+      ? sync.targetEvidenceValidUntilUnix * 1000
+      : now;
+  await createAlarmForControl(
+    HEADER_EVIDENCE_EXPIRY_ALARM,
+    { when: Math.max(now + 1000, expiresAt) },
+    expectedControlEpoch
+  );
 }
 
 async function loadLastHeaderSyncAttempt() {
@@ -679,20 +1371,20 @@ function validateStartResult(result) {
   }
 }
 
-function validateStatusResult(result) {
+function validateStatusResult(result, expectedRuntime = publicStatus) {
   if (
     !result ||
     result.state !== "active" ||
     typeof result.runtimeSession !== "string" ||
-    result.runtimeSession !== publicStatus.runtimeSession ||
+    result.runtimeSession !== expectedRuntime.runtimeSession ||
     !Number.isSafeInteger(result.runtimeGeneration) ||
-    result.runtimeGeneration !== publicStatus.runtimeGeneration ||
+    result.runtimeGeneration !== expectedRuntime.runtimeGeneration ||
     !Number.isSafeInteger(result.policyGeneration) ||
-    result.policyGeneration !== publicStatus.policyGeneration ||
+    result.policyGeneration !== expectedRuntime.policyGeneration ||
     !Number.isSafeInteger(result.securityMaintenanceEpoch) ||
     result.securityMaintenanceEpoch < 1 ||
-    (Number.isSafeInteger(publicStatus.securityMaintenanceEpoch) &&
-      result.securityMaintenanceEpoch < publicStatus.securityMaintenanceEpoch) ||
+    (Number.isSafeInteger(expectedRuntime.securityMaintenanceEpoch) &&
+      result.securityMaintenanceEpoch < expectedRuntime.securityMaintenanceEpoch) ||
     !Array.isArray(result.recentConnectSecurityDecisions) ||
     result.recentConnectSecurityDecisions.length >
       MAX_NATIVE_CONNECT_SECURITY_DECISIONS ||
@@ -717,8 +1409,107 @@ function validatedConnectSecurityDecisions(result) {
   return Object.freeze(decisions);
 }
 
-async function installPac(pacScript) {
-  await chromeCall(chrome.proxy.settings.set, chrome.proxy.settings, {
+function beginControlGeneration() {
+  if (controlEpoch >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("proxy control generation is exhausted");
+  }
+  controlEpoch += 1;
+  return controlEpoch;
+}
+
+function supersededControlError() {
+  const error = new Error("proxy control generation was superseded");
+  error.code = "controlEpochSuperseded";
+  return error;
+}
+
+function isSupersededControlError(error) {
+  return error?.code === "controlEpochSuperseded";
+}
+
+function requireControlGeneration(expectedControlEpoch) {
+  if (expectedControlEpoch !== controlEpoch) {
+    throw supersededControlError();
+  }
+}
+
+function runtimeControlIsCurrent(
+  expectedControlEpoch,
+  expectedConnectionEpoch
+) {
+  return (
+    expectedControlEpoch === controlEpoch &&
+    client.connectionIsCurrent(expectedConnectionEpoch)
+  );
+}
+
+function requireRuntimeControl(
+  expectedControlEpoch,
+  expectedConnectionEpoch
+) {
+  requireControlGeneration(expectedControlEpoch);
+  if (!client.connectionIsCurrent(expectedConnectionEpoch)) {
+    throw supersededControlError();
+  }
+}
+
+function headerMaintenanceRuntimeAvailable(candidate = publicStatus) {
+  return (
+    candidate != null &&
+    candidate.proxyActive === true &&
+    credentials != null &&
+    client.currentConnectionEpoch() != null &&
+    (candidate.state === "active" ||
+      headerReadinessFailClosed(candidate))
+  );
+}
+
+function captureHeaderMaintenanceControl(candidate = publicStatus) {
+  if (!headerMaintenanceRuntimeAvailable(candidate)) return null;
+  return runtimeControlToken(
+    controlEpoch,
+    client.currentConnectionEpoch(),
+    candidate
+  );
+}
+
+function headerMaintenanceControlIsCurrent(
+  expected,
+  candidate = publicStatus
+) {
+  return (
+    headerMaintenanceRuntimeAvailable(candidate) &&
+    runtimeControlTokenIsCurrent(
+      expected,
+      controlEpoch,
+      client.currentConnectionEpoch(),
+      candidate
+    )
+  );
+}
+
+function requireHeaderMaintenanceControl(
+  expected,
+  candidate = publicStatus
+) {
+  if (!headerMaintenanceControlIsCurrent(expected, candidate)) {
+    throw supersededControlError();
+  }
+}
+
+function installBlockingPac(expectedControlEpoch) {
+  return pacController.install(
+    BLOCKING_PAC_SCRIPT,
+    expectedControlEpoch
+  );
+}
+
+function installLivePac(pacScript, expectedControlEpoch) {
+  return pacController.install(pacScript, expectedControlEpoch);
+}
+
+function setMandatoryPac(pacScript) {
+  return chromeCall(chrome.proxy.settings.set, chrome.proxy.settings, {
     value: {
       mode: "pac_script",
       pacScript: {
@@ -730,24 +1521,51 @@ async function installPac(pacScript) {
   });
 }
 
-async function clearProxy() {
-  credentials = null;
-  try {
-    await chromeCall(chrome.proxy.settings.clear, chrome.proxy.settings, {
-      scope: "regular"
-    });
-  } catch {
-    // Clearing is best-effort during process teardown; no direct fallback is installed here.
+async function readMandatoryPacScript() {
+  const result = await chromeCall(
+    chrome.proxy.settings.get,
+    chrome.proxy.settings,
+    { incognito: false }
+  );
+  const value = result?.value;
+  if (
+    result?.levelOfControl !== "controlled_by_this_extension" ||
+    value?.mode !== "pac_script" ||
+    value?.pacScript?.mandatory !== true ||
+    typeof value.pacScript.data !== "string"
+  ) {
+    return null;
   }
+  return value.pacScript.data;
+}
+
+function mutateAlarmForControl(expectedControlEpoch, mutation) {
+  return alarmMutations.run(expectedControlEpoch, mutation);
+}
+
+function clearAlarmForControl(name, expectedControlEpoch) {
+  return mutateAlarmForControl(
+    expectedControlEpoch,
+    () => chrome.alarms.clear(name)
+  );
+}
+
+function createAlarmForControl(name, alarmInfo, expectedControlEpoch) {
+  return mutateAlarmForControl(
+    expectedControlEpoch,
+    () => chrome.alarms.create(name, alarmInfo)
+  );
 }
 
 function setStatus(update) {
   publicStatus = Object.freeze({ ...publicStatus, ...update });
+  const proxyReady =
+    publicStatus.state === "active" && publicStatus.proxyActive === true;
   void chrome.action.setBadgeText({
-    text: publicStatus.state === "active" ? "HNS" : "!"
+    text: proxyReady ? "HNS" : "!"
   });
   void chrome.action.setBadgeBackgroundColor({
-    color: publicStatus.state === "active" ? "#177245" : "#9b2c2c"
+    color: proxyReady ? "#177245" : "#9b2c2c"
   });
 }
 

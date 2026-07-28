@@ -94,7 +94,7 @@ facilities. Linux packages include the NSS certificate utility and its
 non-system runtime libraries so users are not required to install
 `libnss3-tools` or `nss-tools` separately. Kernel interfaces, graphics
 drivers, and base operating-system libraries remain platform components. The
-v0.5.3 Linux Setup is built against glibc 2.39 and therefore requires glibc
+v0.5.4 Linux Setup is built against glibc 2.39 and therefore requires glibc
 2.39 or newer, such as Ubuntu 24.04 or Debian 13. The release gate inspects
 every packaged ELF object so this ABI floor cannot drift above 2.39 unnoticed.
 

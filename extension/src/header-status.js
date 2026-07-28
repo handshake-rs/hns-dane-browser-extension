@@ -3,6 +3,7 @@ const SYNC_STATES = new Set([
   "syncing",
   "synced",
   "up_to_date",
+  "coalesced",
   "attempted",
   "peer_failed",
   "seed_failed",
@@ -10,6 +11,11 @@ const SYNC_STATES = new Set([
 ]);
 const FRESHNESS_STATES = new Set(["current", "stale", "unknown"]);
 const TARGET_SOURCES = new Set(["corroboratedPeers", "unknown"]);
+const SUCCESSFUL_REFRESH_STATES = new Set([
+  "syncing",
+  "synced",
+  "up_to_date"
+]);
 const REQUIRED_FRESHNESS_THRESHOLD_BLOCKS = 2;
 const REQUIRED_TARGET_PEER_GROUPS = 3;
 
@@ -62,6 +68,55 @@ export function authoritativeHeaderSync(candidate) {
     return null;
   }
   return sync;
+}
+
+export function headerSyncReadyForProxyActivation(
+  candidate,
+  nowUnixSeconds = Math.floor(Date.now() / 1000)
+) {
+  if (!Number.isSafeInteger(nowUnixSeconds) || nowUnixSeconds < 0) return false;
+  const sync = authoritativeHeaderSync(candidate);
+  return (
+    sync?.freshness === "current" &&
+    sync.targetEvidenceExpired === false &&
+    Number.isSafeInteger(sync.targetEvidenceValidUntilUnix) &&
+    sync.targetEvidenceValidUntilUnix > nowUnixSeconds
+  );
+}
+
+export function headerSyncRefreshError(candidate) {
+  const sync = authoritativeHeaderSync(candidate);
+  if (!sync) return "native host returned invalid header sync status";
+  if (sync.error != null) {
+    return typeof sync.error === "string" && sync.error.length > 0
+      ? sync.error
+      : "native host returned invalid header sync error";
+  }
+  if (sync.status === "coalesced") {
+    return (
+      sync.attempted === 0 &&
+      sync.successful === 0 &&
+      sync.accepted === 0 &&
+      sync.failed === 0 &&
+      Array.isArray(sync.failures) &&
+      sync.failures.length === 0
+    )
+      ? null
+      : "native host returned invalid coalesced header sync envelope";
+  }
+  if (!SUCCESSFUL_REFRESH_STATES.has(sync.status)) {
+    return `header synchronization reported ${sync.status}`;
+  }
+  if (
+    !Number.isSafeInteger(sync.attempted) ||
+    sync.attempted < 1 ||
+    !Number.isSafeInteger(sync.successful) ||
+    sync.successful < 1 ||
+    sync.successful > sync.attempted
+  ) {
+    return "header synchronization completed without a successful peer";
+  }
+  return null;
 }
 
 export function validHeaderSyncEnvelope(candidate) {
