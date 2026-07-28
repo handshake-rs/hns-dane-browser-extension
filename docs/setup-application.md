@@ -118,6 +118,8 @@ ChromeOS and mobile Chromium do not support this desktop native-host
 installation. Android and iOS are maintained in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-Automated Windows and macOS setup artifacts must be described as unsigned
-until project-controlled Authenticode and Apple Developer signing and
-notarization are configured.
+Automated Windows setup artifacts must be described as unsigned until
+project-controlled Authenticode signing is configured. A macOS Setup artifact
+must be described as unsigned unless the credentialed release workflow has
+verified its Developer ID signature, Apple acceptance, stapled ticket, final
+archive extraction, and Gatekeeper assessment.

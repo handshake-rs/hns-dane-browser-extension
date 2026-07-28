@@ -41,5 +41,6 @@ TOOL_MANIFEST="$ROOT_DIR/tools/hns-header-snapshot-exporter/Cargo.toml"
   npm run check:extension
   python3 -m unittest -v \
     tests/test_release_packaging.py \
-    tests/test_release_workflow.py
+    tests/test_release_workflow.py \
+    tests/test_resign_macos_workflow.py
 )

@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- Added a manual, protected macOS release-signing workflow that rebuilds an
+  existing tag without changing its version, signs and notarizes x64 and arm64
+  native hosts and Setup apps, staples Setup tickets, verifies the final
+  archives with Gatekeeper, and replaces only the nine affected release assets
+  after retaining and validating the published release.
+- Added explicit release metadata and installation guidance for Developer ID
+  signed native hosts using Apple's online ticket and signed Setup apps carrying
+  a stapled ticket.
+
+### Security
+
+- Pin the allowed Developer ID certificate name, SHA-256 fingerprint, and Team
+  ID before signing; import it only into an ephemeral CI keychain.
+- Keep the certificate bundle, import password, and App Store Connect Team key
+  in a protected, default-branch-scoped environment. Verify temporary and final
+  GitHub asset names, sizes, and SHA-256 digests around replacement.
+
 ## 0.5.4 - 2026-07-27
 
 ### Changed

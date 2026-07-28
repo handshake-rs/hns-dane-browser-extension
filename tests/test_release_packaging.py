@@ -439,6 +439,44 @@ class ReleasePackagingTests(unittest.TestCase):
                 )
                 self.assertIn("unsigned and not notarized", readme)
 
+            signed_output = base / "signed-output"
+            self.run_packager(
+                "native",
+                *self.common_arguments(signed_output),
+                "--platform",
+                "macos",
+                "--architecture",
+                "arm64",
+                "--rust-target",
+                "aarch64-apple-darwin",
+                "--native-host",
+                str(binary),
+                "--macos-signed-notarized",
+            )
+            with tarfile.open(
+                signed_output / f"{stem}.tar.gz",
+                "r:gz",
+            ) as archive:
+                readme = archive.extractfile(f"{stem}/README.md").read().decode()
+                metadata = json.loads(
+                    archive.extractfile(
+                        f"{stem}/RELEASE-METADATA.json"
+                    ).read()
+                )
+                self.assertEqual(
+                    metadata["nativeHost"]["codeSigningStatus"],
+                    "developerIdSigned",
+                )
+                self.assertEqual(
+                    metadata["nativeHost"]["notarizationStatus"],
+                    "acceptedOnlineTicket",
+                )
+                self.assertIn(
+                    "Apple does not support stapling a notarization ticket",
+                    readme,
+                )
+                self.assertNotIn("unsigned and not notarized", readme)
+
     def test_linux_setup_appdir_is_deterministic_and_bundles_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -667,6 +705,77 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("System Settings > Privacy & Security", readme)
                 self.assertIn("Do not disable Gatekeeper globally", readme)
                 self.assertNotIn("Bundled Linux runtime licenses", readme)
+
+            signed_output = base / "signed-output"
+            self.run_packager(
+                "setup",
+                *self.common_arguments(signed_output),
+                "--platform",
+                "macos",
+                "--architecture",
+                "arm64",
+                "--native-rust-target",
+                "aarch64-apple-darwin",
+                "--setup-rust-target",
+                "aarch64-apple-darwin",
+                "--setup-executable",
+                str(setup),
+                "--embedded-native-host",
+                str(native_host),
+                "--macos-signed-notarized",
+            )
+            with tarfile.open(
+                signed_output / f"{stem}.tar.gz",
+                "r:gz",
+            ) as archive:
+                metadata = json.loads(
+                    archive.extractfile(
+                        f"{stem}/RELEASE-METADATA.json"
+                    ).read()
+                )
+                self.assertEqual(
+                    metadata["setup"]["codeSigningStatus"],
+                    "developerIdSigned",
+                )
+                self.assertEqual(
+                    metadata["setup"]["notarizationStatus"],
+                    "acceptedAndStapled",
+                )
+                readme = archive.extractfile(f"{stem}/README.md").read().decode()
+                self.assertIn("carries a stapled ticket", readme)
+                self.assertNotIn("Control-click", readme)
+                self.assertNotIn("Do not disable Gatekeeper", readme)
+
+    def test_signed_notarized_state_is_rejected_for_non_macos_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            binary = base / "hns-chromium-native-host"
+            binary.write_bytes(fake_native_binary("linux", "x64"))
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PACKAGER),
+                    "native",
+                    *self.common_arguments(base / "output"),
+                    "--platform",
+                    "linux",
+                    "--architecture",
+                    "x64",
+                    "--rust-target",
+                    "x86_64-unknown-linux-musl",
+                    "--native-host",
+                    str(binary),
+                    "--macos-signed-notarized",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "--macos-signed-notarized is valid only for macOS",
+                result.stderr,
+            )
 
     def test_setup_rejects_a_non_embedded_or_mislabeled_host(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

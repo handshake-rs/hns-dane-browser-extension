@@ -50,8 +50,9 @@ published release.
 Organization administrators should protect the default branch and `v*` tags,
 restrict release-tag creation, and place the publisher job behind an approved
 release environment before granting additional write access. Enable immutable
-releases before the first publication. Build and packaging jobs remain
-read-only; only the final publisher receives repository write permission.
+releases after all required platform-signing replacement is complete. Build and
+packaging jobs remain read-only; only the final publisher receives repository
+write permission.
 
 ## Setup application packages
 
@@ -80,9 +81,82 @@ format, architecture, Rust target, or embedded host bytes.
 
 ## Signing and store submission
 
-The automated Windows executables are currently unsigned. The automated macOS
-apps are unsigned and not notarized. Configure project-controlled Authenticode
-and Apple Developer credentials before representing those artifacts as signed.
+The automated Windows executables are currently unsigned. The tag workflow also
+creates unsigned macOS files first so ordinary builds never receive Apple
+credentials. Run the manual `Replace macOS release assets with signed builds`
+workflow from the default branch to replace an existing published release's
+macOS x64 and arm64 native-host and Setup archives without changing its tag,
+version, source commit, title, or non-macOS assets.
+
+The workflow signs both native hosts before embedding them, signs each Setup
+app with hardened runtime and a trusted timestamp, submits both deliverables to
+Apple, requires `Accepted`, staples and validates the Setup app, extracts the
+final tarball again, and repeats code-signing, stapler, and Gatekeeper checks.
+Apple does not support stapling a ticket directly to a standalone executable,
+so a signed native host uses Apple's online notarization ticket. Setup apps
+carry a stapled ticket.
+
+Create a protected `macos-signing` GitHub environment restricted to `main`, and
+configure these environment secrets:
+
+- `APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64`
+- `APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD`
+- `APPLE_NOTARY_API_PRIVATE_KEY_P8_BASE64`
+
+Configure these non-secret environment variables:
+
+- `APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_NAME`
+- `APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_SHA256`
+- `APPLE_TEAM_ID`
+- `APPLE_NOTARY_API_KEY_ID`
+- `APPLE_NOTARY_API_ISSUER_ID`
+
+The issuer ID must be copied from App Store Connect under **Users and Access >
+Integrations > App Store Connect API > Team Keys** for the Team key matching
+the configured API key ID. It cannot be derived from a certificate, Team ID,
+or `.p8` file. The Developer ID certificate bundle's password is needed only
+for the `.p12` import. App Store Connect `.p8` Team keys are unencrypted; do not
+create or configure a second password for that file.
+
+Set the binary credential secrets without placing their values in shell
+history:
+
+```sh
+base64 -w0 developerID_application.p12 |
+  gh secret set APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 \
+    --env macos-signing \
+    --repo handshake-rs/hns-dane-browser-extension
+base64 -w0 AuthKey_9944D8P9RY.p8 |
+  gh secret set APPLE_NOTARY_API_PRIVATE_KEY_P8_BASE64 \
+    --env macos-signing \
+    --repo handshake-rs/hns-dane-browser-extension
+read -rsp 'Developer ID .p12 password: ' HNS_P12_PASSWORD
+printf '\n'
+printf %s "$HNS_P12_PASSWORD" |
+  gh secret set APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD \
+    --env macos-signing \
+    --repo handshake-rs/hns-dane-browser-extension
+unset HNS_P12_PASSWORD
+```
+
+After configuring the issuer ID, run and follow the manual workflow with:
+
+```sh
+gh workflow run resign-macos-release.yml \
+  --repo handshake-rs/hns-dane-browser-extension \
+  --ref main \
+  -f release_tag=v0.5.4 \
+  -f confirm_replacement=true
+gh run watch \
+  --repo handshake-rs/hns-dane-browser-extension \
+  --exit-status
+```
+
+The publisher downloads and verifies the current 29 release assets before any
+write, retains a workflow-artifact backup, uploads all nine replacements under
+temporary names, verifies their GitHub SHA-256 digests, then swaps only the four
+macOS archives, their sidecars, and `SHA256SUMS`. It finally verifies all 29
+published names, sizes, and digests.
 
 Repository automation does not submit store dashboards. Publisher accounts,
 domain verification, final catalog IDs, privacy declarations, review, and

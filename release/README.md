@@ -17,8 +17,8 @@ repository administrators should:
 2. restrict creation and updates of `v*` tags to release maintainers;
 3. configure the `release` GitHub Actions environment with required maintainer
    approval; and
-4. enable immutable releases so published tags and assets cannot be replaced;
-   and
+4. enable immutable releases only after any required signing replacement has
+   completed; and
 5. review the tag commit, workflow changes, store identity, and release notes
    before approving that environment.
 
@@ -32,10 +32,24 @@ packaged manifest so unpacked installations derive the canonical ID. The
 `-mv3-store.zip` first-submission package remains keyless so each catalog can
 assign its own ID. No private key is distributed in either package.
 
-The workflow contains no signing secrets. Automated Windows archives are
-unsigned, and automated macOS archives are unsigned and not notarized. Configure
-and independently audit platform signing before describing those artifacts as
-signed or notarized.
+The tag workflow contains no signing secrets. Automated Windows archives remain
+unsigned. The tag workflow initially creates unsigned macOS archives; the
+manual, default-branch-only `Replace macOS release assets with signed builds`
+workflow can rebuild the same tagged source on x64 and arm64, sign it with the
+approved Developer ID Application identity, submit both native hosts and setup
+apps to Apple, staple the setup apps, and replace only the four macOS archives,
+their four checksum sidecars, and `SHA256SUMS`. The workflow preserves the
+release tag, source commit, title, version, and all non-macOS assets.
+
+The credentialed workflow uses the protected `macos-signing` environment.
+Store the certificate bundle, its password, and App Store Connect private key
+only as the environment secrets documented in `docs/release.md`. Store the
+approved certificate identity, fingerprint, Team ID, API key ID, and Team API
+issuer ID as environment variables. It imports the certificate into an
+ephemeral keychain, verifies the pinned fingerprint and Team ID, destroys that
+keychain after each job, and retains the Apple submission results as workflow
+artifacts. The `.p8` key is unencrypted API key material; no `.p8` password is
+used.
 
 Each setup executable embeds the exact version-matched native host. Windows
 setup executables and their embedded native hosts statically link the Microsoft

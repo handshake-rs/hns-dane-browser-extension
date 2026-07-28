@@ -503,6 +503,7 @@ def native_installation_readme(
     canonical_extension_id: str,
     extension_id: str,
     source_tag: str,
+    macos_signed_notarized: bool,
 ) -> bytes:
     registration_ids = list(
         dict.fromkeys([canonical_extension_id, extension_id])
@@ -544,12 +545,23 @@ def native_installation_readme(
             "Linux requires certutil (libnss3-tools or nss-tools). "
             "macOS uses the current user's login keychain."
         )
-        signing_notice = (
-            "This automated macOS bundle is unsigned and not notarized until "
-            "project Apple Developer credentials are configured."
-            if platform == "macos"
-            else "Verify this Linux bundle against the published SHA256SUMS file."
-        )
+        if platform == "macos" and macos_signed_notarized:
+            signing_notice = (
+                "This macOS native host is signed with the project Developer ID "
+                "Application certificate and accepted by Apple's notarization "
+                "service. Apple does not support stapling a notarization ticket "
+                "to a standalone executable; Gatekeeper can retrieve its ticket "
+                "from Apple when the Mac is online."
+            )
+        elif platform == "macos":
+            signing_notice = (
+                "This automated macOS bundle is unsigned and not notarized until "
+                "project Apple Developer credentials are configured."
+            )
+        else:
+            signing_notice = (
+                "Verify this Linux bundle against the published SHA256SUMS file."
+            )
     registration_list = ", ".join(f"`{value}`" for value in registration_ids)
     text = f"""# HNS DANE Browser native host
 
@@ -612,6 +624,10 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
         raise PackagingError(
             f"unsupported native architecture: {arguments.architecture}"
         )
+    if arguments.macos_signed_notarized and arguments.platform != "macos":
+        raise PackagingError(
+            "--macos-signed-notarized is valid only for macOS packages"
+        )
     native_host = arguments.native_host.resolve()
     if not native_host.is_file() or native_host.is_symlink():
         raise PackagingError(f"native host is missing or unsafe: {native_host}")
@@ -643,6 +659,7 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
                 str(context["canonical_extension_id"]),
                 arguments.extension_id,
                 arguments.source_tag,
+                arguments.macos_signed_notarized,
             ),
             0o644,
         ),
@@ -653,10 +670,18 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
                     "nativeHost": {
                         "architecture": arguments.architecture,
                         "binary": f"rust/target/release/{expected_binary_name}",
-                        "codeSigningStatus": "unsigned"
+                        "codeSigningStatus": (
+                            "developerIdSigned"
+                            if arguments.macos_signed_notarized
+                            else "unsigned"
+                        )
                         if arguments.platform in {"macos", "windows"}
                         else "notApplicable",
-                        "notarizationStatus": "notNotarized"
+                        "notarizationStatus": (
+                            "acceptedOnlineTicket"
+                            if arguments.macos_signed_notarized
+                            else "notNotarized"
+                        )
                         if arguments.platform == "macos"
                         else "notApplicable",
                         "platform": arguments.platform,
@@ -1020,6 +1045,7 @@ def setup_installation_readme(
     platform: str,
     architecture: str,
     source_tag: str,
+    macos_signed_notarized: bool,
 ) -> bytes:
     if platform == "windows":
         launch = r".\hns-dane-browser-setup.exe"
@@ -1042,13 +1068,21 @@ def setup_installation_readme(
             "The app embeds the version-matched native host and relies only on "
             "macOS system frameworks."
         )
-        signing = (
-            "This automated macOS app is unsigned and not notarized until project "
-            "Apple Developer credentials are configured. If Gatekeeper blocks the "
-            "first launch, use Finder to Control-click the app and choose Open, or "
-            "approve that attempted launch in System Settings > Privacy & Security. "
-            "Do not disable Gatekeeper globally."
-        )
+        if macos_signed_notarized:
+            signing = (
+                "This macOS app is signed with the project Developer ID "
+                "Application certificate, accepted by Apple's notarization "
+                "service, and carries a stapled ticket for offline Gatekeeper "
+                "verification."
+            )
+        else:
+            signing = (
+                "This automated macOS app is unsigned and not notarized until "
+                "project Apple Developer credentials are configured. If Gatekeeper "
+                "blocks the first launch, use Finder to Control-click the app and "
+                "choose Open, or approve that attempted launch in System Settings "
+                "> Privacy & Security. Do not disable Gatekeeper globally."
+            )
     else:
         launch = "./HNS-DANE-Browser-Setup.AppDir/AppRun"
         language = "sh"
@@ -1235,6 +1269,10 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
         raise PackagingError(
             f"unsupported setup architecture: {arguments.architecture}"
         )
+    if arguments.macos_signed_notarized and arguments.platform != "macos":
+        raise PackagingError(
+            "--macos-signed-notarized is valid only for macOS packages"
+        )
 
     expected_setup_name = (
         "hns-dane-browser-setup.exe"
@@ -1292,7 +1330,11 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
     version = str(context["version"])
     setup_metadata: dict[str, object] = {
         "architecture": arguments.architecture,
-        "codeSigningStatus": "unsigned"
+        "codeSigningStatus": (
+            "developerIdSigned"
+            if arguments.macos_signed_notarized
+            else "unsigned"
+        )
         if arguments.platform in {"macos", "windows"}
         else "notApplicable",
         "embeddedNativeHost": {
@@ -1301,7 +1343,11 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
             "rustTarget": arguments.native_rust_target,
             "sha256": hashlib.sha256(native_host_bytes).hexdigest(),
         },
-        "notarizationStatus": "notNotarized"
+        "notarizationStatus": (
+            "acceptedAndStapled"
+            if arguments.macos_signed_notarized
+            else "notNotarized"
+        )
         if arguments.platform == "macos"
         else "notApplicable",
         "platform": arguments.platform,
@@ -1316,6 +1362,7 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
                 arguments.platform,
                 arguments.architecture,
                 arguments.source_tag,
+                arguments.macos_signed_notarized,
             ),
             0o644,
         ),
@@ -1483,6 +1530,11 @@ def parse_arguments() -> argparse.Namespace:
     )
     native.add_argument("--rust-target", required=True)
     native.add_argument("--native-host", type=Path, required=True)
+    native.add_argument(
+        "--macos-signed-notarized",
+        action="store_true",
+        help="mark a macOS binary already signed and accepted by Apple",
+    )
     native.set_defaults(package=package_native)
 
     setup = subparsers.add_parser(
@@ -1498,6 +1550,11 @@ def parse_arguments() -> argparse.Namespace:
     setup.add_argument("--setup-executable", type=Path, required=True)
     setup.add_argument("--embedded-native-host", type=Path, required=True)
     setup.add_argument("--linux-runtime", type=Path)
+    setup.add_argument(
+        "--macos-signed-notarized",
+        action="store_true",
+        help="mark a macOS app already signed, accepted, and stapled",
+    )
     setup.set_defaults(package=package_setup)
 
     linux_runtime = subparsers.add_parser(
