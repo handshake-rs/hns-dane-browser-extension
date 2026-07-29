@@ -96,6 +96,8 @@ $allowedSystemImports = [System.Collections.Generic.HashSet[string]]::new(
   'setupapi.dll',
   'shell32.dll',
   'shcore.dll',
+  'shlwapi.dll',
+  'uiautomationcore.dll',
   'user32.dll',
   'userenv.dll',
   'uxtheme.dll',

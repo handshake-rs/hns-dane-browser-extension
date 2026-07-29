@@ -234,6 +234,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("allowedSystemImports", self.windows_verify)
         self.assertIn("'bcryptprimitives.dll'", self.windows_verify)
         self.assertIn("'combase.dll'", self.windows_verify)
+        self.assertIn("'shlwapi.dll'", self.windows_verify)
+        self.assertIn("'uiautomationcore.dll'", self.windows_verify)
         self.assertIn("nonAllowlistedImports", self.windows_verify)
         self.assertIn("non-allowlisted DLL", self.windows_verify)
         self.assertIn("dynamic Microsoft CRT", self.windows_verify)
