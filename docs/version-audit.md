@@ -8,9 +8,9 @@ upstream release.
 
 | Component | Configured version/source |
 | --- | --- |
-| Extension package | `0.5.4` |
-| Rust workspace | `0.5.4` |
-| HNS DANE Browser Setup | `0.5.4` |
+| Extension package | `0.5.5` |
+| Rust workspace | `0.5.5` |
+| HNS DANE Browser Setup | `0.5.5` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |

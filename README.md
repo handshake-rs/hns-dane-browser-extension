@@ -136,7 +136,7 @@ Store submission copy, reviewer disclosures, permission justifications, and
 shared Chrome/Edge/Opera artwork are maintained in [`store/`](store/README.md).
 Tagged GitHub Releases provide the browser-neutral extension ZIP, six
 platform-matched setup applications, and matching manual native-host bundles.
-The v0.5.4 Linux Setup baseline is glibc 2.39 or newer (for example Ubuntu
+The v0.5.5 Linux Setup baseline is glibc 2.39 or newer (for example Ubuntu
 24.04 or Debian 13).
 Chrome Web Store distribution also serves Brave and Vivaldi, while Edge and
 Opera can use their own catalog listings.

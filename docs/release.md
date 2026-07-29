@@ -32,10 +32,10 @@ so one host can serve verified installations from more than one catalog.
 For example:
 
 ```sh
-git tag -a v0.5.4 -m "HNS DANE Browser 0.5.4"
-git push origin v0.5.4
+git tag -a v0.5.5 -m "HNS DANE Browser 0.5.5"
+git push origin v0.5.5
 gh run watch --repo handshake-rs/hns-dane-browser-extension
-gh release view v0.5.4 \
+gh release view v0.5.5 \
   --repo handshake-rs/hns-dane-browser-extension \
   --json isDraft,isPrerelease,url,assets
 ```
@@ -69,7 +69,7 @@ format, architecture, Rust target, or embedded host bytes.
   libraries and its launcher does not set `LD_LIBRARY_PATH`. This prevents host
   Mesa, NVIDIA, GLVND, or libdecor modules from binding to a mixed-version GUI
   dependency. The workflow rejects either packaging regression, tests every
-  packaged ELF object against the v0.5.4 glibc 2.39 ABI ceiling, and tests the
+  packaged ELF object against the v0.5.5 glibc 2.39 ABI ceiling, and tests the
   layout in a clean environment by creating an NSS database and adding, listing,
   and deleting a temporary certificate. A system `libnss3-tools` installation
   is not required, but Linux Setup requires glibc 2.39 or newer and common
@@ -143,7 +143,7 @@ Run and follow the manual workflow with:
 gh workflow run resign-windows-release.yml \
   --repo handshake-rs/hns-dane-browser-extension \
   --ref main \
-  -f release_tag=v0.5.4 \
+  -f release_tag=v0.5.5 \
   -f confirm_replacement=true
 gh run watch \
   --repo handshake-rs/hns-dane-browser-extension \
@@ -227,7 +227,7 @@ After configuring the issuer ID, run and follow the manual workflow with:
 gh workflow run resign-macos-release.yml \
   --repo handshake-rs/hns-dane-browser-extension \
   --ref main \
-  -f release_tag=v0.5.4 \
+  -f release_tag=v0.5.5 \
   -f confirm_replacement=true
 gh run watch \
   --repo handshake-rs/hns-dane-browser-extension \

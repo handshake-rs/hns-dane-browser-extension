@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.5.5 - 2026-07-28
+
 ### Changed
 
 - Added an OIDC-backed Azure Artifact Signing workflow that Authenticode-signs

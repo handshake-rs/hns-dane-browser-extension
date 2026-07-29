@@ -93,7 +93,7 @@ loader/shared-library closure, package versions, hashes, and licenses. The setup
 process uses the host's complete Wayland/X11/OpenGL stack and does not prepend an
 AppDir library directory. This keeps Mesa, NVIDIA, GLVND, libdecor, X11/XCB,
 Wayland, and the compiler runtime from resolving against a mixed-version
-userspace stack. The v0.5.4 Linux Setup requires glibc 2.39 or newer and common
+userspace stack. The v0.5.5 Linux Setup requires glibc 2.39 or newer and common
 desktop GUI libraries (Ubuntu 24.04 / Debian 13 generation). The release gate
 rejects setup shared libraries, a launcher-level `LD_LIBRARY_PATH`, and any
 packaged ELF object requiring a later glibc version. Its clean-environment
