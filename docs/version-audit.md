@@ -14,7 +14,7 @@ upstream release.
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
-| Canonical browser contracts | `handshake-rs/hns-dane-engine` at `7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5` |
+| Canonical browser contracts | crates.io `0.1.0` (`handshake-rs/hns-dane-engine`) |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
 | rcgen | `0.14.8` |
@@ -25,7 +25,7 @@ upstream release.
 | p256 | `0.13` |
 | ring | `0.17.14` |
 
-The canonical Git source is limited to these five packages:
+The canonical engine release consists of these five exact crates.io packages:
 
 - `hns-browser-runtime`;
 - `hns-browser-observability`;
@@ -33,9 +33,9 @@ The canonical Git source is limited to these five packages:
 - `hns-namespace-resolution`; and
 - `hns-resolution-policy`.
 
-All five resolve to the exact revision shown above. The committed Cargo lock,
-source-policy verifier, notice generator, cargo-deny policy, and CI gates must
-change together for an intentional engine upgrade.
+All five resolve to exact version `0.1.0` with crates.io checksums. The
+committed Cargo lock, source-policy verifier, notice generator, cargo-deny
+policy, and CI gates must change together for an intentional engine upgrade.
 
 ## Moving-source review
 

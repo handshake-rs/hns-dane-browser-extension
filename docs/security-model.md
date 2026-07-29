@@ -8,9 +8,8 @@ proxy, and their local Handshake and ICANN resolution stack. Current mobile
 security claims belong to
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-Five canonical contracts are pinned to
-`handshake-rs/hns-dane-engine` revision
-`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`:
+Five canonical contracts are pinned to the checksum-verified
+`handshake-rs/hns-dane-engine` crates.io `0.1.0` release:
 
 - session-bound browser request authority;
 - checked browser observability;
@@ -181,6 +180,10 @@ cannot change another request's published choice.
   runtime lifecycle paths never expose system or direct routing. Disabling or
   uninstalling the extension is the browser-owned path that removes its proxy
   setting.
+- During first-run header catch-up, the newly authenticated native listener
+  replaces the fixed transition blocker before synchronization begins. ICANN
+  requests remain inside Rust and can proceed; HNS admission remains
+  fail-closed until current corroborated target evidence is available.
 
 The local CA authenticates the browser-to-loopback hop only on branches where
 Rust must terminate TLS, including HNS DANE and ICANN DANE. It is not an

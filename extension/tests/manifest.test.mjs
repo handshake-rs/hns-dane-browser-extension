@@ -36,7 +36,7 @@ test("manifest is MV3 with native messaging, mandatory proxy, and auth permissio
   }
 });
 
-test("service worker uses mandatory live and blocking PACs and fails closed without CA", () => {
+test("service worker activates the authenticated proxy before initial header catch-up", () => {
   assert.match(worker, /mandatory:\s*true/);
   assert.match(worker, /result\.ca\.state !== "installed"/);
   assert.match(worker, /installBlockingPac\(startControlEpoch\)/);
@@ -47,6 +47,25 @@ test("service worker uses mandatory live and blocking PACs and fails closed with
   assert.match(
     worker,
     /client\.disconnectIfCurrent\(replacedConnectionEpoch\)/
+  );
+  const startup = worker.match(
+    /async function startRuntime\(policyOverride\) \{[\s\S]*?\n\}\n\nasync function establishStartupHeaderReadiness/
+  )?.[0];
+  assert.ok(startup, "startRuntime implementation");
+  const earlyLivePac = startup.indexOf(
+    "installLivePac(result.pacScript, startControlEpoch)"
+  );
+  const initialHeaderCatchUp = startup.indexOf(
+    "activationStatus = await establishStartupHeaderReadiness"
+  );
+  assert.ok(earlyLivePac >= 0, "live PAC activation");
+  assert.ok(
+    earlyLivePac < initialHeaderCatchUp,
+    "the native listener must replace the fixed blocker before initial sync"
+  );
+  assert.match(
+    startup,
+    /livePacConfirmed[\s\S]*?reason: "headerReadinessUnavailable"[\s\S]*?proxyActive: true[\s\S]*?return publicStatus/
   );
   assert.doesNotMatch(worker, /proxy\.settings\.clear/);
   assert.doesNotMatch(worker, /client\.request\("stop"\)/);

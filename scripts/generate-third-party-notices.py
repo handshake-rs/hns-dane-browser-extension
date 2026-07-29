@@ -2,7 +2,7 @@
 """Generate the Chromium extension/native-host third-party notices.
 
 Generation is deliberately offline. Rust package metadata and license files
-come from Cargo's checksum-verified registry or immutable Git cache. The
+come from Cargo's checksum-verified registry cache. The
 lightweight ``--check`` mode verifies the complete asset digest and every
 committed input fingerprint, so it is suitable for a clean CI checkout.
 """
@@ -19,10 +19,7 @@ import subprocess
 import sys
 import tomllib
 
-from verify_cargo_git_policy import (
-    ALLOWED_ENGINE_PACKAGES,
-    ENGINE_LOCK_SOURCE,
-)
+from verify_cargo_git_policy import CRATES_IO_SOURCE
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -420,53 +417,13 @@ def declared_license_fallback_files(
 
 def rust_package_license_files(package: dict) -> list[tuple[str, str]]:
     source = package.get("source")
-    if not isinstance(source, str) or not source.startswith("git+"):
-        return registry_license_files(package)
-
-    name = package["name"]
-    if source != ENGINE_LOCK_SOURCE or name not in ALLOWED_ENGINE_PACKAGES:
+    if source != CRATES_IO_SOURCE:
         raise RuntimeError(
-            f"Unreviewed Cargo Git source for {name} {package['version']}: "
+            f"Unreviewed non-crates.io source for {package['name']} "
+            f"{package['version']}: "
             f"{source}"
         )
-
-    package_dir = Path(package["manifest_path"]).resolve().parent
-    checkout_root = package_dir.parents[1]
-    expected_package_dir = checkout_root / "crates" / name
-    if package_dir != expected_package_dir:
-        raise RuntimeError(
-            f"Unexpected canonical engine package location for {name}: "
-            f"{package_dir}"
-        )
-
-    files: list[tuple[str, str]] = []
-    for candidate in sorted(checkout_root.iterdir()):
-        if (
-            candidate.is_symlink()
-            or not candidate.is_file()
-            or not candidate.name.upper().startswith(LICENSE_FILE_PREFIXES)
-        ):
-            continue
-        size = candidate.stat().st_size
-        if not 0 <= size <= MAX_NOTICE_FILE_SIZE:
-            raise RuntimeError(
-                f"Engine license file has an unexpected size: {candidate}"
-            )
-        try:
-            content = (
-                candidate.read_text(encoding="utf-8")
-                .replace("\r\n", "\n")
-                .strip()
-            )
-        except UnicodeDecodeError as error:
-            raise RuntimeError(
-                f"Engine license file is not UTF-8 text: {candidate}"
-            ) from error
-        if content:
-            files.append(
-                (f"canonical engine workspace/{candidate.name}", content)
-            )
-    return files
+    return registry_license_files(package)
 
 
 def sqlite_public_domain_notice(rust_packages: list[dict]) -> tuple[str, str] | None:
@@ -580,8 +537,8 @@ def generate() -> str:
         ),
         "",
         "License expressions are the declarations in the verified package metadata. The reproduced",
-        "texts come from checksum-verified registry packages, immutable Cargo Git checkouts,",
-        "or fingerprinted canonical license texts reviewed in this repository.",
+        "texts come from checksum-verified registry packages or fingerprinted canonical license",
+        "texts reviewed in this repository.",
         "Inclusion here does not imply endorsement by the component authors.",
         "",
         f"Generator schema: {SCHEMA}",

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Switched the five canonical `hns-dane-engine` contracts from the reviewed
+  Git revision to exact, checksum-verified crates.io `0.1.0` packages and
+  marked every desktop Rust application package non-publishable.
+- Activate the authenticated native proxy before a potentially long initial
+  header catch-up. ICANN browsing can continue through Rust while HNS requests
+  remain fail-closed until current corroborated header evidence is available.
+- Migrate exact legacy native-messaging manifests and clean up
+  ownership-checked external-extension registrations and Chromium launch
+  wrappers so removing the extension remains persistent across browser
+  restarts.
+
 ## 0.5.5 - 2026-07-29
 
 ### Changed

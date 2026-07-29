@@ -24,35 +24,35 @@ Supported desktop Rust target closure counts:
   hns-chromium-native-host @ x86_64-unknown-linux-musl: 171 external Cargo components
 
 License expressions are the declarations in the verified package metadata. The reproduced
-texts come from checksum-verified registry packages, immutable Cargo Git checkouts,
-or fingerprinted canonical license texts reviewed in this repository.
+texts come from checksum-verified registry packages or fingerprinted canonical license
+texts reviewed in this repository.
 Inclusion here does not imply endorsement by the component authors.
 
 Generator schema: 5
 Generated input SHA-256:
-  scripts/generate-third-party-notices.py = d589c280599be0e05d607b43af46e4513e4313cd49fbbd3d5baf45ef12fa8378
-  scripts/verify_cargo_git_policy.py = 7db7c19d5423e93e72ad4350b109d1d6f262fe882f87ef3524f09a2a3c483630
+  scripts/generate-third-party-notices.py = 0eb28c615ea6a0c9d4d30510247df1074300353013748e68320943f5f0137fd7
+  scripts/verify_cargo_git_policy.py = 269e25b8e8bf5e56a472337bd0531cb3b144b64241d252a83dca8f4888ba5d36
   release/license-texts/BSL-1.0.txt = c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566
   release/license-texts/CC0-1.0.txt = 8c5bfd05728b98356d25742d60344c8f39a82faacf5758451c2628b0f9f9773f
-  rust/Cargo.toml = 4de14e6b9f54fe1e9453e822897445670fcbc244d524c04d79fd8745232ec89f
-  rust/Cargo.lock = d29d96cb8000b868d4eb9d6fd984867dc46fdc7e6d1413d5b8e89752286b1d88
+  rust/Cargo.toml = b40a14eba3db528995328c03eeda4f5bb48e995417e59aa9f6795be9e4fd2876
+  rust/Cargo.lock = 675cb3a359513546119833491417aa555496e8b3173f49ba4cd0de661a9317a0
   extension/manifest.json = 2b575bdb7f354028c12afb2d786eed9c9e7944a037b306f02367ad7faf73c601
   package.json = defe258f6bfff1936bc04dc0fed58840b90e3212d8426abc150e65efb7b01686
-  rust/crates/hns-browser-setup/Cargo.toml = bc2a735fe334e7e92ba4f1fcac716ac6cdb84ed69d7ee2d5c49ec062cc9e199b
-  rust/crates/hns-cache/Cargo.toml = ecb37feb5e48f51bc3f4e8319aa3e8edca4178f419a3390215640e2e7c2ff058
-  rust/crates/hns-chain/Cargo.toml = 0fdd59304d88167acd7cf0a0ceb2c333aa5cc79d45c46a26828d9788df944814
-  rust/crates/hns-chromium-native-host/Cargo.toml = fda3eaf22748a07f187a3a6dc755564b7a8d898f87b9602745b13c0d369fcf43
-  rust/crates/hns-chromium-platform-runtime/Cargo.toml = 6e4839322f98fb76c337680ed4b60259e360e8edb33d9d1c4cddf6d3a08edaf4
-  rust/crates/hns-core/Cargo.toml = 0d2b63145e61850dc9c243cfd483a92cb7157672f87fcaa7879d7b42c0c91a6d
-  rust/crates/hns-dane/Cargo.toml = e101a2c614120830bc2ead4b56f1cb7604cef15fda4104bc819060a562aa8d29
-  rust/crates/hns-dnssec/Cargo.toml = 06c0ed11d5b80a3ff2f1780e9642e9986b13ecf1f34755cf1cd1d94b6a043cf0
-  rust/crates/hns-gateway/Cargo.toml = 7da94da767d3633a7c151faea18aad4c023de9070cd8155f76d33af4cb535231
-  rust/crates/hns-loopback-proxy/Cargo.toml = 0845ba8a0718a6370f6d97bf25702429196e7d14a3816b6839405a22604c88bf
-  rust/crates/hns-p2p/Cargo.toml = cdb80d118d0a68dba48c5bb71f9ce69e09e3807b904318693dab0096a8af04e9
-  rust/crates/hns-resolver/Cargo.toml = 49abf4892555a38b6d02bff84c3fc07f88e380ec00ffe8e843faaf774bff26d8
-  rust/crates/hns-sync/Cargo.toml = e573dd5bb30b3a6f89a00cb01929b268849e5d54b7c4b9cebad6dc937d8fa2e3
-  rust/crates/hns-transport/Cargo.toml = b5c696c3b7f3b1f54a3835a95d029d35642f7a6ea9c895edd299e723209f305d
-  rust/crates/hns-urkel/Cargo.toml = 83ddd253d6a3699205df6647d894fcb2f081857c96fa272627b18aad1f34eb88
+  rust/crates/hns-browser-setup/Cargo.toml = 5a610d1b9c4f000fa1beca13dcb715c2cba23f8f29222c40b66a691bf0d2b9d1
+  rust/crates/hns-cache/Cargo.toml = 60eb2e666fdd49dfd32c115c2a3bc3d29080ba92b83fc4d297a3d41d9254621a
+  rust/crates/hns-chain/Cargo.toml = a7db4eb3b37f994f68acf5e48d39455cba78add03688596fc8cb2531919bef34
+  rust/crates/hns-chromium-native-host/Cargo.toml = ca39dfc61389215a9c9fe563a390af61b0d1c0438c045712756643efb51ea614
+  rust/crates/hns-chromium-platform-runtime/Cargo.toml = d0600a601098c2f0cb2119fa33ea115711fa2a4d4fb5929bf27b8c22e4fddff9
+  rust/crates/hns-core/Cargo.toml = ebc166811c9108f7bf3155fd406d8738175ad94c837c2fdc64185822d4b9f36e
+  rust/crates/hns-dane/Cargo.toml = ca345da82395e3ec7d92a34378a43d4bf24bc60cff58074f2543684fb4f36cdf
+  rust/crates/hns-dnssec/Cargo.toml = 73f64744b69691ff4d75e3765fb3e53e033ef198742b876b2c7de208ef1e97f1
+  rust/crates/hns-gateway/Cargo.toml = 864fdfd7ce8eee3e2c93b8a2b818073668670e9b4b4973bb45026e6c38a20561
+  rust/crates/hns-loopback-proxy/Cargo.toml = bd309b525b7f0775a6e39dd00e7d6f02f3626249cea81fee9635c953a4053c16
+  rust/crates/hns-p2p/Cargo.toml = 2cdb5bb438729b0c819e9ef0c3b3ca3de8110915ed78a9e194b4c44a963f5f94
+  rust/crates/hns-resolver/Cargo.toml = 5180bce68a68ae93be659a35e85f8aba8d8969569616a271e2b2548f11bf597a
+  rust/crates/hns-sync/Cargo.toml = 5fc5ae1ef8d0d3352b19eced94f39d0bf3dcbf0ff6f1453b081b7d43af6f6441
+  rust/crates/hns-transport/Cargo.toml = 4049209252226b0329091a7be06cf579c617c33a0adbe9c3ae84d34067a761e2
+  rust/crates/hns-urkel/Cargo.toml = 76b3b0aca54eb15bed7dd5c39f42444ba08ee428a4d1a89c9d8a3935dc38c3a6
 
 RUST COMPONENTS (425)
   accesskit 0.24.1 | MIT OR Apache-2.0
@@ -651,6 +651,11 @@ Applies to:
   - Rust crate emath 0.35.0
   - Rust crate epaint 0.35.0
   - Rust crate epaint_default_fonts 0.35.0
+  - Rust crate hns-browser-observability 0.1.0
+  - Rust crate hns-browser-runtime 0.1.0
+  - Rust crate hns-icann-dane 0.1.0
+  - Rust crate hns-namespace-resolution 0.1.0
+  - Rust crate hns-resolution-policy 0.1.0
   - Rust crate objc-sys 0.3.5
   - Rust crate objc2 0.5.2
   - Rust crate objc2 0.6.4
@@ -3143,6 +3148,11 @@ Applies to:
   - Rust crate epaint 0.35.0
   - Rust crate epaint_default_fonts 0.35.0
   - Rust crate gl_generator 0.14.0
+  - Rust crate hns-browser-observability 0.1.0
+  - Rust crate hns-browser-runtime 0.1.0
+  - Rust crate hns-icann-dane 0.1.0
+  - Rust crate hns-namespace-resolution 0.1.0
+  - Rust crate hns-resolution-policy 0.1.0
   - Rust crate khronos_api 3.1.0
   - Rust crate kurbo 0.13.1
   - Rust crate lru-slab 0.1.2
@@ -5104,11 +5114,6 @@ Applies to:
   - Rust crate fdeflate 0.3.7
   - Rust crate fearless_simd 0.4.1
   - Rust crate half 2.7.1
-  - Rust crate hns-browser-observability 0.1.0
-  - Rust crate hns-browser-runtime 0.1.0
-  - Rust crate hns-icann-dane 0.1.0
-  - Rust crate hns-namespace-resolution 0.1.0
-  - Rust crate hns-resolution-policy 0.1.0
   - Rust crate image 0.25.10
   - Rust crate linebender_resource_handle 0.1.1
   - Rust crate miniz_oxide 0.8.9
@@ -5128,7 +5133,6 @@ Applies to:
   - Rust crate wgpu-naga-bridge 29.0.4
   - Rust crate wgpu-types 29.0.4
 Source file names:
-  - canonical engine workspace/LICENSE-APACHE
   - LICENSE-APACHE
   - LICENSE-Apache
   - LICENSE-APACHE.md
@@ -16211,39 +16215,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-
-================================================================================
-Notice SHA-256: f9165598d16dd8f69f8b1ff9a0e2871821b9f7e6c0bece512dfd4de11e613ae5
-Applies to:
-  - Rust crate hns-browser-observability 0.1.0
-  - Rust crate hns-browser-runtime 0.1.0
-  - Rust crate hns-icann-dane 0.1.0
-  - Rust crate hns-namespace-resolution 0.1.0
-  - Rust crate hns-resolution-policy 0.1.0
-Source file names:
-  - canonical engine workspace/LICENSE-MIT
---------------------------------------------------------------------------------
-MIT License
-
-Copyright (c) 2026 Denuo Web, LLC
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 ================================================================================
 Notice SHA-256: f98a51ab06f4771e0707c5a2c9b23ad837862e51623ac35cd1cd667477144926

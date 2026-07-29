@@ -5,6 +5,7 @@ import {
   SerializedEpochMutationController,
   SerializedMandatoryPacController,
   deactivateIfHeaderEvidenceExpired,
+  headerReadinessFailClosed,
   installPacForCurrentNativeGeneration,
   runtimeControlToken,
   runtimeControlTokenIsCurrent,
@@ -451,6 +452,26 @@ test("a due but unexpired refresh failure retains the authenticated proxy", asyn
     false
   );
   assert.equal(markedDegraded, false);
+});
+
+test("initial header catch-up is a live fail-closed proxy state", () => {
+  assert.equal(
+    headerReadinessFailClosed({
+      state: "degraded",
+      reason: "headerReadinessUnavailable",
+      proxyActive: true,
+      headerSyncInProgress: true
+    }),
+    true
+  );
+  assert.equal(
+    headerReadinessFailClosed({
+      state: "degraded",
+      reason: "headerReadinessUnavailable",
+      proxyActive: false
+    }),
+    false
+  );
 });
 
 test("hard expiry is enforceable while an unrelated sync remains hung", async () => {

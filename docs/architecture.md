@@ -5,8 +5,8 @@ product. Current Android and iOS work lives in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
 The Chromium adapter consumes five canonical browser contracts from
-`handshake-rs/hns-dane-engine` at immutable revision
-`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`. The canonical
+the checksum-verified `handshake-rs/hns-dane-engine` crates.io `0.1.0`
+release. The canonical
 `hns-browser-runtime` owns session-bound request authority;
 `hns-browser-observability` checks typed status;
 `hns-icann-dane` owns ICANN TLSA policy;

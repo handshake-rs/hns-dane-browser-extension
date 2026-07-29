@@ -417,6 +417,7 @@ async function startRuntime(policyOverride) {
   let activationConnectionEpoch = null;
   let activationStatus = null;
   let blockerConfirmed = false;
+  let livePacConfirmed = false;
   let replacedConnectionDisconnected = false;
   setStatus({
     state: "starting",
@@ -480,6 +481,45 @@ async function startRuntime(policyOverride) {
       throw new Error("local CA installation is required before the HNS PAC can activate");
     }
 
+    if (!headerSyncReadyForProxyActivation(result.headerSync)) {
+      // The native proxy is already able to serve ICANN traffic while its HNS
+      // header authority catches up. Select that authenticated live listener
+      // before the potentially long initial sync so Chromium is not stranded
+      // on the fixed blocker. Rust still rejects HNS work until current,
+      // independently corroborated header evidence is available.
+      credentials = {
+        port: result.proxy.port,
+        username: result.proxy.username,
+        password: result.proxy.password
+      };
+      blockerConfirmed = false;
+      await installPacForCurrentNativeGeneration(
+        () => installLivePac(result.pacScript, startControlEpoch),
+        () =>
+          runtimeControlIsCurrent(
+            startControlEpoch,
+            activationConnectionEpoch
+          ),
+        () => {
+          setStatus({
+            state: "degraded",
+            reason: "headerReadinessUnavailable",
+            proxyActive: true,
+            runtimeSession: result.runtimeSession,
+            runtimeGeneration: result.runtimeGeneration,
+            policyGeneration: result.policyGeneration,
+            securityMaintenanceEpoch: result.securityMaintenanceEpoch,
+            caReady: true,
+            headerSync: currentHeaderSync(result.headerSync),
+            headerSyncInProgress: true,
+            headerSyncError: null,
+            recentConnectSecurityDecisions: []
+          });
+        }
+      );
+      livePacConfirmed = true;
+    }
+
     activationStatus = await establishStartupHeaderReadiness(
       result,
       startControlEpoch,
@@ -495,48 +535,51 @@ async function startRuntime(policyOverride) {
       );
     }
 
-    // Credentials must exist before the PAC becomes visible so an immediate
-    // browser request cannot race the proxy authentication callback.
-    credentials = {
-      port: result.proxy.port,
-      username: result.proxy.username,
-      password: result.proxy.password
-    };
-    // Until this mutation is confirmed, either the blocker or B's live PAC
-    // may be selected. A failure must re-confirm the blocker before B stops.
-    blockerConfirmed = false;
-    await installPacForCurrentNativeGeneration(
-      () => installLivePac(result.pacScript, startControlEpoch),
-      () =>
-        runtimeControlIsCurrent(
-          startControlEpoch,
-          activationConnectionEpoch
-        ),
-      () => {
-        if (!headerSyncReadyForProxyActivation(activationStatus.headerSync)) {
-          throw new Error(
-            "validated header target evidence expired during PAC activation"
-          );
+    if (!livePacConfirmed) {
+      // Credentials must exist before the PAC becomes visible so an immediate
+      // browser request cannot race the proxy authentication callback.
+      credentials = {
+        port: result.proxy.port,
+        username: result.proxy.username,
+        password: result.proxy.password
+      };
+      // Until this mutation is confirmed, either the blocker or B's live PAC
+      // may be selected. A failure must re-confirm the blocker before B stops.
+      blockerConfirmed = false;
+      await installPacForCurrentNativeGeneration(
+        () => installLivePac(result.pacScript, startControlEpoch),
+        () =>
+          runtimeControlIsCurrent(
+            startControlEpoch,
+            activationConnectionEpoch
+          ),
+        () => {
+          if (!headerSyncReadyForProxyActivation(activationStatus.headerSync)) {
+            throw new Error(
+              "validated header target evidence expired during PAC activation"
+            );
+          }
         }
-        setStatus({
-          state: "active",
-          reason: null,
-          proxyActive: true,
-          runtimeSession: activationStatus.runtimeSession,
-          runtimeGeneration: activationStatus.runtimeGeneration,
-          policyGeneration: activationStatus.policyGeneration,
-          securityMaintenanceEpoch:
-            activationStatus.securityMaintenanceEpoch,
-          caReady: true,
-          headerSync: currentHeaderSync(activationStatus.headerSync),
-          headerSyncInProgress: false,
-          headerSyncError: null,
-          latestMainFrameSecurity: null,
-          latestMainFrameSecurityUnavailableReason: null,
-          recentConnectSecurityDecisions: []
-        });
-      }
-    );
+      );
+      livePacConfirmed = true;
+    }
+    setStatus({
+      state: "active",
+      reason: null,
+      proxyActive: true,
+      runtimeSession: activationStatus.runtimeSession,
+      runtimeGeneration: activationStatus.runtimeGeneration,
+      policyGeneration: activationStatus.policyGeneration,
+      securityMaintenanceEpoch:
+        activationStatus.securityMaintenanceEpoch,
+      caReady: true,
+      headerSync: currentHeaderSync(activationStatus.headerSync),
+      headerSyncInProgress: false,
+      headerSyncError: null,
+      latestMainFrameSecurity: null,
+      latestMainFrameSecurityUnavailableReason: null,
+      recentConnectSecurityDecisions: []
+    });
     requireRuntimeControl(
       startControlEpoch,
       activationConnectionEpoch
@@ -570,6 +613,40 @@ async function startRuntime(policyOverride) {
       throw supersededControlError();
     }
     let failure = error;
+    if (
+      livePacConfirmed &&
+      activationConnectionEpoch != null &&
+      runtimeControlIsCurrent(
+        startControlEpoch,
+        activationConnectionEpoch
+      ) &&
+      credentials != null
+    ) {
+      // A live authenticated proxy remains useful when initial HNS header
+      // synchronization fails or times out: ICANN requests can continue and
+      // Rust keeps HNS resolution fail-closed. Retain this generation and let
+      // the bounded retry scheduler restore header readiness.
+      setStatus({
+        state: "degraded",
+        reason: "headerReadinessUnavailable",
+        proxyActive: true,
+        headerSyncInProgress: false,
+        headerSyncError: boundedError(failure),
+        latestMainFrameSecurity: null,
+        latestMainFrameSecurityUnavailableReason: null,
+        recentConnectSecurityDecisions: []
+      });
+      await clearAlarmForControl(
+        HEADER_EVIDENCE_EXPIRY_ALARM,
+        startControlEpoch
+      );
+      await createAlarmForControl(
+        RECONNECT_ALARM,
+        { delayInMinutes: 1 },
+        startControlEpoch
+      );
+      return publicStatus;
+    }
     if (!blockerConfirmed) {
       try {
         await installBlockingPac(startControlEpoch);
