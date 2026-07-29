@@ -69,6 +69,7 @@ $allowedSystemImports = [System.Collections.Generic.HashSet[string]]::new(
   'bcrypt.dll',
   'bcryptprimitives.dll',
   'cfgmgr32.dll',
+  'combase.dll',
   'comctl32.dll',
   'comdlg32.dll',
   'crypt32.dll',
@@ -128,6 +129,7 @@ foreach ($candidate in $Path) {
     throw "$binary has no inspectable Windows imports."
   }
 
+  $nonAllowlistedImports = [System.Collections.Generic.List[string]]::new()
   foreach ($import in $imports) {
     if ($import -match '^(api-ms-win-crt-|ucrtbase|vcruntime|msvcp)') {
       throw "$binary depends on a dynamic Microsoft CRT: $import"
@@ -136,12 +138,16 @@ foreach ($candidate in $Path) {
       continue
     }
     if (-not $allowedSystemImports.Contains($import)) {
-      throw "$binary imports a non-allowlisted DLL: $import"
+      [void]$nonAllowlistedImports.Add($import)
+      continue
     }
     $systemPath = Join-Path $env:SystemRoot "System32\$import"
     if (-not (Test-Path -LiteralPath $systemPath -PathType Leaf)) {
       throw "$binary imports $import, but it is absent from System32."
     }
+  }
+  if ($nonAllowlistedImports.Count -gt 0) {
+    throw "$binary imports non-allowlisted DLLs: $($nonAllowlistedImports -join ', ')"
   }
 
   if ($RequireAuthenticode) {
