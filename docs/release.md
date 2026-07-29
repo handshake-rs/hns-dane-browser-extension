@@ -103,11 +103,11 @@ workflows can replace an existing published release's Windows or macOS x64 and
 arm64 native-host and Setup archives without changing its tag, version, source
 commit, title, or other platform assets.
 
-The published v0.5.4 macOS x64 and arm64 assets completed this
-default-branch-only flow on 2026-07-28. Its credential-bearing signing jobs
+The published v0.5.5 macOS x64 and arm64 assets completed this
+default-branch-only flow on 2026-07-29. Its credential-bearing signing jobs
 used the protected `macos-signing` environment. Their Setup apps carry stapled
 tickets; their standalone native hosts use Apple's online notarization ticket.
-Windows v0.5.4 assets remain unsigned until the Windows replacement workflow is
+Windows v0.5.5 assets remain unsigned until the Windows replacement workflow is
 configured and completed.
 
 ### Windows Authenticode

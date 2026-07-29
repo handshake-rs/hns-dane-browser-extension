@@ -1,6 +1,6 @@
 # Version Audit
 
-Audit date: 2026-07-28
+Audit date: 2026-07-29
 
 This table records configured versions for the Chromium extension, native
 host, and Setup build. It does not claim that each entry is the newest

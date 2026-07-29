@@ -56,8 +56,8 @@ change.
 - Version-matched graphical Setup packages install, repair, inspect, and
   completely remove the user-level native host and exact local CA on Linux,
   macOS, and Windows for x64 and arm64.
-- The published v0.5.4 macOS native-host and Setup packages completed
-  Developer ID signing and Apple notarization on 2026-07-28. Credentialed jobs
+- The published v0.5.5 macOS native-host and Setup packages completed
+  Developer ID signing and Apple notarization on 2026-07-29. Credentialed jobs
   used the protected `macos-signing` environment; the separate write-enabled
   `release` environment still needs protection rules. Setup tickets are
   stapled; standalone native hosts use Apple's online ticket.
@@ -77,8 +77,14 @@ change.
 
 ## Current qualification evidence and remaining release work
 
-- Exact-current-main hosted CI passed for `be27931c88929e1e0e7d1504687a5a49a5e86bc3`
-  on 2026-07-28. Repeat and retain this gate for each future release commit.
+- Exact-current-main hosted CI passed for release commit
+  `86b18497285753944ec1b9196ec05ee359c6db11` in
+  [run 30435346299](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30435346299).
+  The tag workflow published 29 verified `v0.5.5` assets in
+  [run 30435936597](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30435936597),
+  and the macOS replacement completed in
+  [run 30436887463](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30436887463).
+  Repeat and retain these gates for each future release commit.
 - native install, browsing, restart, upgrade, and complete removal on supported
   Windows and macOS versions;
 - current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;

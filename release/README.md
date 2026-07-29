@@ -43,10 +43,10 @@ replaces only its four platform archives, four checksum sidecars, and
 `SHA256SUMS`, preserving the release tag, source commit, title, version, and all
 other assets.
 
-The published v0.5.4 macOS assets completed that default-branch workflow on
-2026-07-28. Its credentialed signing jobs used the protected
+The published v0.5.5 macOS assets completed that default-branch workflow on
+2026-07-29. Its credentialed signing jobs used the protected
 `macos-signing` environment. Setup apps contain stapled tickets and standalone
-native hosts use Apple's online notarization ticket. Windows v0.5.4 artifacts
+native hosts use Apple's online notarization ticket. Windows v0.5.5 artifacts
 remain unsigned until the Windows replacement workflow is configured and
 completed.
 

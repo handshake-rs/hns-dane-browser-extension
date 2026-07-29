@@ -1,6 +1,6 @@
 # Build and Supply-Chain Audit
 
-Last audited: 2026-07-28
+Last audited: 2026-07-29
 
 ## Scope
 
@@ -91,12 +91,14 @@ CI has separate policy, Rust/native-host, and extension jobs plus a required
 aggregate result. A release must record the exact commit and exact-current-main
 CI run; historical runs do not qualify later source.
 
-Exact-current-main commit
-`be27931c88929e1e0e7d1504687a5a49a5e86bc3` passed
-[CI run 30350645836](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30350645836)
-on 2026-07-28. The default-branch macOS replacement, including its protected
-credentialed signing jobs, then passed in
-[run 30350653092](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30350653092).
+Exact-current-main release commit
+`86b18497285753944ec1b9196ec05ee359c6db11` passed
+[CI run 30435346299](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30435346299).
+The tag workflow published all 29 verified `v0.5.5` assets in
+[run 30435936597](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30435936597).
+The default-branch macOS replacement, including its protected credentialed
+signing jobs, then passed in
+[run 30436887463](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30436887463).
 Future releases must repeat rather than inherit these dated results.
 
 ## Residual risks
@@ -111,8 +113,8 @@ Future releases must repeat rather than inherit these dated results.
   user-level registration, trust, restart, upgrade, and removal tests on every
   Windows and macOS target.
 - Store signing and review require external credentials and policy decisions;
-  source CI must not fabricate their completion. The published v0.5.4 macOS
+  source CI must not fabricate their completion. The published v0.5.5 macOS
   native-host and Setup assets completed Developer ID signing and Apple
-  notarization on 2026-07-28; Windows artifacts remain unsigned.
+  notarization on 2026-07-29; Windows artifacts remain unsigned.
 - An immutable Git revision is stronger than a branch selector but still
   requires deliberate review before changing the pinned engine commit.
