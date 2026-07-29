@@ -11,6 +11,16 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+#[cfg(target_os = "windows")]
+use winit::application::ApplicationHandler;
+#[cfg(target_os = "windows")]
+use winit::dpi::LogicalSize;
+#[cfg(target_os = "windows")]
+use winit::event::WindowEvent;
+#[cfg(target_os = "windows")]
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+#[cfg(target_os = "windows")]
+use winit::window::{Window, WindowId};
 
 const PRODUCT_NAME: &str = "HNS DANE Browser Setup";
 const SOURCE_URL: &str = "https://github.com/handshake-rs/hns-dane-browser-extension";
@@ -48,7 +58,7 @@ struct Arguments {
     #[arg(long, conflicts_with_all = ["install", "uninstall"])]
     status: bool,
 
-    /// Open, render, and close one real GUI frame for release smoke testing.
+    /// Open and close a real native window after its first redraw for release smoke testing.
     #[arg(
         long,
         conflicts_with_all = ["install", "uninstall", "status"],
@@ -100,6 +110,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     let arguments = Arguments::parse();
 
     if arguments.gui_smoke_test {
+        #[cfg(target_os = "windows")]
+        run_windows_gui_smoke()?;
+        #[cfg(not(target_os = "windows"))]
         run_gui(true)?;
     } else if arguments.install || arguments.uninstall || arguments.status {
         run_automation(arguments)?;
@@ -181,6 +194,82 @@ fn run_gui(close_after_first_frame: bool) -> eframe::Result {
             )))
         }),
     )
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct WindowsSmokeApp {
+    window: Option<Window>,
+    redrawn: bool,
+    error: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+impl ApplicationHandler for WindowsSmokeApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() || self.error.is_some() {
+            return;
+        }
+
+        let attributes = Window::default_attributes()
+            .with_title(PRODUCT_NAME)
+            .with_inner_size(LogicalSize::new(480.0, 320.0))
+            .with_visible(true);
+        match event_loop.create_window(attributes) {
+            Ok(window) => {
+                window.request_redraw();
+                self.window = Some(window);
+            }
+            Err(error) => {
+                self.error = Some(format!(
+                    "unable to create the Windows smoke-test window: {error}"
+                ));
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if self.window.as_ref().map(|window| window.id()) != Some(window_id) {
+            return;
+        }
+
+        match event {
+            WindowEvent::RedrawRequested => {
+                self.redrawn = true;
+                event_loop.exit();
+            }
+            WindowEvent::CloseRequested | WindowEvent::Destroyed => {
+                self.error =
+                    Some("the Windows smoke-test window closed before its first redraw".to_owned());
+                event_loop.exit();
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_gui_smoke() -> Result<(), Box<dyn Error>> {
+    let event_loop = EventLoop::new()?;
+    let mut application = WindowsSmokeApp::default();
+    event_loop.run_app(&mut application)?;
+
+    if let Some(error) = application.error {
+        return Err(std::io::Error::other(error).into());
+    }
+    if !application.redrawn {
+        return Err(std::io::Error::other(
+            "the Windows smoke-test event loop exited before its first redraw",
+        )
+        .into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -249,6 +249,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(self.source.count("--gui-smoke-test"), 2)
         self.assertIn("WaitForExit(30000)", self.source)
         self.assertIn("smoke_pid=", self.source)
+        setup_main = (
+            ROOT / "rust" / "crates" / "hns-browser-setup" / "src" / "main.rs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("run_windows_gui_smoke", setup_main)
+        self.assertIn("WindowEvent::RedrawRequested", setup_main)
+        self.assertIn(".with_visible(true)", setup_main)
 
     def test_store_identity_and_source_metadata_are_mandatory(self) -> None:
         self.assertIn("vars.CHROMIUM_EXTENSION_ID", self.source)

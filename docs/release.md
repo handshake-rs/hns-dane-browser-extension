@@ -87,10 +87,13 @@ format, architecture, Rust target, or embedded host bytes.
   `LSMinimumSystemVersion`, and the release gate requires every Mach-O
   executable's `LC_BUILD_VERSION minos` to equal `11.0`.
 
-The Windows and macOS target jobs also launch the real Setup window under a
-30-second bound. Current Setup binaries close themselves after the first GUI
-frame. The credentialed replacement workflows retain a bounded normal-window
-fallback solely for immutable tags that predate that smoke-test mode.
+The Windows and macOS target jobs also launch a real Setup window under a
+30-second bound. Windows closes after its visible native window receives the
+first operating-system redraw event, avoiding a hosted-runner dependency on a
+hardware OpenGL context; normal Setup launches still use the complete eframe
+renderer. macOS closes after the first rendered eframe GUI frame. The
+credentialed replacement workflows retain a bounded normal-window fallback
+solely for immutable tags that predate that smoke-test mode.
 
 ## Signing and store submission
 
