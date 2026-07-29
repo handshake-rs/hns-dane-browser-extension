@@ -15,8 +15,8 @@
 ### Canonical browser contracts
 
 The Chromium adapter consumes these contracts from
-`handshake-rs/hns-dane-engine` at immutable revision
-`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`:
+the checksum-verified `handshake-rs/hns-dane-engine` crates.io `0.1.0`
+release:
 
 - runtime request authority;
 - checked browser observability;

@@ -1,5 +1,7 @@
 //! Fail-closed, per-user installation shared by the setup GUI and CLI.
 
+#[cfg(target_os = "linux")]
+use crate::CANONICAL_EXTENSION_ID;
 use crate::payload::{PRODUCT_LICENSE, THIRD_PARTY_NOTICES};
 use crate::{Browser, NATIVE_HOST_NAME, NativePayload, VERSION};
 #[cfg(target_os = "linux")]
@@ -189,6 +191,7 @@ impl Installer {
         let mut details = Vec::new();
         let ownership = collect_ownership(&layout, receipt.as_ref(), transaction.as_ref())?;
         remove_owned_registrations(&layout, &ownership, &mut details)?;
+        remove_owned_legacy_extension_loaders(&layout, &mut details)?;
         if layout.install_root.exists() && receipt.is_none() && transaction.is_none() {
             return Err(operation(format!(
                 "refusing recursive removal of {} without a valid ownership receipt or pre-trust transaction; the install root and trust state were left untouched after exact-registration cleanup",
@@ -350,6 +353,8 @@ impl Installer {
                 .map(|transaction| transaction.owned_manifest_sha256s.as_slice()),
             manifest_sha256.clone(),
         );
+        let allow_legacy_manifest_migration =
+            prior_receipt.is_none() && prior_transaction.is_none();
 
         let mut details = vec![
             format!(
@@ -373,6 +378,7 @@ impl Installer {
             &manifest_bytes,
             &owned_manifest_sha256s,
             &canonical_host,
+            allow_legacy_manifest_migration,
             &mut details,
         )?;
 
@@ -486,6 +492,7 @@ impl Installer {
 
         remove_unselected_registrations(&layout, &receipt, &mut details)?;
         remove_stale_trust_anchors(&layout, &receipt, &mut details)?;
+        remove_owned_legacy_extension_loaders(&layout, &mut details)?;
 
         let status = self.inspect()?;
         if !status.installed {
@@ -1215,6 +1222,24 @@ fn validate_any_owned_host_manifest(bytes: &[u8], expected_host: &Path) -> Resul
     Ok(())
 }
 
+fn validate_legacy_owned_host_manifest(
+    bytes: &[u8],
+    expected_host: &Path,
+) -> Result<(), SetupError> {
+    validate_any_owned_host_manifest(bytes, expected_host)?;
+    let manifest: NativeHostManifest = serde_json::from_slice(bytes)
+        .map_err(|_| operation("legacy registration is not a valid native-host manifest"))?;
+    let canonical_origin = format!("chrome-extension://{CANONICAL_EXTENSION_ID}/");
+    if manifest.description != "HNS DANE Browser Rust native host"
+        || !manifest.allowed_origins.contains(&canonical_origin)
+    {
+        return Err(operation(
+            "registration does not exactly match the legacy product identity",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_ca_info(ca: &CaInfo, layout: &InstallLayout) -> Result<(), SetupError> {
     if ca.schema_version != LOCAL_CA_SCHEMA_VERSION
         || !matches!(ca.state.as_str(), "installed" | "needsInstallation")
@@ -1254,6 +1279,184 @@ fn manifest_paths(
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn all_manifest_paths(layout: &InstallLayout) -> Result<BTreeSet<PathBuf>, SetupError> {
     manifest_paths(layout, &Browser::ALL.into_iter().collect())
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyExternalExtensionRegistration {
+    external_crx: PathBuf,
+    external_version: String,
+}
+
+#[cfg(target_os = "linux")]
+fn remove_owned_legacy_extension_loaders(
+    layout: &InstallLayout,
+    details: &mut Vec<String>,
+) -> Result<(), SetupError> {
+    let Some(config_home) = layout.config_home.as_ref() else {
+        return Ok(());
+    };
+    let extension_root = layout.install_root.join("extension");
+
+    let mut relative_directories = BTreeSet::new();
+    for browser in Browser::ALL {
+        relative_directories.extend(
+            manifest_relative_directories(UnixPlatform::Linux, browser)
+                .iter()
+                .copied(),
+        );
+    }
+    for relative in relative_directories {
+        let registration = config_home
+            .join(relative)
+            .join("External Extensions")
+            .join(format!("{CANONICAL_EXTENSION_ID}.json"));
+        let Some(bytes) = read_regular_file_if_present(&registration, MAX_JSON_BYTES)? else {
+            continue;
+        };
+        if !legacy_external_registration_is_owned(&bytes, &extension_root) {
+            details.push(format!(
+                "Left modified or foreign legacy extension registration untouched at {}.",
+                registration.display()
+            ));
+            continue;
+        }
+        validate_existing_ancestors_no_redirect(
+            &registration,
+            "legacy external-extension registration ancestor",
+        )?;
+        reject_symlink(&registration, "legacy external-extension registration")?;
+        fs::remove_file(&registration).map_err(|error| {
+            operation(format!(
+                "unable to remove owned legacy extension registration {}: {error}",
+                registration.display()
+            ))
+        })?;
+        details.push(format!(
+            "Removed owned legacy external-extension registration {}.",
+            registration.display()
+        ));
+        if let Some(parent) = registration.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
+    for (wrapper_name, browser_binary) in [
+        ("chromium", "/usr/bin/chromium"),
+        ("google-chrome", "/usr/bin/google-chrome"),
+        ("google-chrome-stable", "/usr/bin/google-chrome-stable"),
+        ("microsoft-edge", "/usr/bin/microsoft-edge"),
+        ("brave-browser", "/usr/bin/brave-browser"),
+        ("vivaldi", "/usr/bin/vivaldi"),
+        ("opera", "/usr/bin/opera"),
+    ] {
+        let wrapper = layout
+            .profile_home
+            .join(".local")
+            .join("bin")
+            .join(wrapper_name);
+        let Some(bytes) = read_regular_file_if_present(&wrapper, 16 * 1024)? else {
+            continue;
+        };
+        if !legacy_browser_wrapper_is_owned(&bytes, browser_binary, &extension_root) {
+            continue;
+        }
+        validate_existing_ancestors_no_redirect(&wrapper, "legacy browser wrapper ancestor")?;
+        reject_symlink(&wrapper, "legacy browser wrapper")?;
+        fs::remove_file(&wrapper).map_err(|error| {
+            operation(format!(
+                "unable to remove owned legacy browser wrapper {}: {error}",
+                wrapper.display()
+            ))
+        })?;
+        details.push(format!(
+            "Removed owned legacy browser launch wrapper {}.",
+            wrapper.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn remove_owned_legacy_extension_loaders(
+    _layout: &InstallLayout,
+    _details: &mut Vec<String>,
+) -> Result<(), SetupError> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn legacy_external_registration_is_owned(bytes: &[u8], extension_root: &Path) -> bool {
+    let Ok(registration) = serde_json::from_slice::<LegacyExternalExtensionRegistration>(bytes)
+    else {
+        return false;
+    };
+    registration.external_version.len() <= 32
+        && !registration.external_version.is_empty()
+        && registration
+            .external_version
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        && legacy_extension_artifact(&registration.external_crx, extension_root, ".crx")
+}
+
+#[cfg(target_os = "linux")]
+fn legacy_browser_wrapper_is_owned(
+    bytes: &[u8],
+    browser_binary: &str,
+    extension_root: &Path,
+) -> bool {
+    let Ok(source) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let lines = source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() != 5
+        || lines[0] != "#!/bin/sh"
+        || lines[1] != format!("exec {browser_binary} \\")
+        || lines[2] != "--disable-renderer-accessibility \\"
+        || lines[4] != "\"$@\""
+    {
+        return false;
+    }
+    let Some(path) = lines[3]
+        .strip_prefix("--load-extension=")
+        .and_then(|line| line.strip_suffix(" \\"))
+    else {
+        return false;
+    };
+    legacy_extension_artifact(Path::new(path), extension_root, "")
+}
+
+#[cfg(target_os = "linux")]
+fn legacy_extension_artifact(path: &Path, extension_root: &Path, required_suffix: &str) -> bool {
+    if !path.is_absolute()
+        || path.parent() != Some(extension_root)
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+    {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    name.starts_with("source-")
+        && name.len() > "source-".len() + required_suffix.len()
+        && name.ends_with(required_suffix)
+        && name
+            .strip_prefix("source-")
+            .and_then(|value| value.strip_suffix(required_suffix))
+            .is_some_and(|version| {
+                version.len() <= 32
+                    && version
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+            })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1360,22 +1563,37 @@ fn write_selected_registrations(
     manifest_bytes: &[u8],
     owned_manifest_hashes: &[String],
     canonical_host: &Path,
+    allow_legacy_manifest_migration: bool,
     details: &mut Vec<String>,
 ) -> Result<(), SetupError> {
     #[cfg(target_os = "windows")]
-    let _ = (manifest_bytes, owned_manifest_hashes, canonical_host);
+    let _ = (
+        manifest_bytes,
+        owned_manifest_hashes,
+        canonical_host,
+        allow_legacy_manifest_migration,
+    );
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         for path in manifest_paths(layout, browsers)? {
             validate_existing_ancestors_no_redirect(&path, "native-messaging manifest ancestor")?;
-            if let Some(existing) = read_regular_file_if_present(&path, MAX_MANIFEST_BYTES)?
-                && (!owned_manifest_hashes.contains(&sha256_hex(&existing))
-                    || validate_any_owned_host_manifest(&existing, canonical_host).is_err())
-            {
-                return Err(operation(format!(
-                    "refusing to replace native-messaging manifest not exactly owned by this installation: {}",
-                    path.display()
-                )));
+            if let Some(existing) = read_regular_file_if_present(&path, MAX_MANIFEST_BYTES)? {
+                let exactly_owned = owned_manifest_hashes.contains(&sha256_hex(&existing))
+                    && validate_any_owned_host_manifest(&existing, canonical_host).is_ok();
+                let migratable_legacy = allow_legacy_manifest_migration
+                    && validate_legacy_owned_host_manifest(&existing, canonical_host).is_ok();
+                if !exactly_owned && !migratable_legacy {
+                    return Err(operation(format!(
+                        "refusing to replace native-messaging manifest not exactly owned by this installation: {}",
+                        path.display()
+                    )));
+                }
+                if migratable_legacy && !exactly_owned {
+                    details.push(format!(
+                        "Migrated exact legacy native-messaging registration at {}.",
+                        path.display()
+                    ));
+                }
             }
             let parent = path
                 .parent()
@@ -3518,6 +3736,109 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn owned_legacy_extension_loaders_are_removed_exactly() {
+        let temporary = TestDirectory::new("legacy-loaders");
+        let layout = linux_test_layout(temporary.path());
+        let extension_root = layout.install_root.join("extension");
+        let source = extension_root.join("source-0.5.4");
+        let crx = extension_root.join("source-0.5.4.crx");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(&crx, b"legacy crx").unwrap();
+
+        let wrapper = layout
+            .profile_home
+            .join(".local")
+            .join("bin")
+            .join("chromium");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\n\nexec /usr/bin/chromium \\\n  --disable-renderer-accessibility \\\n  --load-extension={} \\\n  \"$@\"\n",
+                source.display()
+            ),
+        )
+        .unwrap();
+
+        let registration = layout
+            .config_home
+            .as_ref()
+            .unwrap()
+            .join("chromium")
+            .join("External Extensions")
+            .join(format!("{CANONICAL_EXTENSION_ID}.json"));
+        fs::create_dir_all(registration.parent().unwrap()).unwrap();
+        fs::write(
+            &registration,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "external_crx": crx,
+                "external_version": "0.5.2"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut details = Vec::new();
+        remove_owned_legacy_extension_loaders(&layout, &mut details).unwrap();
+
+        assert!(!wrapper.exists());
+        assert!(!registration.exists());
+        assert_eq!(details.len(), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn modified_legacy_extension_loaders_are_preserved() {
+        let temporary = TestDirectory::new("foreign-legacy-loaders");
+        let layout = linux_test_layout(temporary.path());
+        let extension_root = layout.install_root.join("extension");
+        let source = extension_root.join("source-0.5.4");
+        fs::create_dir_all(&source).unwrap();
+
+        let wrapper = layout
+            .profile_home
+            .join(".local")
+            .join("bin")
+            .join("chromium");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\n\nexec /usr/bin/chromium \\\n  --user-data-dir=/tmp/custom \\\n  --load-extension={} \\\n  \"$@\"\n",
+                source.display()
+            ),
+        )
+        .unwrap();
+
+        let registration = layout
+            .config_home
+            .as_ref()
+            .unwrap()
+            .join("chromium")
+            .join("External Extensions")
+            .join(format!("{CANONICAL_EXTENSION_ID}.json"));
+        fs::create_dir_all(registration.parent().unwrap()).unwrap();
+        fs::write(
+            &registration,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "external_crx": temporary.path().join("foreign.crx"),
+                "external_version": "0.5.2"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut details = Vec::new();
+        remove_owned_legacy_extension_loaders(&layout, &mut details).unwrap();
+
+        assert!(wrapper.is_file());
+        assert!(registration.is_file());
+        assert_eq!(details.len(), 1);
+        assert!(details[0].contains("Left modified or foreign"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn unsafe_removal_roots_are_rejected() {
         let protected = vec![PathBuf::from("/home/alice")];
         for unsafe_root in [
@@ -3563,6 +3884,30 @@ mod tests {
         let bytes = serde_json::to_vec_pretty(&manifest).unwrap();
         assert!(validate_host_manifest(&bytes, &host, &[EXTENSION_ID.to_owned()]).is_ok());
         assert!(validate_any_owned_host_manifest(&bytes, &host).is_ok());
+
+        let mut legacy = manifest.clone();
+        legacy["allowed_origins"] = serde_json::json!([
+            "chrome-extension://fakeegkjadihalgbnenafflijnpiikbc/",
+            format!("chrome-extension://{CANONICAL_EXTENSION_ID}/")
+        ]);
+        assert!(
+            validate_legacy_owned_host_manifest(
+                &serde_json::to_vec_pretty(&legacy).unwrap(),
+                &host
+            )
+            .is_ok()
+        );
+
+        let mut noncanonical_legacy = legacy.clone();
+        noncanonical_legacy["allowed_origins"] =
+            serde_json::json!(["chrome-extension://fakeegkjadihalgbnenafflijnpiikbc/"]);
+        assert!(
+            validate_legacy_owned_host_manifest(
+                &serde_json::to_vec_pretty(&noncanonical_legacy).unwrap(),
+                &host
+            )
+            .is_err()
+        );
 
         let mut foreign = manifest;
         foreign["path"] = serde_json::Value::String("/tmp/foreign-host".to_owned());

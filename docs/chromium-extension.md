@@ -24,9 +24,8 @@ malformed data, and resolver failure fail closed. TCP applications use
 `_<port>._tcp.<host>` and HTTPS/SVCB-selected HTTP/3 uses
 `_<port>._udp.<host>`. The UI describes this as `DANE via ICANN DoH`.
 
-The five canonical browser contracts are pinned to
-`handshake-rs/hns-dane-engine` revision
-`7f7bb8fa100c2393f2cd5a64c64bf5e20a0f3ab5`.
+The five canonical browser contracts are pinned to the checksum-verified
+`handshake-rs/hns-dane-engine` crates.io `0.1.0` release.
 
 ## Header currentness and UI
 
@@ -49,6 +48,12 @@ corroborated target. The 144-block resource-proof cache window is retained for
 reorganization-safe cache invalidation only; it is not a freshness allowance.
 If fresh corroboration is unavailable, currentness is `Unknown` and HNS
 resolution fails closed.
+
+On first start, the native host creates its authenticated loopback listener
+before beginning a potentially long header catch-up. The extension replaces
+its fixed transition blocker with that live PAC immediately. ICANN resolution
+therefore continues through Rust during synchronization, while the native
+runtime rejects HNS work until current corroborated header evidence exists.
 
 `Sync headers now` performs one explicit synchronization without rotating the
 proxy generation or changing policy. A failed sync is reported in the header
@@ -312,11 +317,14 @@ does not tear down the native connection or clear proxy control.
 - Proxy authentication is valid only for the active `127.0.0.1` generation.
 - A healthy status check preserves the current generation; reconnect creates
   fresh credentials and reinstalls the PAC.
-- CA-not-installed, host disconnect, malformed native response, rejected
-  policy, or proxy restart enters a confirmed fixed blocking PAC before the
-  captured native process is disconnected or replaced. Runtime lifecycle and
-  retry paths never clear proxy control to system or direct routing. Failure
-  to confirm the required PAC write remains fail closed.
+- CA-not-installed, host disconnect before listener activation, malformed
+  startup response, rejected policy, or proxy restart enters a confirmed fixed
+  blocking PAC before the captured native process is disconnected or replaced.
+  Once the new authenticated listener is confirmed, initial header catch-up
+  retains its live PAC: ICANN can proceed while HNS remains fail-closed in
+  Rust. Runtime lifecycle and retry paths never clear proxy control to system
+  or direct routing. Failure to confirm the required PAC write remains fail
+  closed.
 - Namespace fingerprints partition pools, TLS verification and resumption, and
   Alt-Svc state.
 - Selected HNS HTTPS never falls back to WebPKI. It never contacts a recursive
