@@ -578,6 +578,10 @@ jobs:
           tar -xzf "$archive" -C "$temporary"
           root="$temporary/hns-dane-browser-setup-v${VERSION}-linux-${ARCHITECTURE}"
           app="$root/HNS-DANE-Browser-Setup.AppDir"
+          if [[ -e "$app/usr/lib/libwayland-client.so.0" ]]; then
+            echo "::error::The Linux Setup package must use the host Wayland client for Mesa compatibility."
+            exit 1
+          fi
           glibc_ceiling="2.39"
           elf_count=0
           while IFS= read -r -d '' candidate; do

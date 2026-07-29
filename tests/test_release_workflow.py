@@ -198,6 +198,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("libwayland-client0", self.source)
         self.assertIn("libx11-6", self.source)
         self.assertIn("HNS-DANE-Browser-Setup.AppDir", self.source)
+        self.assertIn(
+            '[[ -e "$app/usr/lib/libwayland-client.so.0" ]]',
+            self.source,
+        )
+        self.assertIn("must use the host Wayland client", self.source)
         self.assertIn('"$app/usr/libexec/certutil"', self.source)
         self.assertIn('"${clean_helper[@]}" \\\n            -N', self.source)
         self.assertIn('"$app/AppRun" --status', self.source)

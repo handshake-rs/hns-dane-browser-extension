@@ -75,11 +75,13 @@ macOS binaries rely only on system frameworks. On Linux, the embedded native
 host remains statically linked with musl while the eframe setup uses the native
 GNU target in a runnable AppDir. That AppDir carries NSS `certutil`, all NSS/NSPR
 modules and integrity files shipped by its package, an isolated helper
-loader/shared-library closure, common X11/Wayland GUI client libraries, package
-versions, hashes, and licenses. It never preloads bundled glibc into the setup
-process, so the v0.5.4 Linux Setup requires the build baseline of glibc 2.39 or
-newer (Ubuntu 24.04 / Debian 13 generation). The release gate rejects any
-packaged ELF object requiring a later glibc version. Its clean-environment
-release smoke test creates a temporary NSS
+loader/shared-library closure, and common GUI client libraries, package
+versions, hashes, and licenses. It deliberately uses the host
+`libwayland-client.so.0`, because host Mesa graphics backends may require newer
+Wayland symbols than a bundled build-baseline copy provides. It never preloads
+bundled glibc into the setup process, so the v0.5.4 Linux Setup requires the
+build baseline of glibc 2.39 or newer (Ubuntu 24.04 / Debian 13 generation).
+The release gate rejects any packaged ELF object requiring a later glibc
+version. Its clean-environment release smoke test creates a temporary NSS
 database and exercises certificate add/list/delete, so users do not need to
 install `libnss3-tools`.

@@ -55,7 +55,6 @@ LINUX_GUI_RUNTIME_SONAMES = (
     "libEGL.so.1",
     "libGL.so.1",
     "libGLX.so.0",
-    "libwayland-client.so.0",
     "libwayland-cursor.so.0",
     "libwayland-egl.so.1",
     "libX11.so.6",
@@ -91,6 +90,9 @@ LINUX_SETUP_SYSTEM_SONAMES = {
     "librt.so.1",
     "libthread_db.so.1",
     "libutil.so.1",
+    # Mesa loads host graphics backends at runtime. Keep its Wayland client on
+    # the host too, so a newer host Mesa never binds to an older bundled copy.
+    "libwayland-client.so.0",
     *LINUX_RUNTIME_LOADERS.values(),
 }
 ZIP_EPOCH = 315532800  # 1980-01-01, the earliest ZIP timestamp.
@@ -881,7 +883,9 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
     def collect_closure(
         initial_files: list[Path],
         initial_names: set[str],
+        excluded_names: set[str] | None = None,
     ) -> set[str]:
+        excluded = excluded_names or set()
         names = set(initial_names)
         scanned: set[Path] = set()
         scan_queue = list(initial_files)
@@ -892,6 +896,8 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
                 continue
             scanned.add(resolved_source)
             for soname, dependency in linux_dependencies(resolved_source):
+                if soname in excluded:
+                    continue
                 add_library(soname, dependency)
                 names.add(soname)
                 scan_queue.append(dependency)
@@ -904,7 +910,8 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
     setup_libraries = collect_closure(
         [setup_executable, *gui_seeds.values()],
         set(gui_seeds),
-    ).difference(LINUX_SETUP_SYSTEM_SONAMES)
+        LINUX_SETUP_SYSTEM_SONAMES,
+    )
 
     loader_name = LINUX_RUNTIME_LOADERS[architecture]
     missing = [

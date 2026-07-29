@@ -64,13 +64,15 @@ format, architecture, Rust target, or embedded host bytes.
   remains statically linked with musl, while the eframe setup uses the native
   GNU target. The AppDir includes a package-local `certutil`, NSS/NSPR modules
   and integrity files, an isolated helper loader/shared-library closure,
-  X11/Wayland GUI client libraries, package versions, hashes, and dependency
-  licenses. It does not preload bundled glibc into setup. The workflow tests
-  every packaged ELF object against the v0.5.4 glibc 2.39 ABI ceiling and tests
-  the layout in a clean environment by creating an NSS database and adding,
-  listing, and deleting a temporary certificate. A system `libnss3-tools`
-  installation is not required, but Linux Setup requires glibc 2.39 or newer
-  (Ubuntu 24.04 / Debian 13 generation).
+  common GUI client libraries, package versions, hashes, and dependency
+  licenses. The AppDir does not bundle `libwayland-client.so.0`; it uses the
+  host copy so host Mesa graphics backends cannot resolve against an older,
+  incompatible Wayland client. It does not preload bundled glibc into setup.
+  The workflow tests every packaged ELF object against the v0.5.4 glibc 2.39
+  ABI ceiling and tests the layout in a clean environment by creating an NSS
+  database and adding, listing, and deleting a temporary certificate. A system
+  `libnss3-tools` installation is not required, but Linux Setup requires glibc
+  2.39 or newer (Ubuntu 24.04 / Debian 13 generation).
 - Windows contains one self-contained GUI `.exe`. The build requests static
   Microsoft CRT linkage and rejects dynamic CRT imports; only Windows
   components may remain.

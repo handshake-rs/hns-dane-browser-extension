@@ -63,7 +63,6 @@ LINUX_RUNTIME_LIBRARIES = (
     "libnssdbm3.so",
     "libsoftokn3.chk",
     "libsoftokn3.so",
-    "libwayland-client.so.0",
     "libwayland-cursor.so.0",
     "libwayland-egl.so.1",
     "libX11.so.6",
@@ -537,7 +536,10 @@ class ReleasePackagingTests(unittest.TestCase):
                     files,
                 )
                 self.assertIn(f"{app}/usr/lib/libX11.so.6", files)
-                self.assertIn(f"{app}/usr/lib/libwayland-client.so.0", files)
+                self.assertNotIn(
+                    f"{app}/usr/lib/libwayland-client.so.0",
+                    files,
+                )
                 self.assertIn(
                     f"{app}/usr/libexec/certutil-runtime/libsoftokn3.chk",
                     files,
