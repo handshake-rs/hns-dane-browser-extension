@@ -67,6 +67,7 @@ $allowedSystemImports = [System.Collections.Generic.HashSet[string]]::new(
 @(
   'advapi32.dll',
   'bcrypt.dll',
+  'bcryptprimitives.dll',
   'cfgmgr32.dll',
   'comctl32.dll',
   'comdlg32.dll',
