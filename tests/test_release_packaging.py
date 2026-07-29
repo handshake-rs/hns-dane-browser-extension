@@ -48,14 +48,10 @@ def fake_native_binary(platform: str, architecture: str) -> bytes:
 LINUX_RUNTIME_LIBRARIES = (
     "ld-linux-x86-64.so.2",
     "libc.so.6",
-    "libdecor-0.so.0",
-    "libEGL.so.1",
     "libfreebl3.chk",
     "libfreebl3.so",
     "libfreeblpriv3.chk",
     "libfreeblpriv3.so",
-    "libGL.so.1",
-    "libGLX.so.0",
     "libnspr4.so",
     "libnss3.so",
     "libnssckbi.so",
@@ -63,6 +59,14 @@ LINUX_RUNTIME_LIBRARIES = (
     "libnssdbm3.so",
     "libsoftokn3.chk",
     "libsoftokn3.so",
+)
+LINUX_SETUP_SYSTEM_LIBRARIES = (
+    "libdecor-0.so.0",
+    "libEGL.so.1",
+    "libGL.so.1",
+    "libGLX.so.0",
+    "libgcc_s.so.1",
+    "libwayland-client.so.0",
     "libwayland-cursor.so.0",
     "libwayland-egl.so.1",
     "libX11.so.6",
@@ -106,7 +110,7 @@ def write_fake_linux_runtime(directory: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
     metadata = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "architecture": "x64",
         "distribution": {"id": "fixture", "version": "1"},
         "files": {
@@ -127,21 +131,8 @@ def write_fake_linux_runtime(directory: Path) -> None:
                 for marker in ("freebl", "nspr", "nss", "softokn")
             )
         ),
-        "setupLibraries": sorted(
-            name
-            for name in LINUX_RUNTIME_LIBRARIES
-            if name.startswith(
-                (
-                    "libdecor",
-                    "libEGL",
-                    "libGL",
-                    "libwayland",
-                    "libX",
-                    "libxcb",
-                    "libxkbcommon",
-                )
-            )
-        ),
+        "setupLibraries": [],
+        "setupSystemLibraries": sorted(LINUX_SETUP_SYSTEM_LIBRARIES),
     }
     (directory / "RUNTIME-METADATA.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
@@ -399,6 +390,38 @@ class ReleasePackagingTests(unittest.TestCase):
                 )
                 self.assertIn("Windows bundle is unsigned", readme)
 
+            signed_output = base / "signed-output"
+            self.run_packager(
+                "native",
+                *self.common_arguments(signed_output),
+                "--platform",
+                "windows",
+                "--architecture",
+                "arm64",
+                "--rust-target",
+                "aarch64-pc-windows-msvc",
+                "--native-host",
+                str(binary),
+                "--windows-authenticode-signed",
+            )
+            with zipfile.ZipFile(
+                signed_output / f"{stem}.zip",
+            ) as archive:
+                metadata = json.loads(
+                    archive.read(f"{stem}/RELEASE-METADATA.json")
+                )
+                readme = archive.read(f"{stem}/README.md").decode()
+                self.assertEqual(
+                    metadata["nativeHost"]["codeSigningStatus"],
+                    "authenticodeSigned",
+                )
+                self.assertEqual(
+                    metadata["nativeHost"]["timestampStatus"],
+                    "rfc3161Sha256",
+                )
+                self.assertIn("RFC 3161 SHA-256 timestamps", readme)
+                self.assertNotIn("Windows bundle is unsigned", readme)
+
     def test_macos_bundle_discloses_signing_and_notarization_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -476,7 +499,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 )
                 self.assertNotIn("unsigned and not notarized", readme)
 
-    def test_linux_setup_appdir_is_deterministic_and_bundles_runtime(self) -> None:
+    def test_linux_setup_appdir_is_deterministic_and_isolates_certutil(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             native_bytes = fake_native_binary("linux", "x64")
@@ -535,10 +558,8 @@ class ReleasePackagingTests(unittest.TestCase):
                     f"{app}/usr/libexec/certutil-runtime/libnspr4.so",
                     files,
                 )
-                self.assertIn(f"{app}/usr/lib/libX11.so.6", files)
-                self.assertNotIn(
-                    f"{app}/usr/lib/libwayland-client.so.0",
-                    files,
+                self.assertFalse(
+                    any(name.startswith(f"{app}/usr/lib/") for name in files)
                 )
                 self.assertIn(
                     f"{app}/usr/libexec/certutil-runtime/libsoftokn3.chk",
@@ -563,14 +584,23 @@ class ReleasePackagingTests(unittest.TestCase):
                 )
                 app_run = archive.extractfile(files[launcher]).read().decode()
                 self.assertIn("HNS_SETUP_CERTUTIL", app_run)
-                self.assertIn("LD_LIBRARY_PATH", app_run)
+                self.assertNotIn("LD_LIBRARY_PATH", app_run)
+                self.assertNotIn('"$app_dir/usr/lib"', app_run)
                 self.assertNotIn("HNS_SETUP_CERTUTIL_LIB_DIR", app_run)
                 metadata = json.loads(
                     archive.extractfile(
                         f"{stem}/RELEASE-METADATA.json"
                     ).read()
                 )
-                self.assertTrue(metadata["setup"]["selfContained"])
+                self.assertFalse(metadata["setup"]["selfContained"])
+                self.assertEqual(
+                    metadata["setup"]["systemLibraries"],
+                    sorted(LINUX_SETUP_SYSTEM_LIBRARIES),
+                )
+                self.assertEqual(
+                    metadata["setup"]["linuxRuntime"]["schemaVersion"],
+                    2,
+                )
                 self.assertEqual(
                     metadata["setup"]["embeddedNativeHost"]["sha256"],
                     hashlib.sha256(native_bytes).hexdigest(),
@@ -590,6 +620,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 )
                 readme = archive.extractfile(f"{stem}/README.md").read().decode()
                 self.assertIn("No system certutil package is required", readme)
+                self.assertIn("host's coherent Wayland/X11/OpenGL stack", readme)
                 self.assertIn("Bundled Linux runtime licenses", readme)
 
     def test_windows_setup_is_one_self_contained_executable(self) -> None:
@@ -645,6 +676,42 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("checksum verification is required", readme)
                 self.assertNotIn("Bundled Linux runtime licenses", readme)
 
+            signed_output = base / "signed-output"
+            self.run_packager(
+                "setup",
+                *self.common_arguments(signed_output),
+                "--platform",
+                "windows",
+                "--architecture",
+                "arm64",
+                "--native-rust-target",
+                "aarch64-pc-windows-msvc",
+                "--setup-rust-target",
+                "aarch64-pc-windows-msvc",
+                "--setup-executable",
+                str(setup),
+                "--embedded-native-host",
+                str(native_host),
+                "--windows-authenticode-signed",
+            )
+            with zipfile.ZipFile(
+                signed_output / f"{stem}.zip",
+            ) as archive:
+                metadata = json.loads(
+                    archive.read(f"{stem}/RELEASE-METADATA.json")
+                )
+                readme = archive.read(f"{stem}/README.md").decode()
+                self.assertEqual(
+                    metadata["setup"]["codeSigningStatus"],
+                    "authenticodeSigned",
+                )
+                self.assertEqual(
+                    metadata["setup"]["timestampStatus"],
+                    "rfc3161Sha256",
+                )
+                self.assertIn("RFC 3161 SHA-256 timestamp", readme)
+                self.assertNotIn("SmartScreen may warn", readme)
+
     def test_macos_setup_is_an_unsigned_system_framework_app(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -689,6 +756,8 @@ class ReleasePackagingTests(unittest.TestCase):
                     "com.denuoweb.hns-dane-browser.setup",
                     plist,
                 )
+                self.assertIn("LSMinimumSystemVersion", plist)
+                self.assertIn("<string>11.0</string>", plist)
                 metadata = json.loads(
                     archive.extractfile(
                         f"{stem}/RELEASE-METADATA.json"
@@ -701,6 +770,10 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertEqual(
                     metadata["setup"]["notarizationStatus"],
                     "notNotarized",
+                )
+                self.assertEqual(
+                    metadata["setup"]["minimumSystemVersion"],
+                    "11.0",
                 )
                 readme = archive.extractfile(f"{stem}/README.md").read().decode()
                 self.assertIn("Control-click the app and choose Open", readme)

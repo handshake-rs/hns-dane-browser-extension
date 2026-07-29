@@ -42,5 +42,6 @@ TOOL_MANIFEST="$ROOT_DIR/tools/hns-header-snapshot-exporter/Cargo.toml"
   python3 -m unittest -v \
     tests/test_release_packaging.py \
     tests/test_release_workflow.py \
-    tests/test_resign_macos_workflow.py
+    tests/test_resign_macos_workflow.py \
+    tests/test_resign_windows_workflow.py
 )

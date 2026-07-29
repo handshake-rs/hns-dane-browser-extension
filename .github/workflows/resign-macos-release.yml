@@ -166,7 +166,8 @@ jobs:
           python3 -m unittest -v \
             tests/test_release_packaging.py \
             tests/test_release_workflow.py \
-            tests/test_resign_macos_workflow.py
+            tests/test_resign_macos_workflow.py \
+            tests/test_resign_windows_workflow.py
 
   signed_macos:
     name: Sign and notarize macOS ${{ matrix.architecture }}
@@ -179,10 +180,12 @@ jobs:
             runner: macos-15-intel
             native-rust-target: x86_64-apple-darwin
             setup-rust-target: x86_64-apple-darwin
+            macos-deployment-target: "11.0"
           - architecture: arm64
             runner: macos-15
             native-rust-target: aarch64-apple-darwin
             setup-rust-target: aarch64-apple-darwin
+            macos-deployment-target: "11.0"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     environment: macos-signing
@@ -216,6 +219,7 @@ jobs:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           ARCHITECTURE: ${{ matrix.architecture }}
           EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos-deployment-target }}
           NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
           OUTPUT_DIR: ${{ github.workspace }}/dist/signed
           RELEASE_TAG: ${{ inputs.release_tag }}

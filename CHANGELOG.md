@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Added an OIDC-backed Azure Artifact Signing workflow that Authenticode-signs
+  and RFC 3161 SHA-256 timestamps Windows x64 and arm64 native hosts before
+  embedding them, signs the Setup executables, verifies signer and timestamp
+  policy, and transactionally replaces only the nine affected release assets.
+- Enumerate every Windows PE import in release builds, reject dynamic Microsoft
+  CRT linkage, and require every concrete DLL or driver to be an explicitly
+  allowlisted Windows `System32` component.
+- Pin both macOS release architectures to
+  `MACOSX_DEPLOYMENT_TARGET=11.0`, record the floor in each Setup app, and
+  require every release Mach-O binary's `LC_BUILD_VERSION` to match it.
+- Added bounded real-window startup smoke tests for Windows and macOS Setup
+  builds, including signed-asset compatibility for immutable older tags.
 - Added a manual, default-branch macOS release-signing workflow that rebuilds
   an existing tag without changing its version, signs and notarizes x64 and arm64
   native hosts and Setup apps, staples Setup tickets, verifies the final
@@ -25,6 +37,11 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+- Authenticate Windows signing through a protected, default-branch-scoped
+  `windows-signing` environment and GitHub OIDC, with no exportable signing key
+  or Azure client secret in GitHub. Pin the expected certificate subject and
+  verify the resulting signature and RFC 3161 timestamp with Windows trust
+  policy and SignTool.
 - Pin the allowed Developer ID certificate name, SHA-256 fingerprint, and Team
   ID before signing; import it only into an ephemeral CI keychain.
 - Keep the certificate bundle, import password, and App Store Connect Team key

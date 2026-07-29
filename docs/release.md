@@ -64,37 +64,99 @@ format, architecture, Rust target, or embedded host bytes.
   remains statically linked with musl, while the eframe setup uses the native
   GNU target. The AppDir includes a package-local `certutil`, NSS/NSPR modules
   and integrity files, an isolated helper loader/shared-library closure,
-  common GUI client libraries, package versions, hashes, and dependency
-  licenses. The AppDir does not bundle `libwayland-client.so.0`; it uses the
-  host copy so host Mesa graphics backends cannot resolve against an older,
-  incompatible Wayland client. It does not preload bundled glibc into setup.
-  The workflow tests every packaged ELF object against the v0.5.4 glibc 2.39
-  ABI ceiling and tests the layout in a clean environment by creating an NSS
-  database and adding, listing, and deleting a temporary certificate. A system
-  `libnss3-tools` installation is not required, but Linux Setup requires glibc
-  2.39 or newer (Ubuntu 24.04 / Debian 13 generation).
+  package versions, hashes, and dependency licenses. The setup process uses the
+  host's complete Wayland/X11/OpenGL stack; the AppDir contains no setup shared
+  libraries and its launcher does not set `LD_LIBRARY_PATH`. This prevents host
+  Mesa, NVIDIA, GLVND, or libdecor modules from binding to a mixed-version GUI
+  dependency. The workflow rejects either packaging regression, tests every
+  packaged ELF object against the v0.5.4 glibc 2.39 ABI ceiling, and tests the
+  layout in a clean environment by creating an NSS database and adding, listing,
+  and deleting a temporary certificate. A system `libnss3-tools` installation
+  is not required, but Linux Setup requires glibc 2.39 or newer and common
+  desktop GUI libraries (Ubuntu 24.04 / Debian 13 generation).
 - Windows contains one self-contained GUI `.exe`. The build requests static
-  Microsoft CRT linkage and rejects dynamic CRT imports; only Windows
-  components may remain.
+  Microsoft CRT linkage. The release gate enumerates every direct PE import,
+  rejects dynamic CRT imports, permits Windows API-set contracts, and requires
+  every concrete DLL or driver name to be explicitly allowlisted and present
+  in `System32`.
 - macOS contains a launchable `HNS DANE Browser Setup.app` with `Info.plist`,
   `Contents/MacOS/hns-dane-browser-setup`, license, and notices. Its linked
   dependencies, and those of the embedded native host, must be Apple system
-  frameworks or `/usr/lib` libraries.
+  frameworks or `/usr/lib` libraries. Both architectures are built with
+  `MACOSX_DEPLOYMENT_TARGET=11.0`; packaging records the same
+  `LSMinimumSystemVersion`, and the release gate requires every Mach-O
+  executable's `LC_BUILD_VERSION minos` to equal `11.0`.
+
+The Windows and macOS target jobs also launch the real Setup window under a
+30-second bound. Current Setup binaries close themselves after the first GUI
+frame. The credentialed replacement workflows retain a bounded normal-window
+fallback solely for immutable tags that predate that smoke-test mode.
 
 ## Signing and store submission
 
-The automated Windows executables are currently unsigned. The tag workflow also
-creates unsigned macOS files first so ordinary builds never receive Apple
-credentials. Run the manual `Replace macOS release assets with signed builds`
-workflow from the default branch to replace an existing published release's
-macOS x64 and arm64 native-host and Setup archives without changing its tag,
-version, source commit, title, or non-macOS assets.
+The tag workflow creates unsigned Windows and macOS files first so ordinary
+builds never receive signing authority. Two manual, default-branch-only
+workflows can replace an existing published release's Windows or macOS x64 and
+arm64 native-host and Setup archives without changing its tag, version, source
+commit, title, or other platform assets.
 
 The published v0.5.4 macOS x64 and arm64 assets completed this
 default-branch-only flow on 2026-07-28. Its credential-bearing signing jobs
 used the protected `macos-signing` environment. Their Setup apps carry stapled
 tickets; their standalone native hosts use Apple's online notarization ticket.
-Windows v0.5.4 assets remain unsigned.
+Windows v0.5.4 assets remain unsigned until the Windows replacement workflow is
+configured and completed.
+
+### Windows Authenticode
+
+The `Replace Windows release assets with Authenticode-signed builds` workflow
+uses Azure Artifact Signing on an x64 Windows 2025 runner. It cross-builds the
+ARM64 target because the signing action does not support Windows ARM runners.
+The workflow signs and RFC 3161 SHA-256 timestamps each native host before
+embedding it, then signs the Setup executable. It verifies the exact approved
+certificate subject, timestamp certificate, Windows trust policy, SignTool
+policy, and complete DLL allowlist before packaging. No exportable certificate
+or private key enters GitHub.
+
+Create a protected `windows-signing` GitHub environment restricted to `main`.
+Configure a Microsoft Entra application with a GitHub Actions federated
+credential for that environment, and assign its service principal the
+`Artifact Signing Certificate Profile Signer` role at the narrow certificate
+profile scope. Configure these non-secret environment variables:
+
+- `AZURE_ARTIFACT_SIGNING_CLIENT_ID`
+- `AZURE_ARTIFACT_SIGNING_TENANT_ID`
+- `AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID`
+- `AZURE_ARTIFACT_SIGNING_ENDPOINT`
+- `AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME`
+- `AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE`
+- `WINDOWS_AUTHENTICODE_PUBLISHER`
+
+`WINDOWS_AUTHENTICODE_PUBLISHER` must be the complete certificate subject
+reported by `Get-AuthenticodeSignature`, including its exact ordering and
+punctuation. The workflow authenticates through GitHub OIDC and Azure CLI only;
+it does not accept an Azure client secret.
+
+Run and follow the manual workflow with:
+
+```sh
+gh workflow run resign-windows-release.yml \
+  --repo handshake-rs/hns-dane-browser-extension \
+  --ref main \
+  -f release_tag=v0.5.4 \
+  -f confirm_replacement=true
+gh run watch \
+  --repo handshake-rs/hns-dane-browser-extension \
+  --exit-status
+```
+
+The Windows publisher downloads and verifies all 29 current release assets
+before any write, retains a workflow-artifact backup, uploads nine replacements
+under temporary names, verifies their GitHub SHA-256 digests, then swaps only
+the four Windows archives, their sidecars, and `SHA256SUMS`. It verifies all 29
+final names, sizes, and digests and updates the release signing disclosure.
+
+### macOS Developer ID
 
 The workflow normalizes the stored modern OpenSSL 3 PKCS#12 certificate into
 an ephemeral legacy-compatible import bundle protected by a one-time password.
@@ -124,12 +186,12 @@ Configure these non-secret environment variables:
 - `APPLE_NOTARY_API_KEY_ID`
 - `APPLE_NOTARY_API_ISSUER_ID`
 
-The final `replace` job uses a separate `release` environment and
-`contents: write`. That environment currently has no approval rules or branch
-policy, so protect it and restrict it to `main` before treating asset
-publication as environment-protected. The workflow itself already rejects a
-non-default-branch dispatch and requires explicit confirmation, exact
-tag/source/version identity, and post-replacement digest verification.
+The final `replace` jobs use a separate `release` environment and
+`contents: write`. Protect that environment, restrict it to `main`, and require
+maintainer approval before treating asset publication as
+environment-protected. Both workflows reject a non-default-branch dispatch and
+require explicit confirmation, exact tag/source/version identity, and
+post-replacement digest verification.
 
 The issuer ID must be copied from App Store Connect under **Users and Access >
 Integrations > App Store Connect API > Team Keys** for the Team key matching
@@ -172,11 +234,9 @@ gh run watch \
   --exit-status
 ```
 
-The publisher downloads and verifies the current 29 release assets before any
-write, retains a workflow-artifact backup, uploads all nine replacements under
-temporary names, verifies their GitHub SHA-256 digests, then swaps only the four
-macOS archives, their sidecars, and `SHA256SUMS`. It finally verifies all 29
-published names, sizes, and digests.
+The macOS publisher follows the same backup, temporary-upload, digest-check,
+and exact-swap process for only the four macOS archives, their sidecars, and
+`SHA256SUMS`.
 
 Repository automation does not submit store dashboards. Publisher accounts,
 domain verification, final catalog IDs, privacy declarations, review, and

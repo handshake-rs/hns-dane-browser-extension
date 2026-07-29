@@ -122,6 +122,21 @@ class ResignMacosWorkflowTests(unittest.TestCase):
         self.assertIn("--features embedded-host", self.build_script)
         self.assertIn("HNS_NATIVE_HOST_PATH=", self.build_script)
         self.assertIn("--macos-signed-notarized", self.build_script)
+        self.assertEqual(
+            self.workflow.count('macos-deployment-target: "11.0"'),
+            2,
+        )
+        self.assertIn(
+            "MACOSX_DEPLOYMENT_TARGET: "
+            "${{ matrix.macos-deployment-target }}",
+            self.workflow,
+        )
+        self.assertIn(
+            "scripts/verify-macos-binaries.sh",
+            self.build_script,
+        )
+        self.assertIn("--gui-smoke-test", self.build_script)
+        self.assertIn("smoke_pid=", self.build_script)
 
     def test_hardened_signing_notarization_and_stapling_are_required(self) -> None:
         self.assertGreaterEqual(self.build_script.count("--options runtime"), 2)

@@ -50,11 +50,13 @@ LINUX_RUNTIME_LOADERS = {
     "x64": "ld-linux-x86-64.so.2",
     "arm64": "ld-linux-aarch64.so.1",
 }
-LINUX_GUI_RUNTIME_SONAMES = (
+LINUX_SETUP_HOST_SONAMES = (
     "libdecor-0.so.0",
     "libEGL.so.1",
     "libGL.so.1",
     "libGLX.so.0",
+    "libgcc_s.so.1",
+    "libwayland-client.so.0",
     "libwayland-cursor.so.0",
     "libwayland-egl.so.1",
     "libX11.so.6",
@@ -68,13 +70,12 @@ LINUX_GUI_RUNTIME_SONAMES = (
     "libxkbcommon-x11.so.0",
     "libXrandr.so.2",
 )
-LINUX_REQUIRED_RUNTIME_SONAMES = (
+LINUX_REQUIRED_CERTUTIL_SONAMES = (
     "libc.so.6",
     "libnspr4.so",
     "libnss3.so",
     "libnssckbi.so",
     "libsoftokn3.so",
-    *LINUX_GUI_RUNTIME_SONAMES,
 )
 LINUX_REQUIRED_NSS_AUXILIARY = (
     "libfreebl3.chk",
@@ -90,11 +91,13 @@ LINUX_SETUP_SYSTEM_SONAMES = {
     "librt.so.1",
     "libthread_db.so.1",
     "libutil.so.1",
-    # Mesa loads host graphics backends at runtime. Keep its Wayland client on
-    # the host too, so a newer host Mesa never binds to an older bundled copy.
-    "libwayland-client.so.0",
+    # The GUI stack must remain coherent with host-loaded Mesa, NVIDIA, and
+    # libdecor modules. None of these libraries may be injected by the AppDir.
+    *LINUX_SETUP_HOST_SONAMES,
     *LINUX_RUNTIME_LOADERS.values(),
 }
+LINUX_RUNTIME_METADATA_SCHEMA_VERSION = 2
+MACOS_DEPLOYMENT_TARGET = "11.0"
 ZIP_EPOCH = 315532800  # 1980-01-01, the earliest ZIP timestamp.
 
 
@@ -506,6 +509,7 @@ def native_installation_readme(
     extension_id: str,
     source_tag: str,
     macos_signed_notarized: bool,
+    windows_authenticode_signed: bool,
 ) -> bytes:
     registration_ids = list(
         dict.fromkeys([canonical_extension_id, extension_id])
@@ -529,8 +533,13 @@ def native_installation_readme(
             "The installer uses the current user's Windows certificate store."
         )
         signing_notice = (
-            "This automated Windows bundle is unsigned until project "
-            "Authenticode credentials are configured."
+            "The Windows executables are Authenticode signed by the project "
+            "publisher and carry RFC 3161 SHA-256 timestamps."
+            if windows_authenticode_signed
+            else (
+                "This automated Windows bundle is unsigned until project "
+                "Authenticode credentials are configured."
+            )
         )
     else:
         extension_id_arguments = " ".join(
@@ -630,6 +639,13 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
         raise PackagingError(
             "--macos-signed-notarized is valid only for macOS packages"
         )
+    if (
+        arguments.windows_authenticode_signed
+        and arguments.platform != "windows"
+    ):
+        raise PackagingError(
+            "--windows-authenticode-signed is valid only for Windows packages"
+        )
     native_host = arguments.native_host.resolve()
     if not native_host.is_file() or native_host.is_symlink():
         raise PackagingError(f"native host is missing or unsafe: {native_host}")
@@ -662,6 +678,7 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
                 arguments.extension_id,
                 arguments.source_tag,
                 arguments.macos_signed_notarized,
+                arguments.windows_authenticode_signed,
             ),
             0o644,
         ),
@@ -675,7 +692,11 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
                         "codeSigningStatus": (
                             "developerIdSigned"
                             if arguments.macos_signed_notarized
-                            else "unsigned"
+                            else (
+                                "authenticodeSigned"
+                                if arguments.windows_authenticode_signed
+                                else "unsigned"
+                            )
                         )
                         if arguments.platform in {"macos", "windows"}
                         else "notApplicable",
@@ -688,6 +709,13 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
                         else "notApplicable",
                         "platform": arguments.platform,
                         "rustTarget": arguments.rust_target,
+                        "timestampStatus": (
+                            "rfc3161Sha256"
+                            if arguments.windows_authenticode_signed
+                            else "notApplicable"
+                        )
+                        if arguments.platform == "windows"
+                        else "notApplicable",
                     },
                 }
             ),
@@ -863,13 +891,16 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
             return
         queued[name] = resolved_source
 
-    gui_seeds: dict[str, Path] = {}
-    for soname in LINUX_GUI_RUNTIME_SONAMES:
-        source = catalog.get(soname)
-        if source is None:
-            raise PackagingError(f"required Linux GUI library is missing: {soname}")
-        add_library(soname, source)
-        gui_seeds[soname] = source
+    missing_host_libraries = sorted(
+        soname
+        for soname in LINUX_SETUP_HOST_SONAMES
+        if soname not in catalog
+    )
+    if missing_host_libraries:
+        raise PackagingError(
+            "required Linux setup host libraries are missing: "
+            + ", ".join(missing_host_libraries)
+        )
 
     nss_seeds: dict[str, Path] = {}
     for line in run_system_tool(["dpkg-query", "--listfiles", "libnss3"]).splitlines():
@@ -883,9 +914,7 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
     def collect_closure(
         initial_files: list[Path],
         initial_names: set[str],
-        excluded_names: set[str] | None = None,
     ) -> set[str]:
-        excluded = excluded_names or set()
         names = set(initial_names)
         scanned: set[Path] = set()
         scan_queue = list(initial_files)
@@ -896,8 +925,6 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
                 continue
             scanned.add(resolved_source)
             for soname, dependency in linux_dependencies(resolved_source):
-                if soname in excluded:
-                    continue
                 add_library(soname, dependency)
                 names.add(soname)
                 scan_queue.append(dependency)
@@ -907,17 +934,25 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
         [certutil, *nss_seeds.values()],
         set(nss_seeds),
     )
-    setup_libraries = collect_closure(
-        [setup_executable, *gui_seeds.values()],
-        set(gui_seeds),
-        LINUX_SETUP_SYSTEM_SONAMES,
+    unexpected_setup_libraries = sorted(
+        {
+            soname
+            for soname, _dependency in linux_dependencies(setup_executable)
+            if soname not in LINUX_SETUP_SYSTEM_SONAMES
+        }
     )
+    if unexpected_setup_libraries:
+        raise PackagingError(
+            "Linux setup has an unclassified host dependency: "
+            + ", ".join(unexpected_setup_libraries)
+        )
+    setup_libraries: set[str] = set()
 
     loader_name = LINUX_RUNTIME_LOADERS[architecture]
     missing = [
         name
         for name in (
-            *LINUX_REQUIRED_RUNTIME_SONAMES,
+            *LINUX_REQUIRED_CERTUTIL_SONAMES,
             *LINUX_REQUIRED_NSS_AUXILIARY,
             loader_name,
         )
@@ -972,7 +1007,7 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
                 key, value = line.split("=", 1)
                 os_release[key] = value.strip().strip('"')
         runtime_metadata = {
-            "schemaVersion": 1,
+            "schemaVersion": LINUX_RUNTIME_METADATA_SCHEMA_VERSION,
             "architecture": architecture,
             "distribution": {
                 "id": os_release.get("ID", "unknown"),
@@ -988,6 +1023,7 @@ def stage_linux_runtime(arguments: argparse.Namespace) -> list[Path]:
             "packages": dict(sorted(packages.items())),
             "certutilLibraries": sorted(certutil_libraries),
             "setupLibraries": sorted(setup_libraries),
+            "setupSystemLibraries": sorted(LINUX_SETUP_HOST_SONAMES),
         }
         (temporary / "RUNTIME-METADATA.json").write_bytes(
             canonical_json(runtime_metadata)
@@ -1003,10 +1039,8 @@ def linux_app_run() -> bytes:
     return b"""#!/bin/sh
 set -eu
 app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-setup_lib="$app_dir/usr/lib"
 export HNS_SETUP_CERTUTIL="$app_dir/usr/libexec/certutil"
-LD_LIBRARY_PATH="$setup_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  exec "$app_dir/usr/bin/hns-dane-browser-setup" "$@"
+exec "$app_dir/usr/bin/hns-dane-browser-setup" "$@"
 """
 
 
@@ -1040,6 +1074,8 @@ def macos_info_plist(version: str) -> bytes:
   <string>{version}</string>
   <key>CFBundleVersion</key>
   <string>{version}</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>{MACOS_DEPLOYMENT_TARGET}</string>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
@@ -1053,6 +1089,7 @@ def setup_installation_readme(
     architecture: str,
     source_tag: str,
     macos_signed_notarized: bool,
+    windows_authenticode_signed: bool,
 ) -> bytes:
     if platform == "windows":
         launch = r".\hns-dane-browser-setup.exe"
@@ -1063,17 +1100,25 @@ def setup_installation_readme(
             "on Windows components."
         )
         signing = (
-            "This automated Windows setup executable is unsigned until project "
-            "Authenticode credentials are configured, so Microsoft Defender "
-            "SmartScreen may warn. Check the archive against SHA256SUMS before "
-            "deciding whether to continue; checksum verification is required."
+            "This Windows setup executable is Authenticode signed by the "
+            "project publisher and carries an RFC 3161 SHA-256 timestamp. "
+            "Verify the publisher shown by Windows before continuing."
+            if windows_authenticode_signed
+            else (
+                "This automated Windows setup executable is unsigned until "
+                "project Authenticode credentials are configured, so Microsoft "
+                "Defender SmartScreen may warn. Check the archive against "
+                "SHA256SUMS before deciding whether to continue; checksum "
+                "verification is required."
+            )
         )
     elif platform == "macos":
         launch = 'open "HNS DANE Browser Setup.app"'
         language = "sh"
         layout = (
             "The app embeds the version-matched native host and relies only on "
-            "macOS system frameworks."
+            "macOS system frameworks. It supports macOS "
+            f"{MACOS_DEPLOYMENT_TARGET} or newer."
         )
         if macos_signed_notarized:
             signing = (
@@ -1096,10 +1141,11 @@ def setup_installation_readme(
         layout = (
             "The AppDir embeds the statically linked musl native host in the "
             "native GNU setup application and bundles NSS certutil, NSS/NSPR, "
-            "an isolated helper loader/runtime, and non-base GUI client "
-            f"libraries. No system certutil package is required. This v{version} "
-            "Linux build retains the base-system ABI and requires glibc 2.39 "
-            "or newer (Ubuntu 24.04 / Debian 13 generation)."
+            "and an isolated helper loader/runtime. It uses the host's coherent "
+            "Wayland/X11/OpenGL stack; no AppDir-wide library path is injected. "
+            f"No system certutil package is required. This v{version} Linux "
+            "build requires glibc 2.39 or newer and common desktop GUI libraries "
+            "(Ubuntu 24.04 / Debian 13 generation)."
         )
         signing = "Verify this Linux bundle against the published SHA256SUMS file."
     runtime_license_line = (
@@ -1150,12 +1196,13 @@ def verify_staged_linux_runtime(
         raise PackagingError("Linux setup runtime metadata is missing")
     metadata = json.loads(runtime_files[metadata_name][0])
     if (
-        metadata.get("schemaVersion") != 1
+        metadata.get("schemaVersion") != LINUX_RUNTIME_METADATA_SCHEMA_VERSION
         or metadata.get("architecture") != architecture
         or not isinstance(metadata.get("files"), dict)
         or not isinstance(metadata.get("packages"), dict)
         or not isinstance(metadata.get("certutilLibraries"), list)
         or not isinstance(metadata.get("setupLibraries"), list)
+        or not isinstance(metadata.get("setupSystemLibraries"), list)
     ):
         raise PackagingError("Linux setup runtime metadata is invalid")
     expected_hashes = {
@@ -1174,7 +1221,7 @@ def verify_staged_linux_runtime(
     required = {
         "certutil",
         f"lib/{LINUX_RUNTIME_LOADERS[architecture]}",
-        *(f"lib/{name}" for name in LINUX_REQUIRED_RUNTIME_SONAMES),
+        *(f"lib/{name}" for name in LINUX_REQUIRED_CERTUTIL_SONAMES),
         *(f"lib/{name}" for name in LINUX_REQUIRED_NSS_AUXILIARY),
     }
     missing = sorted(required.difference(runtime_files))
@@ -1185,6 +1232,7 @@ def verify_staged_linux_runtime(
     for classification in (
         metadata["certutilLibraries"],
         metadata["setupLibraries"],
+        metadata["setupSystemLibraries"],
     ):
         if any(
             not isinstance(name, str)
@@ -1198,6 +1246,7 @@ def verify_staged_linux_runtime(
             )
     certutil_libraries = set(metadata["certutilLibraries"])
     setup_libraries = set(metadata["setupLibraries"])
+    setup_system_libraries = set(metadata["setupSystemLibraries"])
     available_libraries = {
         name.removeprefix("lib/")
         for name in runtime_files
@@ -1218,15 +1267,14 @@ def verify_staged_linux_runtime(
     }
     if not required_certutil_libraries.issubset(certutil_libraries):
         raise PackagingError("Linux certutil runtime classification is incomplete")
-    if not set(LINUX_GUI_RUNTIME_SONAMES).issubset(setup_libraries):
-        raise PackagingError("Linux setup GUI runtime classification is incomplete")
-    unsafe_setup_libraries = setup_libraries.intersection(
-        LINUX_SETUP_SYSTEM_SONAMES
-    )
-    if unsafe_setup_libraries:
+    if setup_libraries:
         raise PackagingError(
-            "Linux setup runtime must not preload base-system libraries: "
-            + ", ".join(sorted(unsafe_setup_libraries))
+            "Linux setup runtime must not bundle shared libraries: "
+            + ", ".join(sorted(setup_libraries))
+        )
+    if setup_system_libraries != set(LINUX_SETUP_HOST_SONAMES):
+        raise PackagingError(
+            "Linux setup host library classification is incomplete"
         )
     if not any(name.startswith("licenses/") for name in runtime_files):
         raise PackagingError("Linux setup runtime contains no dependency licenses")
@@ -1279,6 +1327,13 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
     if arguments.macos_signed_notarized and arguments.platform != "macos":
         raise PackagingError(
             "--macos-signed-notarized is valid only for macOS packages"
+        )
+    if (
+        arguments.windows_authenticode_signed
+        and arguments.platform != "windows"
+    ):
+        raise PackagingError(
+            "--windows-authenticode-signed is valid only for Windows packages"
         )
 
     expected_setup_name = (
@@ -1340,7 +1395,11 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
         "codeSigningStatus": (
             "developerIdSigned"
             if arguments.macos_signed_notarized
-            else "unsigned"
+            else (
+                "authenticodeSigned"
+                if arguments.windows_authenticode_signed
+                else "unsigned"
+            )
         )
         if arguments.platform in {"macos", "windows"}
         else "notApplicable",
@@ -1360,6 +1419,13 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
         "platform": arguments.platform,
         "setupRustTarget": arguments.setup_rust_target,
         "selfContained": True,
+        "timestampStatus": (
+            "rfc3161Sha256"
+            if arguments.windows_authenticode_signed
+            else "notApplicable"
+        )
+        if arguments.platform == "windows"
+        else "notApplicable",
     }
     files: dict[str, tuple[bytes, int]] = {
         "LICENSE": (normalized_text(root / "LICENSE"), 0o644),
@@ -1370,6 +1436,7 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
                 arguments.architecture,
                 arguments.source_tag,
                 arguments.macos_signed_notarized,
+                arguments.windows_authenticode_signed,
             ),
             0o644,
         ),
@@ -1400,7 +1467,6 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
             0o755,
         )
         certutil_libraries = set(runtime_metadata["certutilLibraries"])
-        setup_libraries = set(runtime_metadata["setupLibraries"])
         for name in sorted(certutil_libraries):
             files[
                 f"{app_root}/usr/libexec/certutil-runtime/{name}"
@@ -1414,8 +1480,6 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
             files[
                 f"{app_root}/usr/libexec/certutil-runtime/{name}"
             ] = runtime_files[f"lib/{name}"]
-        for name in sorted(setup_libraries):
-            files[f"{app_root}/usr/lib/{name}"] = runtime_files[f"lib/{name}"]
         for name, value in runtime_files.items():
             if name.startswith("licenses/"):
                 files[f"{app_root}/usr/share/{name}"] = value
@@ -1429,6 +1493,8 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
                 "bundledCertutil": f"{app_root}/usr/libexec/certutil",
                 "launcher": f"{app_root}/AppRun",
                 "linuxRuntime": runtime_metadata,
+                "selfContained": False,
+                "systemLibraries": sorted(LINUX_SETUP_HOST_SONAMES),
             }
         )
     elif arguments.platform == "macos":
@@ -1453,6 +1519,7 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
             {
                 "binary": binary_path,
                 "bundle": app_root,
+                "minimumSystemVersion": MACOS_DEPLOYMENT_TARGET,
                 "runtimeDependencies": "systemFrameworksOnly",
             }
         )
@@ -1542,10 +1609,15 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="mark a macOS binary already signed and accepted by Apple",
     )
+    native.add_argument(
+        "--windows-authenticode-signed",
+        action="store_true",
+        help="mark a Windows binary already Authenticode signed and timestamped",
+    )
     native.set_defaults(package=package_native)
 
     setup = subparsers.add_parser(
-        "setup", help="package one self-contained platform setup application"
+        "setup", help="package one platform setup application"
     )
     add_common_arguments(setup)
     setup.add_argument("--platform", choices=sorted(PLATFORMS), required=True)
@@ -1562,11 +1634,19 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="mark a macOS app already signed, accepted, and stapled",
     )
+    setup.add_argument(
+        "--windows-authenticode-signed",
+        action="store_true",
+        help="mark a Windows app already Authenticode signed and timestamped",
+    )
     setup.set_defaults(package=package_setup)
 
     linux_runtime = subparsers.add_parser(
         "linux-runtime",
-        help="stage the bundled NSS/NSPR and GUI runtime for a Linux setup app",
+        help=(
+            "stage the bundled NSS/NSPR runtime and validate host "
+            "dependencies for a Linux setup app"
+        ),
     )
     linux_runtime.add_argument("--output-dir", type=Path, required=True)
     linux_runtime.add_argument(

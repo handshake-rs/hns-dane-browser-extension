@@ -8,6 +8,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github/workflows/release.yml"
+WINDOWS_VERIFY = ROOT / "scripts/verify-windows-binaries.ps1"
+MACOS_VERIFY = ROOT / "scripts/verify-macos-binaries.sh"
 CANONICAL_ID = json.loads(
     (ROOT / "release/extension-identity.json").read_text(encoding="utf-8")
 )["canonicalId"]
@@ -17,6 +19,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = WORKFLOW.read_text(encoding="utf-8")
+        cls.windows_verify = WINDOWS_VERIFY.read_text(encoding="utf-8")
+        cls.macos_verify = MACOS_VERIFY.read_text(encoding="utf-8")
 
     def test_external_actions_are_pinned_and_first_party(self) -> None:
         references = re.findall(r"^\s*uses:\s*([^#\s]+)", self.source, re.MULTILINE)
@@ -199,10 +203,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("libx11-6", self.source)
         self.assertIn("HNS-DANE-Browser-Setup.AppDir", self.source)
         self.assertIn(
-            '[[ -e "$app/usr/lib/libwayland-client.so.0" ]]',
+            '[[ -n "$(find "$app/usr/lib" -type f -print -quit)" ]]',
             self.source,
         )
-        self.assertIn("must use the host Wayland client", self.source)
+        self.assertIn(
+            "must not bundle GUI shared libraries",
+            self.source,
+        )
+        self.assertIn(
+            "must not override the host GUI library path",
+            self.source,
+        )
         self.assertIn('"$app/usr/libexec/certutil"', self.source)
         self.assertIn('"${clean_helper[@]}" \\\n            -N', self.source)
         self.assertIn('"$app/AppRun" --status', self.source)
@@ -218,20 +229,21 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--embedded-native-host", self.source)
         self.assertIn("--linux-runtime", self.source)
         self.assertIn("-C target-feature=+crt-static", self.source)
-        self.assertIn("dumpbin.exe", self.source)
-        self.assertIn(
-            "Get-Command dumpbin.exe -ErrorAction SilentlyContinue",
-            self.source,
+        self.assertIn("scripts/verify-windows-binaries.ps1", self.source)
+        self.assertIn("/dependents", self.windows_verify)
+        self.assertIn("allowedSystemImports", self.windows_verify)
+        self.assertIn("non-allowlisted DLL", self.windows_verify)
+        self.assertIn("dynamic Microsoft CRT", self.windows_verify)
+        self.assertIn("scripts/verify-macos-binaries.sh", self.source)
+        self.assertIn("LC_BUILD_VERSION", self.macos_verify)
+        self.assertIn("/System/Library/* | /usr/lib/*", self.macos_verify)
+        self.assertEqual(
+            self.source.count('macos-deployment-target: "11.0"'),
+            2,
         )
-        self.assertIn("vswhere.exe", self.source)
-        self.assertIn(r"**\Hostarm64\arm64\dumpbin.exe", self.source)
-        self.assertIn(
-            r"VC\Tools\MSVC\**\bin\Host*\*\dumpbin.exe",
-            self.source,
-        )
-        self.assertIn("VCRUNTIME|MSVCP|UCRTBASE|api-ms-win-crt", self.source)
-        self.assertIn("otool -L", self.source)
-        self.assertIn("/System/Library/* | /usr/lib/*", self.source)
+        self.assertGreaterEqual(self.source.count("--gui-smoke-test"), 2)
+        self.assertIn("WaitForExit(30000)", self.source)
+        self.assertIn("smoke_pid=", self.source)
 
     def test_store_identity_and_source_metadata_are_mandatory(self) -> None:
         self.assertIn("vars.CHROMIUM_EXTENSION_ID", self.source)

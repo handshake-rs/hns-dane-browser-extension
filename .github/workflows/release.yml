@@ -188,7 +188,8 @@ jobs:
           npm run build:extension
           python3 -m unittest -v \
             tests/test_release_packaging.py \
-            tests/test_release_workflow.py
+            tests/test_release_workflow.py \
+            tests/test_resign_windows_workflow.py
 
       - name: Package the MV3 extension
         env:
@@ -264,6 +265,7 @@ jobs:
             runner: macos-15-intel
             native-rust-target: x86_64-apple-darwin
             setup-rust-target: x86_64-apple-darwin
+            macos-deployment-target: "11.0"
             binary-suffix: ""
             python: python3
           - platform: macos
@@ -271,6 +273,7 @@ jobs:
             runner: macos-15
             native-rust-target: aarch64-apple-darwin
             setup-rust-target: aarch64-apple-darwin
+            macos-deployment-target: "11.0"
             binary-suffix: ""
             python: python3
     runs-on: ${{ matrix.runner }}
@@ -283,7 +286,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Linux build and bundled runtime dependencies
+      - name: Install Linux build and runtime dependencies
         if: ${{ matrix.platform == 'linux' }}
         shell: bash
         env:
@@ -337,6 +340,7 @@ jobs:
         shell: pwsh
         env:
           BINARY_SUFFIX: ${{ matrix.binary-suffix }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos-deployment-target }}
           MUSL_CC: ${{ matrix.musl-cc }}
           NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
           PLATFORM: ${{ matrix.platform }}
@@ -409,74 +413,69 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $nativeHost = "rust/target/$env:NATIVE_RUST_TARGET/release/hns-chromium-native-host$env:BINARY_SUFFIX"
           $setup = "rust/target/$env:SETUP_RUST_TARGET/release/hns-dane-browser-setup$env:BINARY_SUFFIX"
-          $dumpbinCommand = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
-          $dumpbin = if ($null -ne $dumpbinCommand) {
-            $dumpbinCommand.Source
-          } else {
-            $vswhereCandidates = @(
-              "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe",
-              "$env:ProgramFiles\Microsoft Visual Studio\Installer\vswhere.exe"
-            )
-            $vswhere = $vswhereCandidates |
-              Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-              Select-Object -First 1
-            if (-not $vswhere) {
-              throw 'Unable to locate Visual Studio Installer vswhere.exe.'
-            }
-            $targetPattern = if ($env:ARCHITECTURE -eq 'arm64') {
-              '**\Hostarm64\arm64\dumpbin.exe'
-            } else {
-              '**\Hostx64\x64\dumpbin.exe'
-            }
-            $located = & $vswhere -latest -products '*' -find $targetPattern |
-              Select-Object -First 1
-            if (-not $located) {
-              $located = & $vswhere -latest -products '*' `
-                -find 'VC\Tools\MSVC\**\bin\Host*\*\dumpbin.exe' |
-                  Select-Object -First 1
-            }
-            $located
-          }
-          if (-not $dumpbin -or
-              -not (Test-Path -LiteralPath $dumpbin -PathType Leaf)) {
-            throw 'Unable to locate dumpbin.exe in the installed Visual Studio toolchain.'
-          }
-          foreach ($binary in @($nativeHost, $setup)) {
-            $dependencies = & $dumpbin /dependents $binary | Out-String
-            if ($LASTEXITCODE -ne 0) {
-              throw "Unable to inspect Windows dependencies for $binary."
-            }
-            if ($dependencies -match '(?i)(VCRUNTIME|MSVCP|UCRTBASE|api-ms-win-crt)') {
-              throw "$binary depends on a dynamic Microsoft CRT."
-            }
+          $binaries = @($nativeHost, $setup)
+          & ./scripts/verify-windows-binaries.ps1 -Path $binaries
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Windows import allowlist verification failed.'
           }
           & $setup --status | Out-Null
           if ($LASTEXITCODE -ne 0) {
             throw 'The Windows setup status smoke check failed.'
+          }
+          $process = Start-Process `
+            -FilePath $setup `
+            -ArgumentList '--gui-smoke-test' `
+            -PassThru
+          try {
+            if (-not $process.WaitForExit(30000)) {
+              throw 'The Windows setup GUI smoke check timed out.'
+            }
+            if ($process.ExitCode -ne 0) {
+              throw "The Windows setup GUI smoke check failed with exit code $($process.ExitCode)."
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
           }
 
       - name: Verify macOS system-only dependencies and setup status
         if: ${{ matrix.platform == 'macos' }}
         shell: bash
         env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos-deployment-target }}
           NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
           SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
         run: |
           set -euo pipefail
           native_host="rust/target/$NATIVE_RUST_TARGET/release/hns-chromium-native-host"
           setup="rust/target/$SETUP_RUST_TARGET/release/hns-dane-browser-setup"
-          for binary in "$native_host" "$setup"; do
-            while IFS= read -r dependency; do
-              case "$dependency" in
-                /System/Library/* | /usr/lib/*) ;;
-                *)
-                  echo "::error::$binary has a non-system dependency: $dependency"
-                  exit 1
-                  ;;
-              esac
-            done < <(otool -L "$binary" | tail -n +2 | awk '{print $1}')
-          done
+          bash scripts/verify-macos-binaries.sh "$native_host" "$setup"
           "$setup" --status >/dev/null
+          "$setup" --gui-smoke-test &
+          smoke_pid=$!
+          smoke_status=
+          for _attempt in {1..30}; do
+            if ! kill -0 "$smoke_pid" 2>/dev/null; then
+              if wait "$smoke_pid"; then
+                smoke_status=0
+              else
+                smoke_status=$?
+              fi
+              break
+            fi
+            sleep 1
+          done
+          if [[ -z "$smoke_status" ]]; then
+            kill "$smoke_pid" 2>/dev/null || true
+            wait "$smoke_pid" 2>/dev/null || true
+            echo "::error::The macOS setup GUI smoke check timed out."
+            exit 1
+          fi
+          if [[ "$smoke_status" != 0 ]]; then
+            echo "::error::The macOS setup GUI smoke check failed with status $smoke_status."
+            exit 1
+          fi
 
       - name: Stage the bundled Linux setup runtime
         if: ${{ matrix.platform == 'linux' }}
@@ -578,8 +577,13 @@ jobs:
           tar -xzf "$archive" -C "$temporary"
           root="$temporary/hns-dane-browser-setup-v${VERSION}-linux-${ARCHITECTURE}"
           app="$root/HNS-DANE-Browser-Setup.AppDir"
-          if [[ -e "$app/usr/lib/libwayland-client.so.0" ]]; then
-            echo "::error::The Linux Setup package must use the host Wayland client for Mesa compatibility."
+          if [[ -d "$app/usr/lib" ]] &&
+            [[ -n "$(find "$app/usr/lib" -type f -print -quit)" ]]; then
+            echo "::error::The Linux Setup package must not bundle GUI shared libraries."
+            exit 1
+          fi
+          if grep -q 'LD_LIBRARY_PATH' "$app/AppRun"; then
+            echo "::error::The Linux Setup launcher must not override the host GUI library path."
             exit 1
           fi
           glibc_ceiling="2.39"
@@ -841,7 +845,7 @@ jobs:
           cat >"$notes_file" <<EOF
           HNS DANE Browser ${VERSION} provides a keyless first-submission store
           package, a canonical-ID Manifest V3 package for GitHub/unpacked use, and
-          both native-host and bundled-runtime graphical setup packages for Linux,
+          both native-host and graphical setup packages for Linux,
           Windows, and macOS on x64 and arm64.
 
           Canonical release/default extension ID: \`${CANONICAL_EXTENSION_ID}\`.
@@ -854,15 +858,16 @@ jobs:
           Installation: each native-host archive contains platform-specific
           manual install/uninstall scripts. Each setup archive contains a graphical
           per-user setup application with the version-matched native host embedded.
-          Linux setup AppDirs bundle certutil, NSS/NSPR, runtime/GUI libraries, and
-          dependency licenses, so users do not need a system certutil package.
-          The v${VERSION} Linux Setup retains the base-system ABI and requires glibc
-          2.39 or newer (Ubuntu 24.04 / Debian 13 generation).
+          Linux setup AppDirs bundle an isolated certutil and NSS/NSPR runtime with
+          dependency licenses, so users do not need a system certutil package. The
+          setup UI uses the host's coherent Wayland/X11/OpenGL stack. The
+          v${VERSION} Linux Setup requires glibc 2.39 or newer and common desktop
+          GUI libraries (Ubuntu 24.04 / Debian 13 generation).
           HNS donation: handshake:hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh?label=Denuo%20Web%20Handshake%20Browser&message=Handshake%20Browser%20donation
           GitHub Sponsors: https://github.com/sponsors/denuoweb
 
           Linux native hosts are statically linked with musl; Linux setup uses the
-          native GNU target with its non-base GUI libraries bundled separately.
+          native GNU target and host GUI libraries.
           Windows native hosts and setup executables statically link the Microsoft
           CRT where supported. Automated Windows bundles are unsigned. Automated
           macOS binaries are unsigned and not notarized; they rely only on system

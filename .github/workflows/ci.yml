@@ -171,7 +171,8 @@ jobs:
         run: |
           python3 -m unittest -v \
             tests/test_release_packaging.py \
-            tests/test_release_workflow.py
+            tests/test_release_workflow.py \
+            tests/test_resign_windows_workflow.py
 
   required:
     name: Required CI

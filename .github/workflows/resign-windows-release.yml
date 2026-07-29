@@ -1,0 +1,447 @@
+name: Replace Windows release assets with Authenticode-signed builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing published release tag to preserve
+        required: true
+        default: v0.5.4
+        type: string
+      confirm_replacement:
+        description: Replace only that release's Windows assets and SHA256SUMS
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-windows-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate the immutable source and published release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      extension-id: ${{ steps.validate.outputs.extension-id }}
+      release-id: ${{ steps.validate.outputs.release-id }}
+      source-commit: ${{ steps.validate.outputs.source-commit }}
+      source-date-epoch: ${{ steps.validate.outputs.source-date-epoch }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Check out current release tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          path: release-tools
+          persist-credentials: false
+
+      - name: Check out the existing release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          path: source
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag }}
+
+      - name: Validate replacement scope and source identity
+        id: validate
+        env:
+          CONFIRM_REPLACEMENT: ${{ inputs.confirm_replacement }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_REPLACEMENT" != true ]]; then
+            echo "::error::Explicitly confirm replacement of the published Windows assets."
+            exit 1
+          fi
+          if [[ "$GH_REPO" != handshake-rs/hns-dane-browser-extension ]]; then
+            echo "::error::This credentialed workflow is restricted to the canonical repository."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "::error::Run this workflow only from the current default branch."
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+(\.[0-9]+){1,3}$ ]]; then
+            echo "::error::The requested release tag is malformed."
+            exit 1
+          fi
+
+          bash source/scripts/check-version-consistency.sh
+          source_commit="$(git -C source rev-parse HEAD)"
+          tag_commit="$(git -C source rev-list -n 1 "$RELEASE_TAG")"
+          version="$(jq -er '.version' source/extension/manifest.json)"
+          tooling_version="$(jq -er '.version' release-tools/extension/manifest.json)"
+          if [[ "$source_commit" != "$tag_commit" ||
+                "$RELEASE_TAG" != "v$version" ||
+                "$tooling_version" != "$version" ]]; then
+            echo "::error::The tag, tagged source, and current release tooling version must remain identical."
+            exit 1
+          fi
+          source_date_epoch="$(git -C source show -s --format=%ct "$source_commit")"
+
+          release_json="$(gh api "repos/${GH_REPO}/releases/tags/${RELEASE_TAG}")"
+          if [[ "$(jq -er '.draft' <<<"$release_json")" != false ||
+                "$(jq -er '.prerelease' <<<"$release_json")" != false ||
+                "$(jq -r '.immutable // false' <<<"$release_json")" != false ]]; then
+            echo "::error::The target must be a published, mutable, non-prerelease release."
+            exit 1
+          fi
+          release_id="$(jq -er '.id' <<<"$release_json")"
+          release_body="$(jq -r '.body // ""' <<<"$release_json")"
+          if ! grep -Fq \
+            "https://github.com/${GH_REPO}/commit/${source_commit}" \
+            <<<"$release_body"; then
+            echo "::error::The published release does not record the tagged source commit."
+            exit 1
+          fi
+
+          inspection="$(mktemp -d)"
+          trap 'find "$inspection" -mindepth 1 -delete; rmdir "$inspection"' EXIT
+          archive="hns-dane-browser-native-host-v${version}-windows-arm64.zip"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GH_REPO" \
+            --pattern "$archive" \
+            --dir "$inspection"
+          metadata="$(
+            unzip -p "$inspection/$archive" \
+              "${archive%.zip}/RELEASE-METADATA.json"
+          )"
+          if [[ "$(jq -er '.source.commit' <<<"$metadata")" != "$source_commit" ||
+                "$(jq -er '.source.tag' <<<"$metadata")" != "$RELEASE_TAG" ||
+                "$(jq -er '.version' <<<"$metadata")" != "$version" ]]; then
+            echo "::error::Existing Windows release metadata does not match its tag."
+            exit 1
+          fi
+          extension_id="$(
+            jq -er '.extension.nativeRegistrationIds[-1]' <<<"$metadata"
+          )"
+          if [[ ! "$extension_id" =~ ^[a-p]{32}$ ]]; then
+            echo "::error::Existing Windows release metadata has an invalid extension ID."
+            exit 1
+          fi
+          {
+            echo "extension-id=$extension_id"
+            echo "release-id=$release_id"
+            echo "source-commit=$source_commit"
+            echo "source-date-epoch=$source_date_epoch"
+            echo "version=$version"
+          } >>"$GITHUB_OUTPUT"
+
+  quality:
+    name: Validate replacement tooling
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out current release tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Test packaging and credentialed workflow policy
+        run: |
+          set -euo pipefail
+          bash scripts/verify-supply-chain.sh
+          npm run lint:extension
+          npm run build:extension
+          python3 -m unittest -v \
+            tests/test_release_packaging.py \
+            tests/test_release_workflow.py \
+            tests/test_resign_macos_workflow.py \
+            tests/test_resign_windows_workflow.py
+
+  signed_windows:
+    name: Authenticode sign Windows ${{ matrix.architecture }}
+    needs: [prepare, quality]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            rust-target: x86_64-pc-windows-msvc
+          - architecture: arm64
+            rust-target: aarch64-pc-windows-msvc
+    runs-on: windows-2025
+    timeout-minutes: 120
+    environment: windows-signing
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out current release tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          path: release-tools
+          persist-credentials: false
+
+      - name: Check out the existing release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          path: source
+          persist-credentials: false
+          ref: ${{ inputs.release_tag }}
+
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID }}
+
+      - name: Build the static-CRT native host
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & release-tools/scripts/import-msvc-environment.ps1 `
+            -Architecture $env:ARCHITECTURE
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup target add --toolchain 1.92.0 $env:RUST_TARGET
+          $env:RUSTFLAGS = (
+            "$env:RUSTFLAGS -C target-feature=+crt-static"
+          ).Trim()
+          cargo +1.92.0 build --locked --release `
+            --manifest-path source/rust/Cargo.toml `
+            -p hns-chromium-native-host `
+            --target $env:RUST_TARGET
+
+      - name: Authenticode sign and timestamp the native host
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\source\rust\target\${{ matrix.rust-target }}\release\hns-chromium-native-host.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: HNS DANE Browser native host
+          description-url: https://github.com/handshake-rs/hns-dane-browser-extension
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+
+      - name: Verify the native host and build the embedded setup
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & release-tools/scripts/import-msvc-environment.ps1 `
+            -Architecture $env:ARCHITECTURE
+          $nativeHost = (
+            Resolve-Path `
+              "source/rust/target/$env:RUST_TARGET/release/hns-chromium-native-host.exe"
+          ).Path
+          & release-tools/scripts/verify-windows-binaries.ps1 `
+            -Path @($nativeHost) `
+            -RequireAuthenticode `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER
+          $env:RUSTFLAGS = (
+            "$env:RUSTFLAGS -C target-feature=+crt-static"
+          ).Trim()
+          $env:HNS_NATIVE_HOST_PATH = $nativeHost
+          cargo +1.92.0 build --locked --release `
+            --manifest-path source/rust/Cargo.toml `
+            -p hns-browser-setup `
+            --bin hns-dane-browser-setup `
+            --features embedded-host `
+            --target $env:RUST_TARGET
+
+      - name: Authenticode sign and timestamp the setup
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\source\rust\target\${{ matrix.rust-target }}\release\hns-dane-browser-setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: HNS DANE Browser Setup
+          description-url: https://github.com/handshake-rs/hns-dane-browser-extension
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+
+      - name: Verify, smoke test, and package signed Windows assets
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.source-commit }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source-date-epoch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nativeHost = (
+            Resolve-Path `
+              "source/rust/target/$env:RUST_TARGET/release/hns-chromium-native-host.exe"
+          ).Path
+          $setup = (
+            Resolve-Path `
+              "source/rust/target/$env:RUST_TARGET/release/hns-dane-browser-setup.exe"
+          ).Path
+          & release-tools/scripts/verify-windows-binaries.ps1 `
+            -Path @($nativeHost, $setup) `
+            -RequireAuthenticode `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER
+          if ($env:ARCHITECTURE -eq 'x64') {
+            & $setup --status | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw 'The signed Windows setup status check failed.'
+            }
+            $supportsSelfClosingSmoke = Select-String `
+              -LiteralPath 'source/rust/crates/hns-browser-setup/src/main.rs' `
+              -SimpleMatch `
+              -Pattern 'gui_smoke_test' `
+              -Quiet
+            $startParameters = @{
+              FilePath = $setup
+              PassThru = $true
+            }
+            if ($supportsSelfClosingSmoke) {
+              $startParameters.ArgumentList = '--gui-smoke-test'
+            }
+            $process = Start-Process @startParameters
+            try {
+              if ($supportsSelfClosingSmoke) {
+                if (-not $process.WaitForExit(30000)) {
+                  throw 'The signed Windows setup GUI smoke check timed out.'
+                }
+                if ($process.ExitCode -ne 0) {
+                  throw "The signed Windows GUI smoke check failed: $($process.ExitCode)."
+                }
+              } elseif ($process.WaitForExit(5000)) {
+                throw "The signed Windows GUI exited during startup: $($process.ExitCode)."
+              }
+            } finally {
+              if (-not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force
+              }
+            }
+          }
+
+          $output = "$env:GITHUB_WORKSPACE/dist/signed"
+          python release-tools/scripts/package-release.py native `
+            --repository-root source `
+            --output-dir $output `
+            --source-date-epoch $env:SOURCE_DATE_EPOCH `
+            --source-commit $env:SOURCE_COMMIT `
+            --source-tag $env:RELEASE_TAG `
+            --extension-id $env:EXTENSION_ID `
+            --platform windows `
+            --architecture $env:ARCHITECTURE `
+            --rust-target $env:RUST_TARGET `
+            --native-host $nativeHost `
+            --windows-authenticode-signed
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Signed Windows native-host packaging failed.'
+          }
+          python release-tools/scripts/package-release.py setup `
+            --repository-root source `
+            --output-dir $output `
+            --source-date-epoch $env:SOURCE_DATE_EPOCH `
+            --source-commit $env:SOURCE_COMMIT `
+            --source-tag $env:RELEASE_TAG `
+            --extension-id $env:EXTENSION_ID `
+            --platform windows `
+            --architecture $env:ARCHITECTURE `
+            --native-rust-target $env:RUST_TARGET `
+            --setup-rust-target $env:RUST_TARGET `
+            --setup-executable $setup `
+            --embedded-native-host $nativeHost `
+            --windows-authenticode-signed
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Signed Windows setup packaging failed.'
+          }
+
+      - name: Retain signed Windows assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-windows-${{ matrix.architecture }}
+          path: |
+            dist/signed/*.zip
+            dist/signed/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  replace:
+    name: Replace and verify published Windows assets
+    needs: [prepare, quality, signed_windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out current release tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Retrieve signed Windows builds
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: signed-windows-*
+          path: dist/signed
+          merge-multiple: true
+
+      - name: Back up, replace, and verify the exact release assets
+        env:
+          ASSET_DIR: ${{ github.workspace }}/dist/signed
+          BACKUP_DIR: ${{ github.workspace }}/dist/release-backup
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release-id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/replace-windows-release-assets.sh
+
+      - name: Retain the before-and-after release audit
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-release-backup-${{ inputs.release_tag }}-${{ github.run_id }}
+          path: dist/release-backup/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0

@@ -48,6 +48,14 @@ struct Arguments {
     #[arg(long, conflicts_with_all = ["install", "uninstall"])]
     status: bool,
 
+    /// Open, render, and close one real GUI frame for release smoke testing.
+    #[arg(
+        long,
+        conflicts_with_all = ["install", "uninstall", "status"],
+        hide = true
+    )]
+    gui_smoke_test: bool,
+
     /// Exact 32-character Chromium extension ID. May be repeated.
     #[arg(
         long = "extension-id",
@@ -91,10 +99,12 @@ fn main() -> ExitCode {
 fn run() -> Result<(), Box<dyn Error>> {
     let arguments = Arguments::parse();
 
-    if arguments.install || arguments.uninstall || arguments.status {
+    if arguments.gui_smoke_test {
+        run_gui(true)?;
+    } else if arguments.install || arguments.uninstall || arguments.status {
         run_automation(arguments)?;
     } else {
-        run_gui()?;
+        run_gui(false)?;
     }
 
     Ok(())
@@ -151,7 +161,7 @@ fn print_report(report: &OperationReport) -> Result<(), serde_json::Error> {
     Ok(())
 }
 
-fn run_gui() -> eframe::Result {
+fn run_gui(close_after_first_frame: bool) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(PRODUCT_NAME)
@@ -164,7 +174,12 @@ fn run_gui() -> eframe::Result {
     eframe::run_native(
         PRODUCT_NAME,
         options,
-        Box::new(|creation_context| Ok(Box::new(SetupApp::new(creation_context)))),
+        Box::new(move |creation_context| {
+            Ok(Box::new(SetupApp::new(
+                creation_context,
+                close_after_first_frame,
+            )))
+        }),
     )
 }
 
@@ -236,10 +251,11 @@ struct SetupApp {
     log: Vec<String>,
     worker_tx: Sender<WorkerMessage>,
     worker_rx: Receiver<WorkerMessage>,
+    smoke_frames_remaining: Option<u8>,
 }
 
 impl SetupApp {
-    fn new(creation_context: &eframe::CreationContext<'_>) -> Self {
+    fn new(creation_context: &eframe::CreationContext<'_>, close_after_first_frame: bool) -> Self {
         let selection = BrowserSelection::detected_defaults();
         let (worker_tx, worker_rx) = mpsc::channel();
         let mut app = Self {
@@ -255,6 +271,7 @@ impl SetupApp {
             log: Vec::new(),
             worker_tx,
             worker_rx,
+            smoke_frames_remaining: close_after_first_frame.then_some(1),
         };
         app.start(WorkerTask::Inspect, creation_context.egui_ctx.clone());
         app
@@ -698,6 +715,15 @@ impl eframe::App for SetupApp {
                 });
         });
         self.show_uninstall_confirmation(ui.ctx());
+        if let Some(frames_remaining) = self.smoke_frames_remaining {
+            if frames_remaining == 0 {
+                self.smoke_frames_remaining = None;
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.smoke_frames_remaining = Some(frames_remaining - 1);
+                ui.ctx().request_repaint();
+            }
+        }
     }
 }
 
@@ -726,6 +752,18 @@ mod tests {
         .expect_err("embedded release CLI must reject native-host overrides");
 
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn gui_smoke_test_is_an_isolated_cli_mode() {
+        let arguments = Arguments::try_parse_from(["hns-dane-browser-setup", "--gui-smoke-test"])
+            .expect("the release GUI smoke-test mode should parse");
+        assert!(arguments.gui_smoke_test);
+
+        let error =
+            Arguments::try_parse_from(["hns-dane-browser-setup", "--gui-smoke-test", "--status"])
+                .expect_err("GUI smoke testing must not combine with automation");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[cfg(not(feature = "embedded-host"))]

@@ -32,22 +32,32 @@ packaged manifest so unpacked installations derive the canonical ID. The
 `-mv3-store.zip` first-submission package remains keyless so each catalog can
 assign its own ID. No private key is distributed in either package.
 
-The tag workflow contains no signing secrets. Automated Windows archives remain
-unsigned. The tag workflow initially creates unsigned macOS archives; the
-manual, default-branch-only `Replace macOS release assets with signed builds`
-workflow can rebuild the same tagged source on x64 and arm64, sign it with the
-approved Developer ID Application identity, submit both native hosts and setup
-apps to Apple, staple the setup apps, and replace only the four macOS archives,
-their four checksum sidecars, and `SHA256SUMS`. The workflow preserves the
-release tag, source commit, title, version, and all non-macOS assets.
+The tag workflow contains no signing authority and initially creates unsigned
+Windows and macOS archives. Two manual, default-branch-only replacement
+workflows can rebuild the same tagged source on x64 and arm64. The Windows flow
+uses GitHub OIDC and Azure Artifact Signing to Authenticode-sign and RFC 3161
+SHA-256 timestamp each native host before embedding it and each Setup
+executable afterward. The macOS flow uses the approved Developer ID Application
+identity, notarizes both products, and staples the Setup apps. Each publisher
+replaces only its four platform archives, four checksum sidecars, and
+`SHA256SUMS`, preserving the release tag, source commit, title, version, and all
+other assets.
 
 The published v0.5.4 macOS assets completed that default-branch workflow on
 2026-07-28. Its credentialed signing jobs used the protected
 `macos-signing` environment. Setup apps contain stapled tickets and standalone
 native hosts use Apple's online notarization ticket. Windows v0.5.4 artifacts
-remain unsigned.
+remain unsigned until the Windows replacement workflow is configured and
+completed.
 
-The credentialed signing jobs use the protected `macos-signing` environment.
+Windows signing uses the protected `windows-signing` environment, an Entra
+federated identity, and the narrowly scoped Artifact Signing Certificate
+Profile Signer role; no exportable key or client secret is stored in GitHub.
+The approved exact certificate subject is pinned and every signed executable is
+checked with PowerShell trust policy and SignTool, including its timestamp.
+
+The macOS credentialed signing jobs use the protected `macos-signing`
+environment.
 Store the certificate bundle, its password, and App Store Connect private key
 only as the environment secrets documented in `docs/release.md`. Store the
 approved certificate identity, fingerprint, Team ID, API key ID, and Team API
@@ -69,19 +79,23 @@ environment-protected.
 
 Each setup executable embeds the exact version-matched native host. Windows
 setup executables and their embedded native hosts statically link the Microsoft
-CRT where supported and otherwise use Windows components. The macOS setup is a
-launchable `.app` with an `Info.plist`, executable, license, and notices; both
-macOS binaries rely only on system frameworks. On Linux, the embedded native
+CRT where supported. Every concrete imported DLL is explicitly allowlisted as
+a `System32` component, while Windows API-set contracts are recognized
+separately. The macOS setup is a launchable `.app` with an `Info.plist`,
+executable, license, and notices; both macOS binaries rely only on system
+frameworks, target macOS 11.0, and are inspected for an exact
+`LC_BUILD_VERSION` floor. Native Windows and macOS release jobs launch the real
+Setup window under a 30-second bound. On Linux, the embedded native
 host remains statically linked with musl while the eframe setup uses the native
 GNU target in a runnable AppDir. That AppDir carries NSS `certutil`, all NSS/NSPR
 modules and integrity files shipped by its package, an isolated helper
-loader/shared-library closure, and common GUI client libraries, package
-versions, hashes, and licenses. It deliberately uses the host
-`libwayland-client.so.0`, because host Mesa graphics backends may require newer
-Wayland symbols than a bundled build-baseline copy provides. It never preloads
-bundled glibc into the setup process, so the v0.5.4 Linux Setup requires the
-build baseline of glibc 2.39 or newer (Ubuntu 24.04 / Debian 13 generation).
-The release gate rejects any packaged ELF object requiring a later glibc
-version. Its clean-environment release smoke test creates a temporary NSS
-database and exercises certificate add/list/delete, so users do not need to
-install `libnss3-tools`.
+loader/shared-library closure, package versions, hashes, and licenses. The setup
+process uses the host's complete Wayland/X11/OpenGL stack and does not prepend an
+AppDir library directory. This keeps Mesa, NVIDIA, GLVND, libdecor, X11/XCB,
+Wayland, and the compiler runtime from resolving against a mixed-version
+userspace stack. The v0.5.4 Linux Setup requires glibc 2.39 or newer and common
+desktop GUI libraries (Ubuntu 24.04 / Debian 13 generation). The release gate
+rejects setup shared libraries, a launcher-level `LD_LIBRARY_PATH`, and any
+packaged ELF object requiring a later glibc version. Its clean-environment
+release smoke test creates a temporary NSS database and exercises certificate
+add/list/delete, so users do not need to install `libnss3-tools`.

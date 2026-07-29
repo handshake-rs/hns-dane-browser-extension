@@ -12,6 +12,7 @@ required_environment=(
   APPLE_TEAM_ID
   ARCHITECTURE
   EXTENSION_ID
+  MACOSX_DEPLOYMENT_TARGET
   NATIVE_RUST_TARGET
   OUTPUT_DIR
   RELEASE_TAG
@@ -31,6 +32,10 @@ done
 
 if [[ "$ARCHITECTURE" != x64 && "$ARCHITECTURE" != arm64 ]]; then
   echo "::error::Unsupported macOS architecture: $ARCHITECTURE"
+  exit 1
+fi
+if [[ "$MACOSX_DEPLOYMENT_TARGET" != 11.0 ]]; then
+  echo "::error::The signed macOS build must target macOS 11.0."
   exit 1
 fi
 if [[ "$RELEASE_TAG" != "v$VERSION" ]]; then
@@ -221,18 +226,64 @@ HNS_NATIVE_HOST_PATH="$native_host" \
     --target "$SETUP_RUST_TARGET"
 setup_executable="$SOURCE_ROOT/rust/target/$SETUP_RUST_TARGET/release/hns-dane-browser-setup"
 
-for binary in "$native_host" "$setup_executable"; do
-  while IFS= read -r dependency; do
-    case "$dependency" in
-      /System/Library/* | /usr/lib/*) ;;
-      *)
-        echo "::error::$binary has a non-system dependency: $dependency"
-        exit 1
-        ;;
-    esac
-  done < <(otool -L "$binary" | tail -n +2 | awk '{print $1}')
-done
+"$TOOLS_ROOT/scripts/verify-macos-binaries.sh" \
+  "$native_host" \
+  "$setup_executable"
 "$setup_executable" --status >/dev/null
+
+run_setup_gui_smoke() {
+  local executable="$1"
+  local smoke_pid
+  local smoke_status=
+
+  if grep -Fq \
+    "gui_smoke_test" \
+    "$SOURCE_ROOT/rust/crates/hns-browser-setup/src/main.rs"; then
+    "$executable" --gui-smoke-test &
+    smoke_pid=$!
+    for _attempt in {1..30}; do
+      if ! kill -0 "$smoke_pid" 2>/dev/null; then
+        if wait "$smoke_pid"; then
+          smoke_status=0
+        else
+          smoke_status=$?
+        fi
+        break
+      fi
+      sleep 1
+    done
+    if [[ -z "$smoke_status" ]]; then
+      kill "$smoke_pid" 2>/dev/null || true
+      wait "$smoke_pid" 2>/dev/null || true
+      echo "::error::The signed macOS setup GUI smoke check timed out."
+      return 1
+    fi
+    if [[ "$smoke_status" != 0 ]]; then
+      echo "::error::The signed macOS setup GUI smoke check failed with status $smoke_status."
+      return 1
+    fi
+    return 0
+  fi
+
+  # Published tags predating --gui-smoke-test still receive a bounded,
+  # real-window check: the normal event loop must remain alive for five seconds.
+  "$executable" &
+  smoke_pid=$!
+  for _attempt in {1..5}; do
+    if ! kill -0 "$smoke_pid" 2>/dev/null; then
+      if wait "$smoke_pid"; then
+        smoke_status=0
+      else
+        smoke_status=$?
+      fi
+      echo "::error::The signed macOS setup GUI exited during startup with status $smoke_status."
+      return 1
+    fi
+    sleep 1
+  done
+  kill "$smoke_pid" 2>/dev/null || true
+  wait "$smoke_pid" 2>/dev/null || true
+}
 
 package=(
   python3
@@ -423,6 +474,8 @@ verified_app="$verification_stage/$setup_stem/HNS DANE Browser Setup.app"
 codesign --verify --deep --strict --verbose=2 "$verified_app"
 xcrun stapler validate "$verified_app"
 spctl --assess --type execute --verbose=4 "$verified_app"
+run_setup_gui_smoke \
+  "$verified_app/Contents/MacOS/hns-dane-browser-setup"
 
 native_verification="$temporary/native-verification"
 mkdir "$native_verification"

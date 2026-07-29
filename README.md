@@ -135,16 +135,20 @@ for build, trust, recovery, and manual-installation details.
 Store submission copy, reviewer disclosures, permission justifications, and
 shared Chrome/Edge/Opera artwork are maintained in [`store/`](store/README.md).
 Tagged GitHub Releases provide the browser-neutral extension ZIP, six
-platform-matched setup applications with bundled non-system dependencies, and
-matching manual native-host bundles. The v0.5.4 Linux Setup baseline is glibc
-2.39 or newer (for example Ubuntu 24.04 or Debian 13).
+platform-matched setup applications, and matching manual native-host bundles.
+The v0.5.4 Linux Setup baseline is glibc 2.39 or newer (for example Ubuntu
+24.04 or Debian 13).
 Chrome Web Store distribution also serves Brave and Vivaldi, while Edge and
 Opera can use their own catalog listings.
 See the [Chromium release process](docs/release.md) for the immutable-tag,
 multi-platform build, checksum, signing-status, and catalog-ID boundaries.
 The published v0.5.4 macOS native-host and Setup assets are Developer ID
 signed and Apple-notarized; Setup tickets are stapled and native hosts use
-Apple's online ticket. Windows v0.5.4 assets remain unsigned.
+Apple's online ticket. Windows release builds now enforce a complete system-DLL
+allowlist and have an OIDC-backed Azure Artifact Signing replacement workflow;
+the published v0.5.4 Windows assets remain unsigned until that workflow is
+configured and completed. Windows and macOS release jobs perform bounded real
+GUI startup tests, and macOS binaries have a verified 11.0 deployment floor.
 
 ## Support and license
 
