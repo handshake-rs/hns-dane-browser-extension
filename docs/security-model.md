@@ -191,9 +191,13 @@ canonical framed transport. Future execution must retain the checked handle or
 repeat verification immediately, never reopen a previously checked path.
 
 Replay and rate state survives repeated initialization under identical
-generations. Native completion after authority replacement is stale, and the
-content bridge never automatically retries that page request because a
-mutation may already have committed. The same binding applies to reads.
+generations. Runtime replacement, navigation invalidation, and header
+maintenance rotate or remove the router's internal authority-generation token;
+header maintenance also consumes pending approvals before synchronization.
+Every awaited native capability, request, and approval result is followed by a
+fresh document-authority derivation before injection, return, or event dispatch.
+A stale completion is surfaced without automatic retry because a mutation may
+already have committed. The same binding applies to reads.
 
 ## Loopback proxy and local CA
 

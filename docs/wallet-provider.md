@@ -29,7 +29,10 @@ navigation generation, wallet session, permission generation, and document ID.
 Every request re-derives browser authority and compares every generation.
 History changes, BFCache restore, policy/runtime replacement, header
 maintenance, wallet restart, and permission replacement make prior requests
-and pending approvals stale. Approval revalidation obtains fresh browser and
+and pending approvals stale. Header maintenance synchronously rotates an
+internal router-authority generation, clears document bindings, consumes
+approval contexts, and marks navigation receipts maintenance-pending before
+native synchronization begins. Approval revalidation obtains fresh browser and
 wallet capability generations immediately before a decision is dispatched.
 Repeating initialization under the identical authority and wallet generations
 does not reset sequence, request-ID, pending, or rate-limit state. A genuine
@@ -61,7 +64,11 @@ wallet-native commands are the capability probe and an approval decision.
 The bridge never automatically retries a request after a stale-context,
 permission-generation, or wallet-session result: a mutating call may already
 have executed. It returns that error and requires a new explicit page request.
-Reads use the same replay and idempotency binding.
+Reads use the same replay and idempotency binding. After each awaited native
+capability, request, or approval result, the router checks its internal
+authority-generation token and re-derives exact document authority before it
+injects, returns, or dispatches response events. That post-operation check is
+separate from native enforcement of the opaque authority context.
 
 ## Approval and event ownership
 
@@ -78,8 +85,8 @@ in-flight approval stale rather than persisting an authorization capability.
 
 Allowlisted response events and versioned unsolicited native events are
 delivered back only to a matching originating tab and `documentId`, after fresh
-authority validation, then checked against the same generation binding in the
-isolated bridge before reaching the page.
+authority validation immediately before dispatch, then checked against the same
+generation binding in the isolated bridge before reaching the page.
 
 ## Native artifact and ABI boundary
 

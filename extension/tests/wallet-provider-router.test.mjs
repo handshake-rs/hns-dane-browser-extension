@@ -133,8 +133,10 @@ test("parallel authority completion cannot turn an earlier sequence into a repla
   const router = new WalletProviderRouter({
     authorityForSender: async () => {
       authorityCalls += 1;
-      if (authorityCalls === 1) return authority();
-      return new Promise((resolve) => gates.push(resolve));
+      if (authorityCalls === 3 || authorityCalls === 4) {
+        return new Promise((resolve) => gates.push(resolve));
+      }
+      return authority();
     },
     nativeRequest: async (command) => command === "walletProviderCapabilities"
       ? {
@@ -352,6 +354,120 @@ test("a request completing after document authority replacement is stale", async
   await router.initialize({ origin: "https://welcome" }, sender);
   finishRequest({ ok: true });
   await assert.rejects(pending, (error) => error.code === "staleContext");
+});
+
+test("a native result is stale when browser authority changes without document replacement", async () => {
+  let currentAuthority = authority();
+  let finishRequest;
+  let markRequestStarted;
+  const requestStarted = new Promise((resolve) => {
+    markRequestStarted = resolve;
+  });
+  let delivered = 0;
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => currentAuthority,
+    nativeRequest: async (command) => {
+      if (command === "walletProviderCapabilities") {
+        return {
+          abiVersion: 1,
+          available: true,
+          walletSession: "wallet-a",
+          permissionGeneration: 1,
+          methods: ["wallet_getStatus"]
+        };
+      }
+      return new Promise((resolve) => {
+        finishRequest = resolve;
+        markRequestStarted();
+      });
+    },
+    deliverEvent: async () => {
+      delivered += 1;
+    }
+  });
+  const initialized = await router.initialize({ origin: "https://welcome" }, sender);
+  const pending = router.request(
+    bridgeRequest(initialized.binding, 1, "wallet_getStatus", null),
+    sender
+  );
+  await requestStarted;
+  currentAuthority = authority({ navigationGeneration: 6 });
+  finishRequest({
+    ok: true,
+    events: [{ event: "connect", payload: { network: "mainnet" } }]
+  });
+  await assert.rejects(pending, (error) => error.code === "staleContext");
+  assert.equal(delivered, 0);
+});
+
+test("explicit authority invalidation makes pending requests and approvals stale", async () => {
+  let finishRequest;
+  let markRequestStarted;
+  const requestStarted = new Promise((resolve) => {
+    markRequestStarted = resolve;
+  });
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => authority(),
+    nativeRequest: async (command) => {
+      if (command === "walletProviderCapabilities") {
+        return {
+          abiVersion: 1,
+          available: true,
+          walletSession: "wallet-a",
+          permissionGeneration: 1,
+          methods: ["wallet_getStatus"]
+        };
+      }
+      return new Promise((resolve) => {
+        finishRequest = resolve;
+        markRequestStarted();
+      });
+    },
+    deliverEvent: async () => {}
+  });
+  const initialized = await router.initialize({ origin: "https://welcome" }, sender);
+  const pending = router.request(
+    bridgeRequest(initialized.binding, 1, "wallet_getStatus", null),
+    sender
+  );
+  await requestStarted;
+  router.invalidateAuthority();
+  finishRequest({ ok: true });
+  await assert.rejects(pending, (error) => error.code === "staleContext");
+  await assert.rejects(
+    router.revalidateApproval({
+      sender,
+      binding: initialized.binding,
+      request: { method: "wallet_getStatus" }
+    }),
+    (error) => error.code === "staleContext"
+  );
+});
+
+test("approval completion revalidates browser authority after native dispatch", async () => {
+  let currentAuthority = authority();
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => currentAuthority,
+    nativeRequest: async () => ({
+      abiVersion: 1,
+      available: true,
+      walletSession: "wallet-a",
+      permissionGeneration: 1,
+      methods: ["wallet_getStatus"]
+    }),
+    deliverEvent: async () => {}
+  });
+  const initialized = await router.initialize({ origin: "https://welcome" }, sender);
+  const dispatch = await router.revalidateApproval({
+    sender,
+    binding: initialized.binding,
+    request: { method: "wallet_getStatus" }
+  });
+  currentAuthority = authority({ navigationGeneration: 6 });
+  await assert.rejects(
+    router.completeApproval(dispatch, { ok: true }),
+    (error) => error.code === "staleContext"
+  );
 });
 
 function bridgeRequest(binding, sequence, method, params) {

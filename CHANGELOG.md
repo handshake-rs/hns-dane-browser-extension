@@ -35,6 +35,9 @@ All notable changes to this project will be documented in this file.
   capability rejection, single-link file checks, and same-handle local-integrity
   hashing. Windows remains unavailable pending reviewed ACL checks; a manifest
   digest is not treated as publisher authenticity and no artifact is launched.
+- Invalidate wallet document and approval authority before header maintenance,
+  and re-derive exact browser authority after awaited native capability,
+  request, and approval results before publishing any completion or event.
 
 ## 0.5.5 - 2026-07-29
 

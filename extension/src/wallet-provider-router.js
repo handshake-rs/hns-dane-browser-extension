@@ -49,21 +49,29 @@ export class WalletProviderRouter {
     this.now = now;
     this.documents = new Map();
     this.initializeWindows = new Map();
+    this.authorityGeneration = 1n;
+    this.documentGeneration = 0n;
   }
 
   async initialize(message, sender) {
     const origin = exactMessageOrigin(message?.origin, sender);
     const key = documentKey(sender);
+    const authorityGeneration = this.authorityGeneration;
     enforceStandaloneRate(this.initializeWindows, key, this.now());
-    const authority = await this.authorityForSender(sender, origin);
+    const initialAuthority = await this.authorityForSender(sender, origin);
+    this.requireAuthorityGeneration(authorityGeneration);
     const rawCapabilities = await this.nativeRequest(
       "walletProviderCapabilities",
       {
         providerAbiVersion: WALLET_NATIVE_ABI_VERSION,
-        authority
+        authority: initialAuthority
       }
     );
+    this.requireAuthorityGeneration(authorityGeneration);
     const capabilities = validateNativeCapabilities(rawCapabilities);
+    const authority = await this.authorityForSender(sender, origin);
+    this.requireAuthorityGeneration(authorityGeneration);
+    requireAuthorityBinding(initialAuthority, authority);
     const binding = Object.freeze({
       schemaVersion: WALLET_PROVIDER_SCHEMA_VERSION,
       origin,
@@ -93,6 +101,8 @@ export class WalletProviderRouter {
     const document = {
       binding,
       sender: publicSender(sender),
+      authorityGeneration,
+      documentGeneration: this.nextDocumentGeneration(),
       methods: new Set(capabilities.methods),
       lastSequence: 0,
       pending: new Set(),
@@ -119,6 +129,7 @@ export class WalletProviderRouter {
       throw protocolError("staleContext", "provider document is not initialized");
     }
     requireExpectedBinding(message?.binding, document.binding);
+    const operation = this.documentOperation(key, document);
     if (!document.methods.has(pageRequest.method)) {
       throw protocolError(
         "unsupportedMethod",
@@ -145,26 +156,17 @@ export class WalletProviderRouter {
     document.seenRequestIds.add(pageRequest.requestId);
     document.pending.add(pageRequest.requestId);
     try {
-      const authority = await this.authorityForSender(sender, origin);
-      requireAuthorityBinding(document.binding, authority);
-      const response = validateNativeResult(
-        await this.nativeRequest("walletProviderRequest", {
-          providerAbiVersion: WALLET_NATIVE_ABI_VERSION,
-          authority: {
-            ...authority,
-            walletSession: document.binding.walletSession,
-            permissionGeneration: document.binding.permissionGeneration
-          },
-          request: pageRequest
-        })
-      );
-      if (this.documents.get(key) !== document) {
-        throw protocolError(
-          "staleContext",
-          "provider authority changed while the native request was pending"
-        );
-      }
-      return await this.extractEvents(response, sender, document.binding);
+      const authority = await this.revalidateOperation(operation, sender, origin);
+      const rawResponse = await this.nativeRequest("walletProviderRequest", {
+        providerAbiVersion: WALLET_NATIVE_ABI_VERSION,
+        authority: {
+          ...authority,
+          walletSession: document.binding.walletSession,
+          permissionGeneration: document.binding.permissionGeneration
+        },
+        request: pageRequest
+      });
+      return await this.extractEvents(rawResponse, operation);
     } finally {
       document.pending.delete(pageRequest.requestId);
     }
@@ -185,8 +187,13 @@ export class WalletProviderRouter {
     this.initializeWindows.delete(key);
   }
 
-  forgetAll() {
+  invalidateAuthority() {
+    this.authorityGeneration += 1n;
     this.documents.clear();
+  }
+
+  forgetAll() {
+    this.invalidateAuthority();
     this.initializeWindows.clear();
   }
 
@@ -195,19 +202,31 @@ export class WalletProviderRouter {
       throw protocolError("staleContext", "approval context is unavailable");
     }
     const origin = exactMessageOrigin(context.binding.origin, context.sender);
-    const document = this.documents.get(documentKey(context.sender));
+    const key = documentKey(context.sender);
+    const document = this.documents.get(key);
     if (!document) {
       throw protocolError("staleContext", "approval document is no longer active");
     }
     requireExpectedBinding(context.binding, document.binding);
-    const authority = await this.authorityForSender(context.sender, origin);
-    requireAuthorityBinding(document.binding, authority);
-    const capabilities = validateNativeCapabilities(
-      await this.nativeRequest("walletProviderCapabilities", {
+    const operation = this.documentOperation(key, document);
+    const authority = await this.revalidateOperation(
+      operation,
+      context.sender,
+      origin
+    );
+    const rawCapabilities = await this.nativeRequest(
+      "walletProviderCapabilities",
+      {
         providerAbiVersion: WALLET_NATIVE_ABI_VERSION,
         authority
-      })
+      }
     );
+    const currentAuthority = await this.revalidateOperation(
+      operation,
+      context.sender,
+      origin
+    );
+    const capabilities = validateNativeCapabilities(rawCapabilities);
     if (
       capabilities.walletSession !== document.binding.walletSession ||
       capabilities.permissionGeneration !== document.binding.permissionGeneration ||
@@ -216,10 +235,20 @@ export class WalletProviderRouter {
       throw protocolError("staleContext", "wallet approval authority changed");
     }
     return Object.freeze({
-      ...authority,
-      walletSession: capabilities.walletSession,
-      permissionGeneration: capabilities.permissionGeneration
+      authority: Object.freeze({
+        ...currentAuthority,
+        walletSession: capabilities.walletSession,
+        permissionGeneration: capabilities.permissionGeneration
+      }),
+      operation
     });
+  }
+
+  async completeApproval(dispatch, response) {
+    if (!isRecord(dispatch) || !isRecord(dispatch.operation)) {
+      throw protocolError("staleContext", "approval dispatch context is unavailable");
+    }
+    return this.extractEvents(response, dispatch.operation);
   }
 
   async deliverNativeEvent(candidate) {
@@ -231,32 +260,89 @@ export class WalletProviderRouter {
       throw protocolError("invalidEvent", "native wallet event envelope is invalid");
     }
     const event = validateProviderEvent(candidate);
-    for (const document of this.documents.values()) {
+    for (const [key, document] of this.documents) {
       try {
         requireExpectedBinding(candidate.binding, document.binding);
-        const authority = await this.authorityForSender(
-          document.sender,
-          document.binding.origin
-        );
-        requireAuthorityBinding(document.binding, authority);
+        const operation = this.documentOperation(key, document);
+        await this.revalidateOperation(operation);
         await this.deliverEvent(document.sender, document.binding, event);
+        this.requireActiveOperation(operation);
       } catch {
         // Stale and unrelated documents cannot receive this native event.
       }
     }
   }
 
-  async extractEvents(response, sender, binding) {
+  async extractEvents(response, operation) {
+    await this.revalidateOperation(operation);
+    response = validateNativeResult(response);
     if (!isRecord(response) || !Array.isArray(response.events)) return response;
     if (response.events.length > 32) {
       throw protocolError("invalidEvent", "native wallet returned too many events");
     }
     const events = response.events.map(validateProviderEvent);
     for (const event of events) {
-      await this.deliverEvent(sender, binding, event);
+      await this.deliverEvent(operation.sender, operation.binding, event);
+      await this.revalidateOperation(operation);
     }
     const { events: _events, ...result } = response;
     return result;
+  }
+
+  documentOperation(key, document) {
+    return Object.freeze({
+      key,
+      authorityGeneration: document.authorityGeneration,
+      documentGeneration: document.documentGeneration,
+      binding: document.binding,
+      sender: document.sender
+    });
+  }
+
+  requireAuthorityGeneration(expected) {
+    if (expected !== this.authorityGeneration) {
+      throw protocolError(
+        "staleContext",
+        "provider authority changed while native work was pending"
+      );
+    }
+  }
+
+  requireActiveOperation(operation) {
+    if (!isRecord(operation)) {
+      throw protocolError("staleContext", "provider operation context is unavailable");
+    }
+    this.requireAuthorityGeneration(operation.authorityGeneration);
+    const current = this.documents.get(operation.key);
+    if (
+      !current ||
+      current.authorityGeneration !== operation.authorityGeneration ||
+      current.documentGeneration !== operation.documentGeneration
+    ) {
+      throw protocolError(
+        "staleContext",
+        "provider document authority changed while native work was pending"
+      );
+    }
+    requireExpectedBinding(operation.binding, current.binding);
+    return current;
+  }
+
+  async revalidateOperation(
+    operation,
+    sender = operation?.sender,
+    origin = operation?.binding?.origin
+  ) {
+    this.requireActiveOperation(operation);
+    const authority = await this.authorityForSender(sender, origin);
+    this.requireActiveOperation(operation);
+    requireAuthorityBinding(operation.binding, authority);
+    return authority;
+  }
+
+  nextDocumentGeneration() {
+    this.documentGeneration += 1n;
+    return this.documentGeneration;
   }
 
   pruneDocuments() {

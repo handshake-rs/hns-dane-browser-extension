@@ -23,7 +23,6 @@ import {
   isProviderBridgeMessage,
   protocolError,
   providerErrorPayload,
-  validateNativeResult,
   validatePageRequest
 } from "./wallet-provider-protocol.js";
 import { WalletProviderRouter } from "./wallet-provider-router.js";
@@ -1033,20 +1032,20 @@ async function walletApprovalDecision(rawApprovalId, rawDecision) {
       chrome.storage.session,
       approvalStorageKey(approvalId)
     );
-    const authority = await walletProviderRouter.revalidateApproval(context);
-    const result = validateNativeResult(
-      await walletProviderNativeRequest("walletProviderApprovalDecision", {
+    const dispatch = await walletProviderRouter.revalidateApproval(context);
+    const result = await walletProviderNativeRequest(
+      "walletProviderApprovalDecision",
+      {
         providerAbiVersion: 1,
         approvalId,
         decision,
-        authority,
+        authority: dispatch.authority,
         request: context.request
-      })
+      }
     );
-    const publicResult = await walletProviderRouter.extractEvents(
-      result,
-      context.sender,
-      context.binding
+    const publicResult = await walletProviderRouter.completeApproval(
+      dispatch,
+      result
     );
     if (decision === "approve") {
       context.resolveRequest(publicResult);
@@ -1448,11 +1447,20 @@ function synchronizeHeaders() {
     return Promise.reject(new Error("header sync requires a connected native runtime"));
   }
   const syncControlEpoch = syncRuntimeControl.controlEpoch;
+  walletProviderRouter.invalidateAuthority();
+  void invalidateAllWalletApprovals("headerMaintenanceStarted");
   setStatus({
     headerSyncInProgress: true,
     headerSyncError: null
   });
   headerSyncOperation = (async () => {
+    const maintenanceStarted = await withNavigationReceiptStore((store) =>
+      store.beginMaintenance(publicStatus)
+    );
+    requireHeaderMaintenanceControl(syncRuntimeControl);
+    if (!maintenanceStarted) {
+      throw new Error("header maintenance could not invalidate navigation authority");
+    }
     await recordHeaderSyncAttempt(Date.now());
     requireHeaderMaintenanceControl(syncRuntimeControl);
     let syncError = null;

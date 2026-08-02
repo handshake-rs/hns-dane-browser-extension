@@ -259,9 +259,13 @@ closed, `handshakeWalletProvider` is false, and provider injection cannot occur.
 The browser's DANE runtime is independent of this unavailable optional join.
 
 Repeated provider initialization under an identical authority preserves replay
-and rate state. A generation transition replaces it. A stale result is returned
-without automatic retry because a mutating wallet operation may already have
-executed.
+and rate state. A generation transition replaces it. Header maintenance rotates
+an internal router-authority generation, clears document and approval state,
+and marks navigation authority maintenance-pending before native sync. Native
+capability, request, and approval completions are followed by fresh authority
+derivation before injection, return, or event dispatch. A stale result is
+returned without automatic retry because a mutating wallet operation may
+already have executed.
 
 ## Experimental relay boundary
 
