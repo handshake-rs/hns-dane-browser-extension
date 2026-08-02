@@ -16,6 +16,7 @@ export class NativeClient {
     this.runtimeSession = null;
     this.lastEventSequence = 0;
     this.disconnectHandlers = new Set();
+    this.eventHandlers = new Set();
     this.lifecycleEpoch = 0;
   }
 
@@ -31,6 +32,11 @@ export class NativeClient {
   onDisconnect(handler) {
     this.disconnectHandlers.add(handler);
     return () => this.disconnectHandlers.delete(handler);
+  }
+
+  onEvent(handler) {
+    this.eventHandlers.add(handler);
+    return () => this.eventHandlers.delete(handler);
   }
 
   currentConnectionEpoch() {
@@ -102,7 +108,6 @@ export class NativeClient {
     if (
       !isRecord(message) ||
       message.schemaVersion !== SCHEMA_VERSION ||
-      typeof message.requestId !== "string" ||
       typeof message.runtimeSession !== "string" ||
       !Number.isSafeInteger(message.eventSequence) ||
       message.eventSequence < 1
@@ -119,6 +124,15 @@ export class NativeClient {
       this.runtimeSession = message.runtimeSession;
     }
     this.lastEventSequence = message.eventSequence;
+
+    if (message.type === "walletProviderEvent") {
+      this.notifyEvent(message);
+      return;
+    }
+    if (typeof message.requestId !== "string") {
+      this.disconnectPort(port, true);
+      return;
+    }
 
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
@@ -150,6 +164,16 @@ export class NativeClient {
         handler(disconnectedEpoch);
       } catch {
         // Disconnect observers are isolated from the protocol lifecycle.
+      }
+    }
+  }
+
+  notifyEvent(event) {
+    for (const handler of this.eventHandlers) {
+      try {
+        handler(event);
+      } catch {
+        // Native event observers are isolated from the request lifecycle.
       }
     }
   }

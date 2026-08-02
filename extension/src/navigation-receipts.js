@@ -379,6 +379,67 @@ export class NavigationReceiptStore {
     };
   }
 
+  providerAuthorityForDocument(tabId, documentId, origin, runtimeStatus, documentUrl = null) {
+    if (
+      !this.ensureRuntime(runtimeStatus) ||
+      runtimeStatus?.state !== "active" ||
+      runtimeStatus?.proxyActive !== true ||
+      this.maintenancePending
+    ) {
+      return null;
+    }
+    const validTab = validTabId(tabId);
+    const validDocument = boundedIdentifier(documentId);
+    if (validTab == null || !validDocument || typeof origin !== "string") {
+      return null;
+    }
+    const tab = this.tabs[String(validTab)];
+    const document = this.documents[validDocument];
+    const requestedUrl =
+      documentUrl == null ? null : canonicalNavigationUrl(documentUrl);
+    if (
+      tab?.documentId !== validDocument ||
+      !document ||
+      document.tabId !== validTab ||
+      document.origin !== origin ||
+      (documentUrl != null && (!requestedUrl || document.url !== requestedUrl.url)) ||
+      document.scheme !== "https:" ||
+      document.restored ||
+      document.receiptEpoch !== this.maintenanceEpoch
+    ) {
+      return null;
+    }
+    const receipt = currentSecurityResult(document.receipt, this.runtime);
+    const connectDecisionReceipt = currentConnectReceipt(
+      document.connectDecisionReceipt,
+      this.runtimeAtEpoch(document.receiptEpoch),
+      document
+    );
+    const decision = receipt ?? connectDecisionReceipt;
+    if (
+      !decision ||
+      decision.canonicalStatus !== "available" ||
+      !["hns", "icann"].includes(decision.selectedNamespace) ||
+      decision.host !== document.host ||
+      decision.runtimeSession !== this.runtime.runtimeSession ||
+      decision.runtimeGeneration !== this.runtime.runtimeGeneration ||
+      decision.policyGeneration !== this.runtime.policyGeneration
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      origin: document.origin,
+      namespace: decision.selectedNamespace,
+      network: decision.network,
+      browserAuthoritySession: decision.runtimeSession,
+      runtimeGeneration: decision.runtimeGeneration,
+      policyGeneration: decision.policyGeneration,
+      navigationGeneration: document.sequence,
+      documentId: document.documentId,
+      decisionFingerprint: decision.decisionFingerprint ?? null
+    });
+  }
+
   snapshot() {
     return {
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,

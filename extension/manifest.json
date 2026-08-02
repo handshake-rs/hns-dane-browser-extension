@@ -15,6 +15,7 @@
     "alarms",
     "nativeMessaging",
     "proxy",
+    "scripting",
     "storage",
     "webNavigation",
     "webRequest",
@@ -27,6 +28,18 @@
     "service_worker": "src/service-worker.js",
     "type": "module"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*"
+      ],
+      "js": [
+        "src/provider-content-bridge.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
   "action": {
     "default_title": "HNS DANE Browser",
     "default_popup": "src/popup.html",

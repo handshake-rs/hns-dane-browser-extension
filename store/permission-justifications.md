@@ -25,6 +25,11 @@ the native Rust host, not executable extension code.
   transitions replace it with a confirmed fixed blocking PAC; startup,
   failure, and retry paths never clear proxy control to system or direct
   routing.
+- `scripting`: inject the packaged wallet-provider bootstrap into the exact
+  HTTPS main-frame document only after the native host returns a current,
+  generation-bound browser-authority decision and wallet ABI capability. No
+  remote or page-supplied code is executed, and unavailable authority or ABI
+  leaves the provider absent.
 - `storage`: retain user settings locally and keep bounded session-only
   navigation/security receipts needed to bind native results to the exact
   active document.

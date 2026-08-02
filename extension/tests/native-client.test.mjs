@@ -183,6 +183,27 @@ test("native client disconnects the current port on an invalid message", async (
   assert.equal(disconnects, 1);
 });
 
+test("native client delivers versioned unsolicited wallet events without a request", () => {
+  const native = fakeNativePort();
+  const client = new NativeClient(native.chrome, "com.example.native");
+  const events = [];
+  client.onEvent((event) => events.push(event));
+  client.connect();
+  native.ports[0].emitMessage({
+    schemaVersion: 1,
+    type: "walletProviderEvent",
+    runtimeSession: "session-a",
+    eventSequence: 1,
+    providerAbiVersion: 1,
+    binding: { documentId: "document-a" },
+    event: "walletLocked",
+    payload: null
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, "walletLocked");
+  assert.equal(native.ports[0].disconnectCalls, 0);
+});
+
 function fakeNativePort() {
   const ports = [];
   return {

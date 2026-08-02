@@ -36,7 +36,7 @@ Generated input SHA-256:
   release/license-texts/CC0-1.0.txt = 8c5bfd05728b98356d25742d60344c8f39a82faacf5758451c2628b0f9f9773f
   rust/Cargo.toml = b40a14eba3db528995328c03eeda4f5bb48e995417e59aa9f6795be9e4fd2876
   rust/Cargo.lock = 675cb3a359513546119833491417aa555496e8b3173f49ba4cd0de661a9317a0
-  extension/manifest.json = 2b575bdb7f354028c12afb2d786eed9c9e7944a037b306f02367ad7faf73c601
+  extension/manifest.json = 1fb088c2cf45591c15df625f2bd92ec1baefd012d051cb9162322aa6ebd37020
   package.json = defe258f6bfff1936bc04dc0fed58840b90e3212d8426abc150e65efb7b01686
   rust/crates/hns-browser-setup/Cargo.toml = 5a610d1b9c4f000fa1beca13dcb715c2cba23f8f29222c40b66a691bf0d2b9d1
   rust/crates/hns-cache/Cargo.toml = 60eb2e666fdd49dfd32c115c2a3bc3d29080ba92b83fc4d297a3d41d9254621a

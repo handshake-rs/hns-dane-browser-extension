@@ -20,6 +20,20 @@ import {
   registerNavigationLifecycle
 } from "./navigation-receipts.js";
 import {
+  isProviderBridgeMessage,
+  protocolError,
+  providerErrorPayload,
+  validateNativeResult,
+  validatePageRequest
+} from "./wallet-provider-protocol.js";
+import { WalletProviderRouter } from "./wallet-provider-router.js";
+import {
+  approvalStorageKey,
+  validateApprovalDecision,
+  validateApprovalId,
+  validateApprovalPrompt
+} from "./wallet-approval.js";
+import {
   currentConnectSecurityDecision,
   currentSecurityResult
 } from "./security-result.js";
@@ -55,7 +69,16 @@ const HEADER_SYNC_URGENT_RETRY_WINDOW_KEY =
   "headerSyncUrgentRetryWindow";
 const NAVIGATION_RECEIPTS_STORAGE_KEY = "navigationSecurityReceipts";
 const MAX_NATIVE_CONNECT_SECURITY_DECISIONS = 32;
+const WALLET_APPROVAL_CLEANUP_ALARM = "wallet-approval-cleanup";
+const WALLET_APPROVAL_STORAGE_PREFIX = "walletApproval:";
+const MAX_PENDING_WALLET_APPROVALS = 8;
+const MAX_PENDING_WALLET_APPROVALS_PER_ORIGIN = 2;
 const client = new NativeClient(chrome, NATIVE_HOST);
+const walletProviderRouter = new WalletProviderRouter({
+  nativeRequest: walletProviderNativeRequest,
+  authorityForSender: walletProviderAuthority,
+  deliverEvent: deliverWalletProviderEvent
+});
 let controlEpoch = 0;
 const pacController = new SerializedMandatoryPacController(
   (pacScript) => setMandatoryPac(pacScript),
@@ -77,6 +100,9 @@ let retainedHeaderSyncUrgentRetryWindow = null;
 let retainedHeaderSyncUrgentRetryWindowLoaded = false;
 let navigationReceiptStore = null;
 let navigationReceiptQueue = Promise.resolve();
+const walletApprovalContexts = new Map();
+const walletApprovalClaims = new Set();
+const walletApprovalWindows = new Map();
 let credentials = null;
 let publicStatus = {
   state: "starting",
@@ -96,7 +122,14 @@ let publicStatus = {
 };
 
 client.onDisconnect((disconnectedConnectionEpoch) => {
+  walletProviderRouter.forgetAll();
+  void invalidateAllWalletApprovals("walletDisconnected");
   void handleNativeDisconnect(disconnectedConnectionEpoch);
+});
+
+client.onEvent((event) => {
+  if (event?.type !== "walletProviderEvent") return;
+  void walletProviderRouter.deliverNativeEvent(event).catch(() => {});
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -139,12 +172,27 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     // This path is deliberately independent from headerMaintenanceOperation
     // and headerSyncOperation so a hung native sync cannot outlive evidence.
     void enforceHeaderEvidenceExpiry().catch(() => {});
+  } else if (alarm.name === WALLET_APPROVAL_CLEANUP_ALARM) {
+    void cleanupWalletApprovals().catch(() => {});
   }
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  const approvalId = walletApprovalWindows.get(windowId);
+  if (approvalId) void rejectClosedWalletApproval(approvalId);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !message || typeof message.type !== "string") {
     return false;
+  }
+  if (isProviderBridgeMessage(message)) {
+    void handleWalletProviderMessage(message, sender)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) =>
+        sendResponse({ ok: false, error: providerErrorPayload(error) })
+      );
+    return true;
   }
   void handleUiMessage(message)
     .then((result) => sendResponse({ ok: true, result }))
@@ -195,6 +243,7 @@ registerNavigationLifecycle(chrome, {
     void withNavigationReceiptStore((store) => store.failRequest(details));
   },
   committed(details) {
+    invalidateWalletProviderDocument(details, "navigationChanged");
     void withNavigationReceiptStore((store) =>
       store.commitDocument(
         details,
@@ -206,15 +255,25 @@ registerNavigationLifecycle(chrome, {
     );
   },
   historyUpdated(details) {
-    void withNavigationReceiptStore((store) => store.updateDocumentUrl(details));
+    invalidateWalletProviderDocument(details, "navigationChanged");
+    void withNavigationReceiptStore((store) => store.updateDocumentUrl(details))
+      .then((updated) => {
+        if (updated) return notifyWalletProviderBootstrap(details);
+        return undefined;
+      });
   },
   navigationError(details) {
     void withNavigationReceiptStore((store) => store.failNavigation(details));
   },
   tabRemoved(tabId) {
+    walletProviderRouter.forgetTab(tabId);
+    void invalidateWalletApprovalsForTab(tabId, null, "tabClosed");
     void withNavigationReceiptStore((store) => store.removeTab(tabId));
   },
   tabReplaced(addedTabId, removedTabId) {
+    walletProviderRouter.forgetTab(removedTabId);
+    walletProviderRouter.forgetTab(addedTabId);
+    void invalidateWalletApprovalsForTab(removedTabId, null, "tabReplaced");
     void withNavigationReceiptStore((store) =>
       store.replaceTab(addedTabId, removedTabId)
     );
@@ -222,6 +281,7 @@ registerNavigationLifecycle(chrome, {
 });
 
 chrome.alarms.create(HEALTH_ALARM, { periodInMinutes: HEALTH_PERIOD_MINUTES });
+chrome.alarms.create(WALLET_APPROVAL_CLEANUP_ALARM, { periodInMinutes: 1 });
 void chrome.alarms.clear(LEGACY_HEADER_SYNC_ALARM);
 void recover();
 
@@ -808,8 +868,368 @@ async function handleUiMessage(message) {
     }
     case "diagnostics":
       return client.request("diagnostics");
+    case "walletApprovalGet":
+      return walletApprovalGet(message.approvalId);
+    case "walletApprovalDecision":
+      return walletApprovalDecision(message.approvalId, message.decision);
     default:
       throw new Error("unsupported extension message");
+  }
+}
+
+async function handleWalletProviderMessage(message, sender) {
+  if (message.type === "walletProviderInitialize") {
+    const initialized = await walletProviderRouter.initialize(message, sender);
+    await chromeCall(
+      chrome.scripting.executeScript,
+      chrome.scripting,
+      {
+        target: {
+          tabId: sender.tab.id,
+          documentIds: [sender.documentId]
+        },
+        files: ["src/provider-inpage.js"],
+        world: "MAIN",
+        injectImmediately: true
+      }
+    );
+    return initialized;
+  }
+  if (message.type === "walletProviderRequest") {
+    const result = await walletProviderRouter.request(message, sender);
+    return registerWalletApproval(result, message, sender);
+  }
+  throw protocolError("unsupportedMessage", "unsupported wallet provider bridge message");
+}
+
+async function registerWalletApproval(result, message, sender) {
+  if (!result || typeof result !== "object" || !result.approvalRequired) {
+    return result;
+  }
+  const request = validatePageRequest(message.request);
+  const approval = validateApprovalPrompt(
+    result.approvalRequired,
+    message.binding,
+    request
+  );
+  if (
+    walletApprovalContexts.size >= MAX_PENDING_WALLET_APPROVALS ||
+    [...walletApprovalContexts.values()].filter(
+      (context) => context.prompt.origin === approval.origin
+    ).length >= MAX_PENDING_WALLET_APPROVALS_PER_ORIGIN
+  ) {
+    throw protocolError("rateLimited", "too many wallet approvals are pending");
+  }
+  const storageKey = approvalStorageKey(approval.approvalId);
+  if (walletApprovalContexts.has(approval.approvalId)) {
+    throw protocolError("invalidApproval", "wallet approval identifier was reused");
+  }
+  const existing = await chromeCall(
+    chrome.storage.session.get,
+    chrome.storage.session,
+    storageKey
+  );
+  if (existing?.[storageKey]) {
+    throw protocolError("invalidApproval", "wallet approval identifier was reused");
+  }
+  let resolveRequest;
+  let rejectRequest;
+  const completion = new Promise((resolve, reject) => {
+    resolveRequest = resolve;
+    rejectRequest = reject;
+  });
+  const context = {
+    prompt: approval,
+    request,
+    binding: message.binding,
+    sender: publicWalletProviderSender(sender),
+    resolveRequest,
+    rejectRequest,
+    windowId: null
+  };
+  walletApprovalContexts.set(approval.approvalId, context);
+  try {
+    await chromeCall(
+      chrome.storage.session.set,
+      chrome.storage.session,
+      { [storageKey]: approval }
+    );
+    const approvalWindow = await chromeCall(
+      chrome.windows.create,
+      chrome.windows,
+      {
+        url: chrome.runtime.getURL(
+          `src/wallet-approval.html?id=${encodeURIComponent(approval.approvalId)}`
+        ),
+        type: "popup",
+        width: 460,
+        height: 650,
+        focused: true
+      }
+    );
+    if (Number.isSafeInteger(approvalWindow?.id)) {
+      context.windowId = approvalWindow.id;
+      walletApprovalWindows.set(approvalWindow.id, approval.approvalId);
+    }
+  } catch (error) {
+    walletApprovalContexts.delete(approval.approvalId);
+    await chromeCall(
+      chrome.storage.session.remove,
+      chrome.storage.session,
+      storageKey
+    );
+    throw error;
+  }
+  return completion;
+}
+
+async function walletApprovalGet(rawApprovalId) {
+  const approvalId = validateApprovalId(rawApprovalId);
+  const context = walletApprovalContexts.get(approvalId);
+  const storageKey = approvalStorageKey(approvalId);
+  const stored = await chromeCall(
+    chrome.storage.session.get,
+    chrome.storage.session,
+    storageKey
+  );
+  const approval = stored?.[storageKey];
+  if (
+    !context ||
+    !approval ||
+    approval.approvalId !== context.prompt.approvalId ||
+    approval.origin !== context.prompt.origin ||
+    approval.method !== context.prompt.method ||
+    approval.expiresAtUnixMs !== context.prompt.expiresAtUnixMs ||
+    approval.expiresAtUnixMs <= Date.now()
+  ) {
+    if (context) expireWalletApproval(approvalId, "approvalExpired");
+    await chromeCall(
+      chrome.storage.session.remove,
+      chrome.storage.session,
+      storageKey
+    );
+    return null;
+  }
+  return context.prompt;
+}
+
+async function walletApprovalDecision(rawApprovalId, rawDecision) {
+  const approvalId = validateApprovalId(rawApprovalId);
+  const decision = validateApprovalDecision(rawDecision);
+  if (walletApprovalClaims.has(approvalId)) {
+    throw protocolError("approvalConsumed", "wallet approval is already being decided");
+  }
+  walletApprovalClaims.add(approvalId);
+  let context = null;
+  try {
+    const approval = await walletApprovalGet(approvalId);
+    if (!approval) {
+      throw protocolError("approvalExpired", "wallet approval is unavailable or expired");
+    }
+    context = walletApprovalContexts.get(approvalId);
+    consumeWalletApprovalContext(approvalId);
+    await chromeCall(
+      chrome.storage.session.remove,
+      chrome.storage.session,
+      approvalStorageKey(approvalId)
+    );
+    const authority = await walletProviderRouter.revalidateApproval(context);
+    const result = validateNativeResult(
+      await walletProviderNativeRequest("walletProviderApprovalDecision", {
+        providerAbiVersion: 1,
+        approvalId,
+        decision,
+        authority,
+        request: context.request
+      })
+    );
+    const publicResult = await walletProviderRouter.extractEvents(
+      result,
+      context.sender,
+      context.binding
+    );
+    if (decision === "approve") {
+      context.resolveRequest(publicResult);
+    } else {
+      context.rejectRequest(protocolError("userRejected", "wallet request was rejected"));
+    }
+    return { completed: true, decision };
+  } catch (error) {
+    context?.rejectRequest(error);
+    throw error;
+  } finally {
+    walletApprovalClaims.delete(approvalId);
+  }
+}
+
+function consumeWalletApprovalContext(approvalId) {
+  const context = walletApprovalContexts.get(approvalId) ?? null;
+  walletApprovalContexts.delete(approvalId);
+  if (Number.isSafeInteger(context?.windowId)) {
+    walletApprovalWindows.delete(context.windowId);
+  }
+  return context;
+}
+
+function expireWalletApproval(approvalId, code) {
+  const context = consumeWalletApprovalContext(approvalId);
+  context?.rejectRequest(
+    protocolError(code, "wallet approval is unavailable or no longer current")
+  );
+}
+
+async function rejectClosedWalletApproval(approvalId) {
+  if (walletApprovalClaims.has(approvalId)) return;
+  const context = consumeWalletApprovalContext(approvalId);
+  if (!context) return;
+  await chromeCall(
+    chrome.storage.session.remove,
+    chrome.storage.session,
+    approvalStorageKey(approvalId)
+  ).catch(() => {});
+  context.rejectRequest(protocolError("userRejected", "wallet approval window was closed"));
+  await walletProviderNativeRequest("walletProviderApprovalDecision", {
+    providerAbiVersion: 1,
+    approvalId,
+    decision: "reject"
+  }).catch(() => {});
+}
+
+async function cleanupWalletApprovals() {
+  const now = Date.now();
+  const removals = [];
+  for (const [approvalId, context] of walletApprovalContexts) {
+    if (context.prompt.expiresAtUnixMs <= now) {
+      expireWalletApproval(approvalId, "approvalExpired");
+      removals.push(approvalStorageKey(approvalId));
+    }
+  }
+  const stored = await chromeCall(
+    chrome.storage.session.get,
+    chrome.storage.session,
+    null
+  );
+  for (const key of Object.keys(stored ?? {})) {
+    if (!key.startsWith(WALLET_APPROVAL_STORAGE_PREFIX)) continue;
+    const approvalId = key.slice(WALLET_APPROVAL_STORAGE_PREFIX.length);
+    if (!walletApprovalContexts.has(approvalId)) removals.push(key);
+  }
+  if (removals.length > 0) {
+    await chromeCall(
+      chrome.storage.session.remove,
+      chrome.storage.session,
+      [...new Set(removals)]
+    );
+  }
+}
+
+async function invalidateAllWalletApprovals(code) {
+  const approvalIds = [...walletApprovalContexts.keys()];
+  for (const approvalId of approvalIds) expireWalletApproval(approvalId, code);
+  if (approvalIds.length > 0) {
+    await chromeCall(
+      chrome.storage.session.remove,
+      chrome.storage.session,
+      approvalIds.map(approvalStorageKey)
+    ).catch(() => {});
+  }
+}
+
+async function invalidateWalletApprovalsForTab(tabId, documentId, code) {
+  const approvalIds = [];
+  for (const [approvalId, context] of walletApprovalContexts) {
+    if (
+      context.sender.tab.id === tabId &&
+      (documentId == null || context.sender.documentId === documentId)
+    ) {
+      approvalIds.push(approvalId);
+    }
+  }
+  for (const approvalId of approvalIds) expireWalletApproval(approvalId, code);
+  if (approvalIds.length > 0) {
+    await chromeCall(
+      chrome.storage.session.remove,
+      chrome.storage.session,
+      approvalIds.map(approvalStorageKey)
+    ).catch(() => {});
+  }
+}
+
+function publicWalletProviderSender(sender) {
+  return Object.freeze({
+    id: sender.id,
+    origin: sender.origin,
+    url: sender.url,
+    frameId: sender.frameId,
+    documentId: sender.documentId,
+    tab: Object.freeze({ id: sender.tab.id })
+  });
+}
+
+async function walletProviderAuthority(sender, origin) {
+  const status = await refreshNativeStatus();
+  const authority = await withNavigationReceiptStore(
+    (store) =>
+      store.providerAuthorityForDocument(
+        sender.tab.id,
+        sender.documentId,
+        origin,
+        status,
+        sender.url
+      ),
+    false
+  );
+  if (!authority) {
+    throw protocolError(
+      "browserAuthorityDenied",
+      "the browser trust layer did not approve this exact document origin"
+    );
+  }
+  return authority;
+}
+
+async function walletProviderNativeRequest(command, fields) {
+  try {
+    return await client.request(command, fields);
+  } catch (error) {
+    if (command === "walletProviderCapabilities") {
+      throw protocolError(
+        "walletUnavailable",
+        "the installed native host does not expose wallet ABI version 1"
+      );
+    }
+    const code = [
+      "staleContext",
+      "permissionGenerationChanged",
+      "walletSessionChanged",
+      "approvalExpired",
+      "approvalConsumed"
+    ].includes(error?.code)
+      ? error.code
+      : typeof error?.code === "string"
+        ? `native:${error.code}`
+        : "nativeUnavailable";
+    throw protocolError(code, "the native wallet rejected the typed provider request");
+  }
+}
+
+async function deliverWalletProviderEvent(sender, binding, event) {
+  try {
+    await chromeCall(
+      chrome.tabs.sendMessage,
+      chrome.tabs,
+      sender.tab.id,
+      {
+        type: "walletProviderEvent",
+        schemaVersion: 1,
+        binding,
+        event: event.event,
+        payload: event.payload
+      },
+      { documentId: sender.documentId }
+    );
+  } catch {
+    // The exact document can disappear between native completion and delivery.
   }
 }
 
@@ -1490,6 +1910,8 @@ function beginControlGeneration() {
   if (controlEpoch >= Number.MAX_SAFE_INTEGER) {
     throw new Error("proxy control generation is exhausted");
   }
+  walletProviderRouter.forgetAll();
+  void invalidateAllWalletApprovals("runtimeGenerationChanged");
   controlEpoch += 1;
   return controlEpoch;
 }
@@ -1666,9 +2088,61 @@ function storageRemove(keys) {
 
 async function captureCompletedMainFrame(details) {
   const status = await refreshNativeStatus();
-  await withNavigationReceiptStore((store) =>
+  const completed = await withNavigationReceiptStore((store) =>
     store.completeRequest(details, status)
   );
+  if (completed) await notifyWalletProviderBootstrap(details);
+}
+
+function invalidateWalletProviderDocument(details, reason) {
+  if (
+    !Number.isSafeInteger(details?.tabId) ||
+    typeof details?.documentId !== "string"
+  ) {
+    return;
+  }
+  walletProviderRouter.forgetDocument(details.tabId, details.documentId);
+  void invalidateWalletApprovalsForTab(
+    details.tabId,
+    details.documentId,
+    reason
+  );
+  void chromeCall(
+    chrome.tabs.sendMessage,
+    chrome.tabs,
+    details.tabId,
+    {
+      type: "walletProviderInvalidate",
+      schemaVersion: 1,
+      reason
+    },
+    { documentId: details.documentId }
+  ).catch(() => {});
+}
+
+async function notifyWalletProviderBootstrap(details) {
+  if (!Number.isSafeInteger(details?.tabId)) return;
+  let documentId =
+    typeof details.documentId === "string" ? details.documentId : null;
+  if (!documentId) {
+    const frame = await chromeCall(
+      chrome.webNavigation.getFrame,
+      chrome.webNavigation,
+      { tabId: details.tabId, frameId: 0 }
+    ).catch(() => null);
+    documentId = typeof frame?.documentId === "string" ? frame.documentId : null;
+  }
+  if (!documentId) return;
+  await chromeCall(
+    chrome.tabs.sendMessage,
+    chrome.tabs,
+    details.tabId,
+    {
+      type: "walletProviderBootstrapReady",
+      schemaVersion: 1
+    },
+    { documentId }
+  ).catch(() => {});
 }
 
 async function statusForTab(status, tabId) {

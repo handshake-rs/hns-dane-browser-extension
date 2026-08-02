@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wallet approval</title>
+    <link rel="stylesheet" href="wallet-approval.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">HNS DANE Browser Wallet</p>
+      <h1 id="title">Review request</h1>
+      <p id="origin" class="origin"></p>
+      <p id="status" role="status">Loading the request…</p>
+      <dl id="summary"></dl>
+      <p class="warning">
+        Confirm the exact asset, base-unit amount, recipient, fee, chain,
+        confirmation policy, price round, and refund timeout where shown.
+      </p>
+      <div class="actions">
+        <button id="reject" type="button">Reject</button>
+        <button id="approve" class="primary" type="button">Approve</button>
+      </div>
+    </main>
+    <script type="module" src="wallet-approval-ui.js"></script>
+  </body>
+</html>

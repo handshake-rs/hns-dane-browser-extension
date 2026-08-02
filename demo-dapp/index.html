@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>Handshake wallet provider demo</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">Non-custodial static dapp</p>
+        <h1>Handshake wallet provider demo</h1>
+        <p class="lede">
+          Exercise HNS, Shakedex, and native HNS/BTC or HNS/ETH settlement
+          without giving this page keys or a custodial backend.
+        </p>
+      </div>
+      <div class="connection">
+        <span id="provider-state" class="state">Looking for provider…</span>
+        <button id="connect" type="button" disabled>Connect wallet</button>
+      </div>
+    </header>
+
+    <main>
+      <section>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Read-only overview</p>
+            <h2>Accounts and balances</h2>
+          </div>
+          <button id="refresh-overview" type="button" disabled>Refresh</button>
+        </div>
+        <div id="overview" class="cards" aria-live="polite"></div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Handshake names</p>
+            <h2>Known names and Shakedex</h2>
+          </div>
+          <button id="refresh-names" type="button" disabled>Load names & offers</button>
+        </div>
+        <div class="split">
+          <pre id="names-output">No wallet data requested.</pre>
+          <pre id="offers-output">No market data requested.</pre>
+        </div>
+        <div class="forms">
+          <label>Name <input id="listing-name" autocomplete="off" placeholder="example"></label>
+          <label>Price in HNS base units <input id="listing-price" inputmode="numeric" value="1000000"></label>
+          <button id="create-listing" type="button" disabled>Create fixed-price offer</button>
+          <label>Offer ID <input id="offer-id" autocomplete="off" placeholder="offer identifier"></label>
+          <button id="accept-listing" type="button" disabled>Accept offer</button>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Denuo market board</p>
+            <h2>HNS/BTC and HNS/ETH intents</h2>
+          </div>
+          <button id="refresh-intents" type="button" disabled>Load intents</button>
+        </div>
+        <div class="split">
+          <div><h3>HNS / BTC</h3><pre id="btc-intents">No intents requested.</pre></div>
+          <div><h3>HNS / ETH</h3><pre id="eth-intents">No intents requested.</pre></div>
+        </div>
+        <div class="forms">
+          <label>Pair
+            <select id="intent-pair"><option>HNS/BTC</option><option>HNS/ETH</option></select>
+          </label>
+          <label>HNS base units <input id="intent-base" inputmode="numeric" value="1000000"></label>
+          <label>Quote base units <input id="intent-quote" inputmode="numeric" value="10000"></label>
+          <button id="publish-intent" type="button" disabled>Publish market intent</button>
+          <label>Intent ID <input id="intent-id" autocomplete="off" placeholder="market intent identifier"></label>
+          <button id="request-match" type="button" disabled>Request match</button>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Atomic settlement</p>
+            <h2>Approve, monitor, or refund a swap</h2>
+          </div>
+        </div>
+        <div class="forms">
+          <label>Fill grant ID <input id="fill-id" autocomplete="off" placeholder="fill grant identifier"></label>
+          <button id="accept-fill" type="button" disabled>Approve match</button>
+          <label>Swap session ID <input id="session-id" autocomplete="off" placeholder="swap session identifier"></label>
+          <button id="monitor-swap" type="button" disabled>Monitor swap</button>
+          <button id="refund-swap" class="danger" type="button" disabled>Request refund</button>
+        </div>
+        <pre id="swap-output">No swap selected.</pre>
+      </section>
+
+      <section>
+        <p class="eyebrow">Local diagnostics</p>
+        <h2>Provider event log</h2>
+        <p>This log stays in this page and is capped at 40 public provider events.</p>
+        <pre id="event-log">Waiting for discovery.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
