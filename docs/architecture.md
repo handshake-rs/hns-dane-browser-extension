@@ -234,6 +234,35 @@ runtime fail-closed policy. The extension still requires the native host's
 current session, policy generation, CA marker, and checked status on every
 active runtime.
 
+## Wallet ABI boundary
+
+The wallet provider remains subordinate to the browser's namespace and TLS
+authority. The extension's tab, document, origin, and generation values are
+lookup candidates only; they cannot authenticate a native wallet operation.
+Dispatch requires an opaque authority context produced by the browser engine,
+plus exact wallet ABI, framed-service protocol, provider-schema, capability,
+wallet-session, permission-generation, and approval-generation agreement.
+
+The native host has source-only discovery for an independently released wallet
+service under `data/wallet-abi-v1`. It performs bounded no-follow, handle-based
+Unix ownership, metadata, contract, and SHA-256 local-integrity checks. It does
+not search `PATH`, load a dynamic library, copy sibling wallet crates into the
+build, or execute the discovered file. Windows rejects discovery until a
+reviewed ownership/ACL check exists. A manifest digest is not signer
+authenticity; a future launcher needs a pinned signed release and must execute
+the retained checked handle or immediately reverify it.
+
+The current wallet repository exposes a Rust JSON-frame library/trait, not a
+service executable, and the current engine exposes no consumable opaque wallet
+authority context. Consequently all three parsed wallet command envelopes fail
+closed, `handshakeWalletProvider` is false, and provider injection cannot occur.
+The browser's DANE runtime is independent of this unavailable optional join.
+
+Repeated provider initialization under an identical authority preserves replay
+and rate state. A generation transition replaces it. A stale result is returned
+without automatic retry because a mutating wallet operation may already have
+executed.
+
 ## Experimental relay boundary
 
 The browser can consume the private HNS P2P DNS-relay transport only after an

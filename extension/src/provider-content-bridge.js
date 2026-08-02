@@ -150,16 +150,6 @@
         ].includes(response.error?.code)
       ) {
         binding = null;
-        await initialize();
-        if (binding) {
-          response = await sendRuntimeMessage({
-            type: "walletProviderRequest",
-            schemaVersion: SCHEMA_VERSION,
-            origin: location.origin,
-            binding,
-            request
-          });
-        }
       }
       postToPage({
         kind: "response",

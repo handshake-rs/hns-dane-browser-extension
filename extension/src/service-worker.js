@@ -1193,9 +1193,28 @@ async function walletProviderNativeRequest(command, fields) {
     return await client.request(command, fields);
   } catch (error) {
     if (command === "walletProviderCapabilities") {
+      const unavailableCode = [
+        "walletArtifactMissing",
+        "walletArtifactPlatformUnsupported",
+        "walletArtifactDirectoryUnsafe",
+        "walletArtifactManifestUnsafe",
+        "walletArtifactManifestSize",
+        "walletArtifactManifestInvalid",
+        "walletArtifactContractMismatch",
+        "walletArtifactUnsafe",
+        "walletArtifactSize",
+        "walletArtifactDigestMismatch",
+        "walletArtifactUnreadable",
+        "walletArtifactAuthenticityUnavailable",
+        "walletAbiVersionMismatch",
+        "walletServiceTransportUnavailable",
+        "providerAuthorityUnavailable"
+      ].includes(error?.code)
+        ? error.code
+        : "walletUnavailable";
       throw protocolError(
-        "walletUnavailable",
-        "the installed native host does not expose wallet ABI version 1"
+        unavailableCode,
+        "the independently released wallet ABI or browser-authority join is unavailable"
       );
     }
     const code = [

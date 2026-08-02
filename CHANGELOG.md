@@ -19,6 +19,22 @@ All notable changes to this project will be documented in this file.
   ownership-checked external-extension registrations and Chromium launch
   wrappers so removing the extension remains persistent across browser
   restarts.
+- Add the source-only Chromium wallet-provider ABI v1 boundary: strict typed
+  command envelopes, exact native capability validation, HTTPS-only document
+  routing, generation-bound replay state, and explicit unavailable diagnostics
+  for the independently released wallet service join.
+
+### Security
+
+- Keep wallet injection fail-closed while the browser engine lacks a consumable
+  opaque provider-authority context and no signed canonical wallet service
+  executable/transport exists. Caller-supplied authority-shaped fields are not
+  authentication, and stale page requests are never retried automatically.
+- Discover optional Unix wallet adapter staging through current-user-owned,
+  no-follow opened handles with bounded exact manifests, duplicate/unknown
+  capability rejection, single-link file checks, and same-handle local-integrity
+  hashing. Windows remains unavailable pending reviewed ACL checks; a manifest
+  digest is not treated as publisher authenticity and no artifact is launched.
 
 ## 0.5.5 - 2026-07-29
 

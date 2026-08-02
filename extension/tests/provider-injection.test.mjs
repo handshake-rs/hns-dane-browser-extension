@@ -48,4 +48,10 @@ test("isolated bridge binds messages to the same window and exact origin", () =>
   assert.match(bridge, /sameBinding\(message\.binding, binding\)/);
   assert.match(bridge, /pending\.size >= MAX_PENDING/);
   assert.match(bridge, /message\.type === "walletProviderInvalidate"/);
+  assert.match(bridge, /binding = null;\s*}\s*postToPage\(/);
+  assert.doesNotMatch(
+    bridge,
+    /staleContext[\s\S]{0,300}await initialize\(\)/,
+    "a stale response must be returned without retrying a possibly-mutating request"
+  );
 });

@@ -170,6 +170,31 @@ loss, proxy rotation, or runtime replacement revokes older work and status.
 Concurrent requests keep request-local namespace plans so a shared cache update
 cannot change another request's published choice.
 
+## Wallet authority and artifact boundary
+
+Wallet access cannot widen browser authority. A provider request first needs
+the exact HTTPS main-frame namespace/TLS result and document generations, then
+a native opaque browser-engine authority context, and finally the exact wallet
+session, permission generation, method capability, and approval binding.
+Extension-supplied authority-shaped JSON is never authentication. The current
+engine exposes no consumable opaque context, so native wallet capability and
+request commands fail closed and provider code is not injected.
+
+The optional `data/wallet-abi-v1` service staging area accepts only an exact,
+bounded manifest and capability set. Unix discovery uses current-user-owned,
+non-shared-writable, no-follow opened directories and single-link regular-file
+handles; it checks size and metadata around a bounded same-handle digest.
+Windows remains unavailable until ACL ownership has a reviewed implementation.
+The digest is local integrity, not publisher authenticity. No service is
+executed until a future release pins a signing identity and provides a reviewed
+canonical framed transport. Future execution must retain the checked handle or
+repeat verification immediately, never reopen a previously checked path.
+
+Replay and rate state survives repeated initialization under identical
+generations. Native completion after authority replacement is stale, and the
+content bridge never automatically retries that page request because a
+mutation may already have committed. The same binding applies to reads.
+
 ## Loopback proxy and local CA
 
 - The listener binds a randomized `127.0.0.1` port.
@@ -241,6 +266,11 @@ qnames, qtypes, request timing, and source IP.
 | Setup removes another native registration or broad user data | Fixed per-user root, exact owned-path/manifest checks, recorded trust-store identity and CA fingerprints, pre-trust transaction recovery, effective-trust verification, and unsafe-root/redirect refusal |
 | Chromium flavors share a native-messaging location | Treat browser selection as compatibility intent; deduplicate shared paths, bind exact allowed extension origins, and refuse replacement or removal unless the manifest is proven to be owned by this installation |
 | Page forges security metadata | Strip internal headers; publish only native checked status |
+| Page forges wallet origin, generations, or permission fields | Treat them only as lookup candidates; require a native opaque engine authority context and exact wallet generations; current release remains unavailable |
+| Wallet manifest adds unknown/duplicate capabilities or changes versions | Deny unknown fields and require the exact ABI, protocol, provider schema, frame bound, and capability set |
+| Local path or symlink substitutes a wallet artifact | Relative no-follow opened handles, current-user ownership, single-link files, bounded same-handle digest and metadata checks; no execution without pinned signed-release authenticity |
+| Stale wallet request is retried after a generation change | Preserve replay state for repeated initialization and surface stale completion without automatic retry |
+| Browser uninstall removes independent wallet keys or databases | Store only the staged adapter manifest/artifact below browser data; wallet-owned state must remain in an independent wallet-owned location |
 | Relay lies or sets AD | Treat response as untrusted and validate locally |
 | Configured recursive resolver lies or sets AD | Treat raw RFC 8484 bytes as untrusted and validate locally |
 | Configured resolver hostname is captured by local DNS | Bootstrap only through fixed-address validating ICANN DoH; connect by explicit public IP with WebPKI hostname validation |
@@ -256,3 +286,11 @@ installation behavior. A signed release still requires supported-browser
 testing on Windows and macOS, CA lifecycle and uninstall verification, upgrade
 testing, store signing/review, and artifact provenance tied to the reviewed
 commit/tag.
+
+The wallet join has additional release gates: an independently signed service
+executable and canonical framed process protocol, pinned signer verification,
+reviewed Windows ACL ownership checks, a browser-engine opaque authority
+adapter, method-specific approval-summary mapping, restart/upgrade tests, and
+proof that browser uninstall removes only staged adapter files while preserving
+independent wallet state. Until those exist, local-integrity discovery remains
+diagnostic and `available` remains false.

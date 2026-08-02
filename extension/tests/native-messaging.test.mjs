@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const nativeHost = resolve("rust/target/debug/hns-chromium-native-host");
+const missingWalletArtifactCode =
+  process.platform === "win32"
+    ? "walletArtifactPlatformUnsupported"
+    : "walletArtifactMissing";
 
 test("native host exchanges bounded framed schema and monotonic events", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "hns-native-message-"));
@@ -13,6 +17,12 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     const input = Buffer.concat([
       frame({ command: "hello", schemaVersion: 1, requestId: "hello-1" }),
       frame({ command: "status", schemaVersion: 1, requestId: "status-1" }),
+      frame({
+        command: "walletProviderCapabilities",
+        schemaVersion: 1,
+        requestId: "wallet-1",
+        providerAbiVersion: 1
+      }),
       frame({ command: "shutdown", schemaVersion: 1, requestId: "shutdown-1" })
     ]);
     const result = spawnSync(
@@ -22,12 +32,15 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     );
     assert.equal(result.status, 0, result.stderr.toString());
     const responses = decodeFrames(result.stdout);
-    assert.equal(responses.length, 3);
+    assert.equal(responses.length, 4);
     assert.equal(responses[0].ok, true);
     assert.equal(responses[0].schemaVersion, 1);
     assert.equal(responses[0].requestId, "hello-1");
     assert.equal(responses[0].eventSequence, 1);
     assert.equal(responses[0].result.capabilities.chromiumSecurityResults, true);
+    assert.equal(responses[0].result.capabilities.handshakeWalletProvider, false);
+    assert.equal(responses[0].result.walletAbi.available, false);
+    assert.equal(responses[0].result.walletAbi.runtimeNegotiated, false);
     assert.equal(responses[1].requestId, "status-1");
     assert.equal(responses[1].eventSequence, 2);
     assert.equal(responses[1].result.headerSync.network, "regtest");
@@ -37,9 +50,13 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
       null
     );
     assert.equal(responses[1].result.headerSyncUnavailableReason, null);
-    assert.equal(responses[2].requestId, "shutdown-1");
-    assert.equal(responses[2].eventSequence, 3);
-    assert.equal(responses[0].runtimeSession, responses[2].runtimeSession);
+    assert.equal(responses[1].result.walletAbi.available, false);
+    assert.equal(responses[2].requestId, "wallet-1");
+    assert.equal(responses[2].ok, false);
+    assert.equal(responses[2].error.code, missingWalletArtifactCode);
+    assert.equal(responses[3].requestId, "shutdown-1");
+    assert.equal(responses[3].eventSequence, 4);
+    assert.equal(responses[0].runtimeSession, responses[3].runtimeSession);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

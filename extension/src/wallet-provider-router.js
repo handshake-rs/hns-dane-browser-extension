@@ -76,8 +76,21 @@ export class WalletProviderRouter {
       permissionGeneration: capabilities.permissionGeneration,
       documentId: authority.documentId
     });
-    this.documents.delete(key);
-    this.documents.set(key, {
+    const existing = this.documents.get(key);
+    if (existing && sameBinding(binding, existing.binding)) {
+      if (!sameMethodSet(existing.methods, capabilities.methods)) {
+        throw protocolError(
+          "staleContext",
+          "wallet capabilities changed without a generation change"
+        );
+      }
+      return Object.freeze({
+        available: true,
+        binding: existing.binding,
+        methods: Object.freeze([...existing.methods])
+      });
+    }
+    const document = {
       binding,
       sender: publicSender(sender),
       methods: new Set(capabilities.methods),
@@ -87,7 +100,8 @@ export class WalletProviderRouter {
       readWindow: [],
       mutationWindow: [],
       methodWindows: new Map()
-    });
+    };
+    this.documents.set(key, document);
     this.pruneDocuments();
     return Object.freeze({
       available: true,
@@ -144,6 +158,12 @@ export class WalletProviderRouter {
           request: pageRequest
         })
       );
+      if (this.documents.get(key) !== document) {
+        throw protocolError(
+          "staleContext",
+          "provider authority changed while the native request was pending"
+        );
+      }
       return await this.extractEvents(response, sender, document.binding);
     } finally {
       document.pending.delete(pageRequest.requestId);
@@ -267,8 +287,8 @@ function exactMessageOrigin(value, sender) {
   if (typeof sender?.origin === "string" && sender.origin !== parsed.origin) {
     throw protocolError("originMismatch", "browser sender origin does not match");
   }
-  if (!secureProviderOrigin(parsed)) {
-    throw protocolError("insecureOrigin", "provider requires HTTPS or loopback HTTP");
+  if (parsed.protocol !== "https:") {
+    throw protocolError("insecureOrigin", "provider requires an HTTPS document origin");
   }
   if (
     sender?.frameId !== 0 ||
@@ -282,16 +302,28 @@ function exactMessageOrigin(value, sender) {
   return parsed.origin;
 }
 
-function secureProviderOrigin(parsed) {
-  if (parsed.protocol === "https:") return true;
-  return (
-    parsed.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
-  );
-}
-
 function documentKey(sender) {
   return `${sender.tab.id}:${sender.documentId}`;
+}
+
+function sameBinding(left, right) {
+  const fields = [
+    "schemaVersion",
+    "origin",
+    "namespace",
+    "browserAuthoritySession",
+    "runtimeGeneration",
+    "policyGeneration",
+    "navigationGeneration",
+    "walletSession",
+    "permissionGeneration",
+    "documentId"
+  ];
+  return fields.every((field) => left[field] === right[field]);
+}
+
+function sameMethodSet(left, right) {
+  return left.size === right.length && right.every((method) => left.has(method));
 }
 
 function requireExpectedBinding(candidate, expected) {

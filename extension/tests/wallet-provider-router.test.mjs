@@ -197,6 +197,163 @@ test("completed request identifiers and unnegotiated methods cannot be reused", 
   );
 });
 
+test("repeated initialization with the same authority cannot reset replay state", async () => {
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => authority(),
+    nativeRequest: async (command) => command === "walletProviderCapabilities"
+      ? {
+          abiVersion: 1,
+          available: true,
+          walletSession: "wallet-a",
+          permissionGeneration: 1,
+          methods: ["wallet_getStatus"]
+        }
+      : { ok: true },
+    deliverEvent: async () => {}
+  });
+  const initialized = await router.initialize({ origin: "https://welcome" }, sender);
+  await router.request(
+    bridgeRequest(initialized.binding, 1, "wallet_getStatus", null),
+    sender
+  );
+
+  const repeated = await router.initialize({ origin: "https://welcome" }, sender);
+  assert.equal(repeated.binding, initialized.binding);
+  const reusedIdentifier = bridgeRequest(
+    repeated.binding,
+    2,
+    "wallet_getStatus",
+    null
+  );
+  reusedIdentifier.request.requestId = "request-1";
+  await assert.rejects(
+    router.request(reusedIdentifier, sender),
+    (error) => error.code === "replay"
+  );
+  await assert.rejects(
+    router.request(
+      bridgeRequest(repeated.binding, 1, "wallet_getStatus", null),
+      sender
+    ),
+    (error) => error.code === "replay"
+  );
+});
+
+test("capabilities cannot change without an authority or wallet generation change", async () => {
+  let capabilityCalls = 0;
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => authority(),
+    nativeRequest: async () => {
+      capabilityCalls += 1;
+      return {
+        abiVersion: 1,
+        available: true,
+        walletSession: "wallet-a",
+        permissionGeneration: 1,
+        methods: capabilityCalls === 1
+          ? ["wallet_getStatus"]
+          : ["wallet_getStatus", "hns_accounts"]
+      };
+    },
+    deliverEvent: async () => {}
+  });
+  await router.initialize({ origin: "https://welcome" }, sender);
+  await assert.rejects(
+    router.initialize({ origin: "https://welcome" }, sender),
+    (error) => error.code === "staleContext"
+  );
+});
+
+test("an authority generation change creates a fresh replay domain", async () => {
+  let currentAuthority = authority();
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => currentAuthority,
+    nativeRequest: async (command) => command === "walletProviderCapabilities"
+      ? {
+          abiVersion: 1,
+          available: true,
+          walletSession: "wallet-a",
+          permissionGeneration: 1,
+          methods: ["wallet_getStatus"]
+        }
+      : { ok: true },
+    deliverEvent: async () => {}
+  });
+  const first = await router.initialize({ origin: "https://welcome" }, sender);
+  await router.request(
+    bridgeRequest(first.binding, 1, "wallet_getStatus", null),
+    sender
+  );
+
+  currentAuthority = authority({ navigationGeneration: 6 });
+  const second = await router.initialize({ origin: "https://welcome" }, sender);
+  assert.equal(second.binding.navigationGeneration, 6);
+  assert.deepEqual(
+    await router.request(
+      bridgeRequest(second.binding, 1, "wallet_getStatus", null),
+      sender
+    ),
+    { ok: true }
+  );
+});
+
+test("loopback HTTP documents are rejected before authority or native lookup", async () => {
+  let authorityCalls = 0;
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => {
+      authorityCalls += 1;
+      return authority();
+    },
+    nativeRequest: async () => {
+      throw new Error("native lookup must not run");
+    },
+    deliverEvent: async () => {}
+  });
+  const loopbackSender = {
+    ...sender,
+    origin: "http://127.0.0.1",
+    url: "http://127.0.0.1/wallet-demo"
+  };
+  await assert.rejects(
+    router.initialize({ origin: "http://127.0.0.1" }, loopbackSender),
+    (error) => error.code === "insecureOrigin"
+  );
+  assert.equal(authorityCalls, 0);
+});
+
+test("a request completing after document authority replacement is stale", async () => {
+  let currentAuthority = authority();
+  let finishRequest;
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => currentAuthority,
+    nativeRequest: async (command) => {
+      if (command === "walletProviderCapabilities") {
+        return {
+          abiVersion: 1,
+          available: true,
+          walletSession: "wallet-a",
+          permissionGeneration: 1,
+          methods: ["wallet_getStatus"]
+        };
+      }
+      return new Promise((resolve) => {
+        finishRequest = resolve;
+      });
+    },
+    deliverEvent: async () => {}
+  });
+  const first = await router.initialize({ origin: "https://welcome" }, sender);
+  const pending = router.request(
+    bridgeRequest(first.binding, 1, "wallet_getStatus", null),
+    sender
+  );
+  await Promise.resolve();
+  currentAuthority = authority({ navigationGeneration: 6 });
+  await router.initialize({ origin: "https://welcome" }, sender);
+  finishRequest({ ok: true });
+  await assert.rejects(pending, (error) => error.code === "staleContext");
+});
+
 function bridgeRequest(binding, sequence, method, params) {
   return {
     schemaVersion: 1,

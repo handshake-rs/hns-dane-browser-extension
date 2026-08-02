@@ -25,3 +25,16 @@ bounds; secret-named native result fields fail closed. This is defense in depth,
 not a substitute for typed response construction in the native wallet. The
 demonstration dapp has no custodial backend, does not create keys, and makes no
 network request of its own; it displays only approved public wallet results.
+
+The browser-owned `data/wallet-abi-v1` directory is only a versioned staging
+location for a service manifest and executable artifact. It must contain no
+wallet database, seed, encryption material, approval record, log, backup, or
+other wallet state. Native status exposes only bounded contract versions, a
+release identifier, local-integrity digest, availability booleans, and a safe
+reason code; it never reads or reports wallet secrets.
+
+An independently released wallet service must keep all wallet-owned state in
+its own private location and own its migration, backup, and deletion UX. Browser
+repair and Complete Uninstall may replace or remove the staged adapter files
+but must not discover, migrate, or delete that external wallet state. The
+current release launches no wallet artifact and exports no wallet result.

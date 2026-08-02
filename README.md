@@ -92,6 +92,17 @@ closed, and the extension does not present an HNSR control. P2P ODoH, privacy
 downgrade, and experimental wire-profile controls remain visible as typed
 experimental policy inputs; unsupported selections fail closed.
 
+## Optional wallet provider
+
+The repository contains a Handshake-specific provider surface and a strict
+source-only wallet ABI v1 artifact-discovery boundary. The released Chromium
+product keeps it unavailable: there is no signed standalone wallet service or
+canonical process transport, and the pinned browser engine does not expose the
+opaque provider-authority context required for native authentication. A staged
+manifest digest is local integrity only and no artifact is launched. See
+[Handshake wallet provider](docs/wallet-provider.md) and
+[wallet privacy](docs/wallet-privacy.md).
+
 ## Repository layout
 
 - `extension/`: service worker, options and popup UI, tests, build tooling, and

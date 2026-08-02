@@ -5,6 +5,8 @@
     deny(clippy::expect_used, clippy::panic, clippy::unwrap_used)
 )]
 
+mod wallet_abi;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use getrandom::fill as fill_random;
@@ -38,6 +40,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+use wallet_abi::{WALLET_ABI_VERSION, WalletAbiDiscovery};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const NATIVE_MESSAGING_SCHEMA_VERSION: u32 = 1;
@@ -1189,6 +1192,34 @@ pub enum NativeRequest {
         schema_version: u32,
         request_id: String,
     },
+    WalletProviderCapabilities {
+        schema_version: u32,
+        request_id: String,
+        provider_abi_version: u16,
+        /// A lookup candidate from the trusted extension process. It is never
+        /// accepted as authentication. The native host must replace it with a
+        /// canonical opaque engine context before wallet dispatch is enabled.
+        #[serde(default)]
+        authority: Option<Value>,
+    },
+    WalletProviderRequest {
+        schema_version: u32,
+        request_id: String,
+        provider_abi_version: u16,
+        authority: Value,
+        request: Value,
+    },
+    WalletProviderApprovalDecision {
+        schema_version: u32,
+        request_id: String,
+        provider_abi_version: u16,
+        approval_id: String,
+        decision: String,
+        #[serde(default)]
+        authority: Option<Value>,
+        #[serde(default)]
+        request: Option<Value>,
+    },
     Stop {
         schema_version: u32,
         request_id: String,
@@ -1208,6 +1239,9 @@ impl NativeRequest {
             | Self::Status { schema_version, .. }
             | Self::SyncOnce { schema_version, .. }
             | Self::Diagnostics { schema_version, .. }
+            | Self::WalletProviderCapabilities { schema_version, .. }
+            | Self::WalletProviderRequest { schema_version, .. }
+            | Self::WalletProviderApprovalDecision { schema_version, .. }
             | Self::Stop { schema_version, .. }
             | Self::Shutdown { schema_version, .. } => *schema_version,
         }
@@ -1221,6 +1255,9 @@ impl NativeRequest {
             | Self::Status { request_id, .. }
             | Self::SyncOnce { request_id, .. }
             | Self::Diagnostics { request_id, .. }
+            | Self::WalletProviderCapabilities { request_id, .. }
+            | Self::WalletProviderRequest { request_id, .. }
+            | Self::WalletProviderApprovalDecision { request_id, .. }
             | Self::Stop { request_id, .. }
             | Self::Shutdown { request_id, .. } => request_id,
         }
@@ -1596,6 +1633,7 @@ pub struct NativeHostController {
     runtime: BrowserRuntime,
     proxy: Option<BrowserProxy>,
     local_ca: LocalCaStore,
+    wallet_abi: WalletAbiDiscovery,
     host_session: String,
     event_sequence: Arc<AtomicU64>,
     security_observations: SecurityObservations,
@@ -1607,10 +1645,12 @@ impl NativeHostController {
         let local_ca = LocalCaStore::open(data_dir)?;
         let runtime = BrowserRuntime::open(RuntimeConfiguration::new(data_dir, network))
             .map_err(|error| NativeHostError::Runtime(error.to_string()))?;
+        let wallet_abi = WalletAbiDiscovery::discover(data_dir);
         Ok(Self {
             runtime,
             proxy: None,
             local_ca,
+            wallet_abi,
             host_session: generate_host_session()?,
             event_sequence: Arc::new(AtomicU64::new(0)),
             security_observations: SecurityObservations::default(),
@@ -1659,29 +1699,35 @@ impl NativeHostController {
         }
 
         match request {
-            NativeRequest::Hello { .. } => (
-                self.success_response(
-                    request_id,
-                    json!({
-                        "nativeHost": env!("CARGO_PKG_VERSION"),
-                        "network": self.runtime.network().as_str(),
-                        "capabilities": {
-                            "manifestV3": true,
-                            "nativeMessaging": true,
-                            "authenticatedLoopbackProxy": true,
-                            "dnsNameDanePac": true,
-                            "proxyAuthentication": true,
-                            "perInstallLocalCa": true,
-                            "chromiumSecurityResults": true,
-                            "userConfiguredRecursiveHnsDoh": true,
-                            "p2pDnsRelay": true,
-                            "p2pOdoh": false,
-                            "hnsr": false
-                        }
-                    }),
-                ),
-                false,
-            ),
+            NativeRequest::Hello { .. } => {
+                self.wallet_abi.refresh();
+                let wallet_abi = self.wallet_abi.status_json();
+                (
+                    self.success_response(
+                        request_id,
+                        json!({
+                            "nativeHost": env!("CARGO_PKG_VERSION"),
+                            "network": self.runtime.network().as_str(),
+                            "walletAbi": wallet_abi,
+                            "capabilities": {
+                                "manifestV3": true,
+                                "nativeMessaging": true,
+                                "authenticatedLoopbackProxy": true,
+                                "dnsNameDanePac": true,
+                                "proxyAuthentication": true,
+                                "perInstallLocalCa": true,
+                                "chromiumSecurityResults": true,
+                                "userConfiguredRecursiveHnsDoh": true,
+                                "handshakeWalletProvider": false,
+                                "p2pDnsRelay": true,
+                                "p2pOdoh": false,
+                                "hnsr": false
+                            }
+                        }),
+                    ),
+                    false,
+                )
+            }
             NativeRequest::Start { policy, .. } | NativeRequest::SetPolicy { policy, .. } => {
                 let result = self.start(policy);
                 (self.response_from_result(request_id, result), false)
@@ -1725,6 +1771,21 @@ impl NativeHostController {
                 });
                 (self.success_response(request_id, value), false)
             }
+            NativeRequest::WalletProviderCapabilities {
+                provider_abi_version,
+                ..
+            }
+            | NativeRequest::WalletProviderRequest {
+                provider_abi_version,
+                ..
+            }
+            | NativeRequest::WalletProviderApprovalDecision {
+                provider_abi_version,
+                ..
+            } => (
+                self.wallet_provider_unavailable(request_id, provider_abi_version),
+                false,
+            ),
             NativeRequest::Stop { .. } => {
                 self.stop_proxy();
                 (
@@ -1743,6 +1804,7 @@ impl NativeHostController {
     }
 
     fn start(&mut self, policy: ExtensionPolicy) -> ProtocolResult {
+        self.wallet_abi.refresh();
         let runtime_policy = runtime_policy(&policy)?;
         self.stop_proxy();
         self.runtime
@@ -1806,7 +1868,8 @@ impl NativeHostController {
             "headerSyncUnavailableReason": header_sync_unavailable_reason,
             "latestMainFrameSecurity": Value::Null,
             "latestMainFrameSecurityUnavailableReason": Value::Null,
-            "recentConnectSecurityDecisions": []
+            "recentConnectSecurityDecisions": [],
+            "walletAbi": self.wallet_abi.status_json()
         });
         self.policy = policy;
         self.proxy = Some(proxy);
@@ -1845,8 +1908,29 @@ impl NativeHostController {
                 .latest_main_frame_unavailable_reason(maintenance_epoch),
             "recentConnectSecurityDecisions": self
                 .security_observations
-                .recent_connect_decisions(maintenance_epoch)
+                .recent_connect_decisions(maintenance_epoch),
+            "walletAbi": self.wallet_abi.status_json()
         })
+    }
+
+    fn wallet_provider_unavailable(
+        &mut self,
+        request_id: String,
+        provider_abi_version: u16,
+    ) -> NativeResponse {
+        if provider_abi_version != WALLET_ABI_VERSION {
+            return self.error_response(
+                request_id,
+                "walletAbiVersionMismatch",
+                format!(
+                    "wallet ABI {provider_abi_version} is unsupported; expected {}",
+                    WALLET_ABI_VERSION
+                ),
+            );
+        }
+        let code = self.wallet_abi.unavailable_code();
+        let message = self.wallet_abi.unavailable_message().to_owned();
+        self.error_response(request_id, code, message)
     }
 
     fn header_sync_status_result(&self) -> (Value, Value) {
@@ -2199,6 +2283,25 @@ mod tests {
             panic!("start request expected");
         };
         assert_eq!(policy.recursive_hns_doh_url, "https://hnsdoh.com/dns-query");
+
+        let wallet = serde_json::from_str::<NativeRequest>(
+            r#"{"command":"walletProviderRequest","schemaVersion":1,"requestId":"wallet-1","providerAbiVersion":1,"authority":{"origin":"https://example"},"request":{"schemaVersion":1,"kind":"request","requestId":"page-1","sequence":1,"method":"wallet_getStatus","params":null}}"#,
+        )
+        .unwrap();
+        let NativeRequest::WalletProviderRequest {
+            provider_abi_version,
+            ..
+        } = wallet
+        else {
+            panic!("wallet provider request expected");
+        };
+        assert_eq!(provider_abi_version, WALLET_ABI_VERSION);
+        assert!(
+            serde_json::from_str::<NativeRequest>(
+                r#"{"command":"walletProviderCapabilities","schemaVersion":1,"requestId":"wallet-2","providerAbiVersion":1,"permissionGeneration":9}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -3121,6 +3224,15 @@ mod tests {
         assert_eq!(result["headerSync"]["bestHeight"], 0);
         assert_eq!(result["headerSyncUnavailableReason"], Value::Null);
         assert_eq!(result["latestMainFrameSecurity"], Value::Null);
+        assert_eq!(result["walletAbi"]["available"], false);
+        assert_eq!(
+            result["walletAbi"]["reason"],
+            if cfg!(unix) {
+                "walletArtifactMissing"
+            } else {
+                "walletArtifactPlatformUnsupported"
+            }
+        );
         assert!(
             result["pacScript"]
                 .as_str()
@@ -3136,12 +3248,26 @@ mod tests {
             maintenance_epoch
         );
 
+        let wallet_request = br#"{"command":"walletProviderCapabilities","schemaVersion":1,"requestId":"wallet-1","providerAbiVersion":1}"#;
+        let (response, shutdown) = controller.handle_json(wallet_request);
+        assert!(!shutdown);
+        assert!(!response.ok);
+        assert_eq!(response.event_sequence, 2);
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code),
+            Some(if cfg!(unix) {
+                "walletArtifactMissing"
+            } else {
+                "walletArtifactPlatformUnsupported"
+            })
+        );
+
         let shutdown_request =
             br#"{"command":"shutdown","schemaVersion":1,"requestId":"shutdown-1"}"#;
         let (response, shutdown) = controller.handle_json(shutdown_request);
         assert!(shutdown);
         assert!(response.ok);
-        assert_eq!(response.event_sequence, 2);
+        assert_eq!(response.event_sequence, 3);
         assert_eq!(response.runtime_generation, None);
         assert_eq!(response.result.unwrap()["state"], "stopped");
 

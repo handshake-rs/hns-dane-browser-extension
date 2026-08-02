@@ -82,6 +82,29 @@ removal roots are rejected. If installation was interrupted after trust
 mutation but before the final receipt, Complete Uninstall uses the pre-trust
 transaction to identify and remove only the recorded CA and registration.
 
+## Optional wallet service staging
+
+The current Setup package does not contain or install a wallet service. The
+native host recognizes `data/wallet-abi-v1` only as a fail-closed discovery
+location for a future independently released adapter manifest and executable.
+It does not search for a wallet elsewhere, and a locally matching digest does
+not substitute for a pinned publisher signature.
+
+That version directory may contain only the staged adapter manifest and
+artifact. Wallet databases, seeds, encryption keys, backups, logs, approvals,
+and migration state must live in an independent wallet-owned location. A future
+wallet installer must verify its signer and target, stage the artifact
+transactionally with the manifest written last, and perform explicit
+version-to-version migration. Setup repair must not copy, reinterpret, or
+overwrite external wallet state.
+
+Complete Uninstall removes the owned browser installation root, so it also
+removes any manifest/artifact staged under `data/wallet-abi-v1`. That is adapter
+cleanup, not wallet deletion. Setup must neither locate nor remove the
+independent service's database, keys, backups, or other wallet-owned state.
+Damaged, partial, unsigned, unsupported-platform, or ABI-incompatible staging
+remains unavailable and cannot weaken browser/DANE operation.
+
 ## Bundling and operating-system dependencies
 
 Rust application dependencies are linked into the setup executable. The

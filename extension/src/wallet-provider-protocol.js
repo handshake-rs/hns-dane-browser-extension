@@ -188,21 +188,41 @@ export function validateNativeCapabilities(candidate) {
     candidate.walletSession.length < 1 ||
     candidate.walletSession.length > 160 ||
     !Number.isSafeInteger(candidate.permissionGeneration) ||
-    candidate.permissionGeneration < 1
+    candidate.permissionGeneration < 1 ||
+    !Array.isArray(candidate.methods) ||
+    candidate.methods.length > WALLET_PROVIDER_METHODS.length ||
+    Object.keys(candidate).some(
+      (field) =>
+        ![
+          "abiVersion",
+          "available",
+          "walletSession",
+          "permissionGeneration",
+          "methods"
+        ].includes(field)
+    )
   ) {
     throw protocolError(
       "walletUnavailable",
       "the native host does not provide the required wallet ABI"
     );
   }
-  const advertisedMethods = Array.isArray(candidate.methods)
-    ? candidate.methods.filter((method) => METHOD_SET.has(method))
-    : [];
+  if (
+    candidate.methods.some(
+      (method) => typeof method !== "string" || !METHOD_SET.has(method)
+    ) ||
+    new Set(candidate.methods).size !== candidate.methods.length
+  ) {
+    throw protocolError(
+      "walletUnavailable",
+      "the native host advertised an invalid wallet method set"
+    );
+  }
   return Object.freeze({
     abiVersion: WALLET_NATIVE_ABI_VERSION,
     walletSession: candidate.walletSession,
     permissionGeneration: candidate.permissionGeneration,
-    methods: Object.freeze([...new Set(advertisedMethods)])
+    methods: Object.freeze([...candidate.methods])
   });
 }
 
