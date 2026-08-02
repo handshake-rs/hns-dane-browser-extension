@@ -40,6 +40,6 @@ credentials*.json
 firebase-adminsdk*.json
 
 # Chromium extension artifacts
-/dist/chromium-extension/
+/dist/
 *.sha256
 !scripts/third-party-notices.sha256

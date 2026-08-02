@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
 - Activate the authenticated native proxy before a potentially long initial
   header catch-up. ICANN browsing can continue through Rust while HNS requests
   remain fail-closed until current corroborated header evidence is available.
+- Reuse exact insecure ICANN origin RRset evidence for the defined WebPKI
+  fallback without issuing an unauthenticatable TLSA lookup, while retaining
+  mandatory TLSA discovery for signed origins that alias into unsigned targets.
 - Migrate exact legacy native-messaging manifests and clean up
   ownership-checked external-extension registrations and Chromium launch
   wrappers so removing the extension remains persistent across browser

@@ -104,6 +104,12 @@ alias, HTTPS/SVCB, denial, and TLSA observations. For HTTPS/WSS:
 - bogus or indeterminate DNSSEC, malformed data, or resolver failure fails
   closed.
 
+When validating DoH has already returned an exact origin RRset as insecure,
+the insecure-delegation result is established before TLSA discovery. The
+runtime does not issue a TLSA query that cannot authenticate DANE policy.
+Aggregate insecure alias evidence is insufficient for this shortcut: a signed
+origin CNAME into an unsigned target still requires the origin TLSA lookup.
+
 The TLSA owner is derived from the effective host, port, and transport for
 every selected ICANN origin. This is `DANE via ICANN DoH`.
 

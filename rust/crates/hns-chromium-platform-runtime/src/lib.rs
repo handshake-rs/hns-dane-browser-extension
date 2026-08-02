@@ -8051,6 +8051,40 @@ impl<'a> RootResolutionSession<'a> {
             .flatten()
     }
 
+    fn icann_origin_insecure_delegation_observed(&self) -> bool {
+        if self.namespace != Namespace::Icann {
+            return false;
+        }
+        let Ok(origin) = DnsName::from_ascii(self.query.host().as_str()) else {
+            return false;
+        };
+        self.requests
+            .iter()
+            .zip(&self.answers)
+            .filter(|(request, answer)| {
+                request.qname == self.query.host().as_str() && !answer.secure
+            })
+            .any(|(request, answer)| {
+                let requested_type = RecordType::from_code(request.qtype);
+                answer
+                    .records
+                    .iter()
+                    .filter(|record| {
+                        record.class == DNS_CLASS_IN
+                            && record.name == origin
+                            && (record.record_type == RecordType::Cname
+                                || record.record_type == requested_type)
+                    })
+                    .any(|record| {
+                        !answer.records.iter().any(|signature| {
+                            signature.class == DNS_CLASS_IN
+                                && signature.name == origin
+                                && rrsig_type_covered(signature) == Some(record.record_type)
+                        })
+                    })
+            })
+    }
+
     fn evidence(
         &self,
         icann_chain_override: Option<IcannChainState>,
@@ -8295,7 +8329,20 @@ fn build_validated_origin_plan_for_service(
             },
             query.host()
         );
-        let (records, answer_secure) = resolve_tlsa(session, &tlsa_owner)?;
+        // An exact origin RRset returned without a covering RRSIG by the
+        // validating ICANN DoH boundary already establishes the
+        // proven-insecure branch. TLSA below that unsigned delegation cannot
+        // authenticate DANE policy, so do not let a broken authoritative
+        // server's optional TLSA lookup prevent the defined WebPKI fallback.
+        //
+        // Do not generalize from the aggregate AD bit alone: a signed origin
+        // CNAME can point into an unsigned target and make the complete answer
+        // insecure while a secure TLSA RRset at the origin remains usable.
+        let (records, answer_secure) = if session.icann_origin_insecure_delegation_observed() {
+            (Vec::new(), false)
+        } else {
+            resolve_tlsa(session, &tlsa_owner)?
+        };
         match session.namespace {
             Namespace::Hns => {
                 if !answer_secure {
@@ -20654,6 +20701,222 @@ mod tests {
     }
 
     #[test]
+    fn exact_insecure_icann_origin_rrset_skips_irrelevant_tlsa_lookup() {
+        let now = now_unix_seconds();
+        let host = "www.unsigned.example";
+        let target = "edge.cdn.example";
+        let query = OriginQuery::new(
+            CanonicalHost::parse(host).unwrap(),
+            hns_namespace_resolution::OriginScheme::Https,
+            NonZeroU16::new(443),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let evidence = IcannDohEvidence::default();
+        for (qname, qtype, kind) in [
+            (host, RecordType::Https, IcannDohAnswerKind::Present),
+            (target, RecordType::Https, IcannDohAnswerKind::NoData),
+            (target, RecordType::A, IcannDohAnswerKind::Present),
+            (target, RecordType::Aaaa, IcannDohAnswerKind::NoData),
+        ] {
+            evidence
+                .record(
+                    &ResolutionRequest {
+                        qname: qname.to_owned(),
+                        qtype: qtype.code(),
+                    },
+                    IcannDohObservation {
+                        kind,
+                        secure: false,
+                        rcode: DNS_RCODE_NOERROR,
+                        observed_at_unix: now,
+                        expires_at_unix: now + 60,
+                    },
+                )
+                .unwrap();
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let built = build_root_resolution(
+            Namespace::Icann,
+            &query,
+            &OriginMapResolver {
+                responses: HashMap::from([
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::Https.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: vec![cname_record(host, target, 60)],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: target.to_owned(),
+                            qtype: RecordType::Https.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(target).unwrap(),
+                            records: Vec::new(),
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: target.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(target).unwrap(),
+                            records: vec![address_record(target, [8, 8, 8, 8])],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: target.to_owned(),
+                            qtype: RecordType::Aaaa.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(target).unwrap(),
+                            records: Vec::new(),
+                            secure: false,
+                        },
+                    ),
+                ]),
+                requests: Arc::clone(&requests),
+            },
+            None,
+            Some(&evidence),
+            NetworkKind::Mainnet,
+            None,
+        );
+        let RootLookup::Present(plan) = built.lookup else {
+            panic!("an exact insecure origin RRset must allow the ICANN WebPKI plan");
+        };
+        assert_eq!(plan.tls_policy(), TlsTrustPolicy::WebPkiInsecureDelegation);
+        assert!(matches!(
+            plan.provenance(),
+            EvidenceProvenance::IcannDoh {
+                chain_state: IcannChainState::ProvenInsecure
+            }
+        ));
+        assert!(
+            !requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request.qtype == RecordType::Tlsa.code())
+        );
+    }
+
+    #[test]
+    fn signed_origin_cname_into_insecure_target_still_requires_tlsa_lookup() {
+        let now = now_unix_seconds();
+        let host = "www.signed.example";
+        let target = "edge.unsigned.example";
+        let tlsa_owner = format!("_443._tcp.{host}");
+        let query = OriginQuery::new(
+            CanonicalHost::parse(host).unwrap(),
+            hns_namespace_resolution::OriginScheme::Https,
+            NonZeroU16::new(443),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let evidence = IcannDohEvidence::default();
+        for (qname, qtype, kind) in [
+            (host, RecordType::Https, IcannDohAnswerKind::Present),
+            (target, RecordType::Https, IcannDohAnswerKind::NoData),
+            (target, RecordType::A, IcannDohAnswerKind::Present),
+            (target, RecordType::Aaaa, IcannDohAnswerKind::NoData),
+        ] {
+            evidence
+                .record(
+                    &ResolutionRequest {
+                        qname: qname.to_owned(),
+                        qtype: qtype.code(),
+                    },
+                    IcannDohObservation {
+                        kind,
+                        secure: false,
+                        rcode: DNS_RCODE_NOERROR,
+                        observed_at_unix: now,
+                        expires_at_unix: now + 60,
+                    },
+                )
+                .unwrap();
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let built = build_root_resolution(
+            Namespace::Icann,
+            &query,
+            &OriginMapResolver {
+                responses: HashMap::from([
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::Https.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: vec![
+                                cname_record(host, target, 60),
+                                rrsig_record(host, RecordType::Cname),
+                            ],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: target.to_owned(),
+                            qtype: RecordType::Https.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(target).unwrap(),
+                            records: Vec::new(),
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: target.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(target).unwrap(),
+                            records: vec![address_record(target, [8, 8, 4, 4])],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: target.to_owned(),
+                            qtype: RecordType::Aaaa.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(target).unwrap(),
+                            records: Vec::new(),
+                            secure: false,
+                        },
+                    ),
+                ]),
+                requests: Arc::clone(&requests),
+            },
+            None,
+            Some(&evidence),
+            NetworkKind::Mainnet,
+            None,
+        );
+        let RootLookup::Failed(failure) = built.lookup else {
+            panic!("a signed origin alias must not downgrade around TLSA discovery");
+        };
+        assert_eq!(failure.kind(), RootFailureKind::Unsupported);
+        assert!(requests.lock().unwrap().iter().any(|request| {
+            request.qname == tlsa_owner && request.qtype == RecordType::Tlsa.code()
+        }));
+    }
+
+    #[test]
     fn hns_https_uses_next_advertised_protocol_when_preferred_transport_lacks_tlsa() {
         let now = now_unix_seconds();
         let host = "denuoweb";
@@ -23787,6 +24050,18 @@ mod tests {
             record_type: RecordType::Cname,
             class: DNS_CLASS_IN,
             ttl,
+            rdata,
+        }
+    }
+
+    fn rrsig_record(owner: &str, covered_type: RecordType) -> ResourceRecord {
+        let mut rdata = vec![0; 18];
+        rdata[..2].copy_from_slice(&covered_type.code().to_be_bytes());
+        ResourceRecord {
+            name: DnsName::from_ascii(owner).unwrap(),
+            record_type: RecordType::Rrsig,
+            class: DNS_CLASS_IN,
+            ttl: 60,
             rdata,
         }
     }

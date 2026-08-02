@@ -134,6 +134,12 @@ closed outcomes:
 - bogus/indeterminate DNSSEC, malformed response, or resolver failure: fail
   closed.
 
+An exact insecure origin RRset from validating DoH establishes the
+insecure-delegation branch without a redundant TLSA query. This does not apply
+when only the aggregate alias chain is insecure: a covering RRSIG on the
+origin RRset keeps TLSA discovery mandatory even if the CNAME target is
+unsigned.
+
 Status names this path `DANE via ICANN DoH`. Bogus DNSSEC is not absence.
 Typed DANE failure is preserved across HTTP/1.1, HTTP/2, HTTP/3, CONNECT, and
 WebSocket paths rather than inferred from error strings.
