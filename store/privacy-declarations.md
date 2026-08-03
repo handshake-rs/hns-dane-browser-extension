@@ -19,6 +19,11 @@ with the exact release before submission.
   contents, cookies, credentials, and downloads are not sent to Denuo Web.
   They pass between the user and the selected website as ordinary browsing
   requires.
+- **User-configured MeshMine endpoint:** `Yes, locally and for core
+  functionality when used.` The endpoint is stored on-device. A direct,
+  credential-free statistics request discloses the caller's network address
+  and timing to the selected operator; neither the endpoint nor response is
+  sent to Denuo Web.
 - **Personally identifiable, health, financial/payment, authentication,
   personal communications, location, and user-generated content:** `No
   developer collection.`
@@ -43,7 +48,8 @@ with the exact release before submission.
 - Resolver, proof, header, namespace-binding, and peer state remain in the
   local native-host data directory.
 - Users can clear the optional recursive resolver, disable P2P requester use,
-  remove the extension, and use HNS DANE Browser Setup's Complete Uninstall.
+  clear the MeshMine endpoint, remove the extension, and use HNS DANE Browser
+  Setup's Complete Uninstall.
 - Setup stores only a local receipt—or a bounded ownership transaction while
   installation is in progress—containing product version, selected browser
   flavors, exact registered extension IDs, owned/trust-store paths, and the

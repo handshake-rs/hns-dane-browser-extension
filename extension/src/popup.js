@@ -8,6 +8,9 @@ import {
   transportLabel
 } from "./security-result.js";
 import { headerChainView, pageProofAnchor } from "./header-status.js";
+import { fetchPoolStats } from "./pool-stats.js";
+
+const POOL_ENDPOINT_STORAGE_KEY = "meshminePublicPoolEndpoint";
 
 document.querySelector("#retry").addEventListener("click", () => void retry());
 document
@@ -17,7 +20,13 @@ document.querySelector("#settings").addEventListener("click", () => chrome.runti
 document.querySelector("#setup").addEventListener("click", () => {
   void chrome.tabs.create({ url: chrome.runtime.getURL("src/setup.html") });
 });
+document.querySelector("#pool-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  void refreshPoolStats(true);
+});
+document.querySelector("#clear-pool").addEventListener("click", () => void clearPoolStats());
 void refresh();
+void initializePoolStats();
 
 async function retry() {
   await chrome.runtime.sendMessage({ type: "restart" });
@@ -245,4 +254,89 @@ async function activeTabId() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tabId = tabs?.[0]?.id;
   return Number.isSafeInteger(tabId) && tabId >= 0 ? tabId : null;
+}
+
+async function initializePoolStats() {
+  const stored = await chrome.storage.local.get(POOL_ENDPOINT_STORAGE_KEY);
+  let endpoint = stored?.[POOL_ENDPOINT_STORAGE_KEY];
+  if (typeof endpoint !== "string" || endpoint.length === 0) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    try {
+      const active = new URL(tabs?.[0]?.url ?? "");
+      endpoint = ['http:', 'https:'].includes(active.protocol) ? active.origin : "";
+    } catch {
+      endpoint = "";
+    }
+  }
+  document.querySelector("#pool-endpoint").value = endpoint;
+  if (endpoint) await refreshPoolStats(false);
+}
+
+async function refreshPoolStats(persist) {
+  const input = document.querySelector("#pool-endpoint");
+  const button = document.querySelector("#load-pool");
+  const detail = document.querySelector("#pool-detail");
+  const endpoint = input.value.trim();
+  if (!endpoint) {
+    detail.textContent = "Enter an HTTP or HTTPS MeshMine public endpoint.";
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Loading…";
+  detail.textContent = "Loading a bounded public snapshot…";
+  try {
+    const result = await fetchPoolStats(endpoint);
+    input.value = result.endpoint;
+    if (persist) {
+      await chrome.storage.local.set({ [POOL_ENDPOINT_STORAGE_KEY]: result.endpoint });
+    }
+    renderPoolStats(result.snapshot);
+  } catch (error) {
+    detail.textContent = `Pool statistics unavailable: ${String(
+      error instanceof Error ? error.message : error
+    ).slice(0, 512)}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Load pool statistics";
+  }
+}
+
+function renderPoolStats(snapshot) {
+  const expired = BigInt(Math.floor(Date.now() / 1000)) >= snapshot.expiresAt;
+  document.querySelector("#pool-detail").textContent = expired
+    ? "The bounded snapshot is expired. Values are display-only and unverified."
+    : "Signed snapshot and HNSA proof objects are present. Native HNSA verification is pending.";
+  document.querySelector("#pool-trust").textContent = expired
+    ? "Expired / unverified"
+    : "Unverified";
+  document.querySelector("#pool-mode").textContent = snapshot.mode;
+  document.querySelector("#pool-miners").textContent = snapshot.connectedMiners;
+  document.querySelector("#pool-peers").textContent = snapshot.connectedMeshPeers;
+  document.querySelector("#pool-accepted").textContent = snapshot.acceptedShares.toString();
+  document.querySelector("#pool-rejected").textContent = snapshot.rejectedShares.toString();
+  document.querySelector("#pool-tip").textContent = `${snapshot.tipHeight} · ${snapshot.tipHash.slice(0, 16)}…`;
+  document.querySelector("#pool-sequence").textContent = snapshot.sequence.toString();
+  document.querySelector("#pool-expires").textContent = new Date(
+    Number(snapshot.expiresAt) * 1000
+  ).toLocaleString();
+}
+
+async function clearPoolStats() {
+  await chrome.storage.local.remove(POOL_ENDPOINT_STORAGE_KEY);
+  document.querySelector("#pool-endpoint").value = "";
+  document.querySelector("#pool-detail").textContent =
+    "Enter any operator's public endpoint. Pool membership is not required.";
+  for (const id of [
+    "pool-mode",
+    "pool-miners",
+    "pool-peers",
+    "pool-accepted",
+    "pool-rejected",
+    "pool-tip",
+    "pool-sequence",
+    "pool-expires"
+  ]) {
+    document.querySelector(`#${id}`).textContent = "—";
+  }
+  document.querySelector("#pool-trust").textContent = "Display-only";
 }

@@ -92,6 +92,14 @@ closed, and the extension does not present an HNSR control. P2P ODoH, privacy
 downgrade, and experimental wire-profile controls remain visible as typed
 experimental policy inputs; unsupported selections fail closed.
 
+The popup can independently fetch the bounded public feed exposed by a
+MeshMine operator, so viewing pool status does not require pool membership.
+It omits credentials and referrer data, rejects redirects and oversized or
+malformed objects, and labels every decoded value unverified. The feed includes
+the draft HNSA proof objects and endpoint-signed snapshot, but the extension
+must not show a verified state until its Rust native host pins the new
+`handshake-rs` HNSA implementation and validates that complete chain.
+
 ## Optional wallet provider
 
 The repository contains a Handshake-specific website provider schema v1 and a
