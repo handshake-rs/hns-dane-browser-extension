@@ -65,6 +65,33 @@
       <div class="actions section-actions">
         <button id="sync-headers" type="button">Sync headers now</button>
       </div>
+      <h2>MeshMine public pool</h2>
+      <p id="pool-detail" class="section-detail" aria-live="polite">
+        Enter any operator's public endpoint. Pool membership is not required.
+      </p>
+      <form id="pool-form" class="field-stack">
+        <input id="pool-endpoint" type="url" inputmode="url" autocomplete="off"
+          placeholder="https://pool.example" aria-label="MeshMine public endpoint">
+        <div class="actions section-actions">
+          <button id="load-pool" type="submit">Load pool statistics</button>
+          <button id="clear-pool" type="button" class="secondary">Clear</button>
+        </div>
+      </form>
+      <dl>
+        <div><dt>Trust state</dt><dd id="pool-trust">Display-only</dd></div>
+        <div><dt>Mode</dt><dd id="pool-mode">—</dd></div>
+        <div><dt>Connected miners</dt><dd id="pool-miners">—</dd></div>
+        <div><dt>Mesh peers</dt><dd id="pool-peers">—</dd></div>
+        <div><dt>Accepted shares</dt><dd id="pool-accepted">—</dd></div>
+        <div><dt>Rejected shares</dt><dd id="pool-rejected">—</dd></div>
+        <div><dt>Handshake tip</dt><dd id="pool-tip">—</dd></div>
+        <div><dt>Snapshot sequence</dt><dd id="pool-sequence">—</dd></div>
+        <div><dt>Expires</dt><dd id="pool-expires">—</dd></div>
+      </dl>
+      <p class="warning">
+        This panel safely bounds and decodes the signed feed, but does not yet validate its HNSA
+        chain. Treat values as unverified until the native host pins the handshake-rs HNSA verifier.
+      </p>
     </main>
     <script type="module" src="popup.js"></script>
   </body>

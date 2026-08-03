@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: 2026-07-27
+Last updated: 2026-08-03
 
 HNS DANE Browser Extension is published by Denuo Web, LLC. Privacy and
 support questions can be sent to `info@denuoweb.com`. Do not post personal
@@ -16,7 +16,7 @@ change how browsing data is handled.
 The extension and native host keep only data needed to provide the browser
 feature, including:
 
-- extension settings, the explicit P2P DNS-relay requester choice, the
+- extension settings, the optional MeshMine public-statistics endpoint, the explicit P2P DNS-relay requester choice, the
   independently configured recursive HNS DoH URL, and the local timestamp of
   the last header-sync attempt used for retry limiting;
 - native-host registration, setup receipt or in-progress ownership
@@ -77,6 +77,13 @@ to serve the page, which can include the caller's network address, requested
 URL, headers, cookies, and content the user submits. Denuo Web does not proxy
 that traffic through a developer-operated browsing service.
 
+If the user enters a MeshMine public-statistics endpoint in the popup, the
+extension sends a credential-free, no-referrer GET request directly to that
+operator. The operator can observe the caller's network address, request time,
+and ordinary transport metadata. The returned snapshot is bounded and decoded
+for display, but is explicitly marked unverified until the native HNSA
+validation path is available. Denuo Web does not receive the endpoint or feed.
+
 ## Retention and removal
 
 Normal logs must omit full qnames, URLs, headers, bodies, raw DNS messages, and
@@ -107,7 +114,8 @@ extension storage is removed according to the browser's extension-removal
 behavior.
 
 Users can clear the configured recursive resolver, disable the P2P requester,
-remove the extension, or run the complete uninstaller at any time. No
+replace or clear the saved MeshMine endpoint, remove the extension, or run the
+complete uninstaller at any time. No
 developer-operated account or server-side profile exists, so Denuo Web holds
 no account record or synced browsing history to delete.
 

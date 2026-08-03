@@ -30,9 +30,9 @@ the native Rust host, not executable extension code.
   generation-bound browser-authority decision and wallet ABI capability. No
   remote or page-supplied code is executed, and unavailable authority or ABI
   leaves the provider absent.
-- `storage`: retain user settings locally and keep bounded session-only
-  navigation/security receipts needed to bind native results to the exact
-  active document.
+- `storage`: retain user settings, including an optional MeshMine public-feed
+  endpoint, locally and keep bounded session-only navigation/security receipts
+  needed to bind native results to the exact active document.
 - `webNavigation`: bind redirects, commits, History API changes, BFCache
   restores, and errors to the corresponding Rust security receipt.
 - `webRequest`: observe bounded request lifecycle metadata so main-frame,
@@ -43,8 +43,9 @@ the native Rust host, not executable extension code.
   Rust.
 - `<all_urls>` host permission: every ordinary DNS web hostname, redirect,
   subresource, download, Service Worker request, and WebSocket must be covered
-  by the same dual-root decision. A hostname allowlist would permit security
-  bypasses. There are no content scripts.
+  by the same dual-root decision. It also permits an explicit credential-free
+  read from a user-selected MeshMine statistics endpoint. A hostname allowlist
+  would permit security bypasses. There are no remotely supplied scripts.
 
 ## Local CA
 
