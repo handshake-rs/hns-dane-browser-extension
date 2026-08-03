@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FORBIDDEN_WALLET_METHODS,
+  WALLET_NATIVE_ABI_VERSION,
   WALLET_PROVIDER_EVENTS,
   WALLET_PROVIDER_METHODS,
   validateNativeCapabilities,
@@ -38,6 +39,25 @@ test("native results and events reject secret-bearing fields", () => {
     () => validateProviderEvent({
       event: "accountsChanged",
       payload: { recovery_phrase: "secret words" }
+    }),
+    (error) => error.code === "invalidResult"
+  );
+  assert.throws(
+    () => validateNativeResult({ authorityHandle: "opaque-private-handle" }),
+    (error) => error.code === "invalidResult"
+  );
+  assert.throws(
+    () => validateProviderEvent({
+      event: "walletLocked",
+      payload: { authority_revision: 7 }
+    }),
+    (error) => error.code === "invalidResult"
+  );
+  assert.throws(
+    () => validateProviderEvent({
+      event: "walletLocked",
+      authorityHandle: "opaque-private-handle",
+      payload: null
     }),
     (error) => error.code === "invalidResult"
   );
@@ -93,7 +113,7 @@ test("provider frames reject unsafe numbers, prototype keys, depth, and size", (
 
 test("native capability and event envelopes are versioned and allowlisted", () => {
   const capabilities = validateNativeCapabilities({
-    abiVersion: 1,
+    abiVersion: WALLET_NATIVE_ABI_VERSION,
     available: true,
     walletSession: "wallet-session-a",
     permissionGeneration: 2,
@@ -103,7 +123,7 @@ test("native capability and event envelopes are versioned and allowlisted", () =
   assert.throws(
     () =>
       validateNativeCapabilities({
-        abiVersion: 1,
+        abiVersion: WALLET_NATIVE_ABI_VERSION,
         available: true,
         walletSession: "wallet-session-a",
         permissionGeneration: 2,
@@ -114,7 +134,7 @@ test("native capability and event envelopes are versioned and allowlisted", () =
   assert.throws(
     () =>
       validateNativeCapabilities({
-        abiVersion: 1,
+        abiVersion: WALLET_NATIVE_ABI_VERSION,
         available: true,
         walletSession: "wallet-session-a",
         permissionGeneration: 2,
@@ -125,7 +145,7 @@ test("native capability and event envelopes are versioned and allowlisted", () =
   assert.throws(
     () =>
       validateNativeCapabilities({
-        abiVersion: 1,
+        abiVersion: WALLET_NATIVE_ABI_VERSION,
         available: true,
         walletSession: "wallet-session-a",
         permissionGeneration: 2,
@@ -135,7 +155,7 @@ test("native capability and event envelopes are versioned and allowlisted", () =
     (error) => error.code === "walletUnavailable"
   );
   assert.throws(
-    () => validateNativeCapabilities({ abiVersion: 2, available: true }),
+    () => validateNativeCapabilities({ abiVersion: 1, available: true }),
     (error) => error.code === "walletUnavailable"
   );
   assert.equal(

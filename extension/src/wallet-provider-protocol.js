@@ -1,5 +1,5 @@
 export const WALLET_PROVIDER_SCHEMA_VERSION = 1;
-export const WALLET_NATIVE_ABI_VERSION = 1;
+export const WALLET_NATIVE_ABI_VERSION = 2;
 
 export const WALLET_PROVIDER_METHODS = Object.freeze([
   "wallet_getCapabilities",
@@ -107,6 +107,8 @@ const MAX_STRING_LENGTH = 16 * 1024;
 const MAX_CONTAINER_ENTRIES = 128;
 const MAX_NESTING_DEPTH = 12;
 const SENSITIVE_RESULT_FIELDS = new Set([
+  "authorityhandle",
+  "authorityrevision",
   "recoveryphrase",
   "mnemonic",
   "seed",
@@ -231,7 +233,7 @@ export function validateProviderEvent(candidate) {
   if (!EVENT_SET.has(candidate.event)) {
     throw protocolError("invalidEvent", "unsupported provider event");
   }
-  validateBoundedJson(candidate.payload ?? null, MAX_MESSAGE_BYTES, true);
+  validateBoundedJson(candidate, MAX_MESSAGE_BYTES, true);
   return Object.freeze({ event: candidate.event, payload: candidate.payload ?? null });
 }
 

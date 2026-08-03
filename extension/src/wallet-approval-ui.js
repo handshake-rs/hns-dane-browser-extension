@@ -1,3 +1,5 @@
+import { approvalPromptDisplay } from "./wallet-approval.js";
+
 const params = new URLSearchParams(location.search);
 const approvalId = params.get("id");
 const title = document.querySelector("#title");
@@ -20,17 +22,18 @@ async function load() {
     return;
   }
   prompt = response.result;
-  title.textContent = label(prompt.kind);
+  const display = approvalPromptDisplay(prompt);
+  title.textContent = display.title;
   origin.textContent = `Requested by ${prompt.origin}`;
   status.textContent = `${prompt.method} · expires ${new Date(
     prompt.expiresAtUnixMs
   ).toLocaleTimeString()}`;
   summary.replaceChildren(
-    ...Object.entries(prompt.summary).flatMap(([field, value]) => {
+    ...display.rows.flatMap(([label, value]) => {
       const term = document.createElement("dt");
-      term.textContent = field.replace(/([A-Z])/g, " $1").toLowerCase();
+      term.textContent = label;
       const detail = document.createElement("dd");
-      detail.textContent = Array.isArray(value) ? value.join(", ") : String(value);
+      detail.textContent = value;
       return [term, detail];
     })
   );
@@ -62,13 +65,4 @@ function send(message) {
 function setEnabled(enabled) {
   approve.disabled = !enabled;
   reject.disabled = !enabled;
-}
-
-function label(kind) {
-  return {
-    permissions: "Approve wallet permissions",
-    valueMovement: "Approve value movement",
-    typedMessage: "Approve typed message",
-    marketplaceMatch: "Approve marketplace match"
-  }[kind] ?? "Review wallet request";
 }

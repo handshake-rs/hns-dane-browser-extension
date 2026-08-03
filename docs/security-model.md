@@ -202,6 +202,10 @@ base-unit, maximum-fee asset, chain/finality, warning, identifier, or expiry
 bindings. Approval, rejection, and window closure consume the exact dispatch
 context retained in service-worker memory. Provider results cannot contain
 inline events; only authority-bound service event frames enter event routing.
+The browser validates an approval-schema-v2 public projection, not a raw private
+ABI frame: canonical approval IDs are nonzero 16-byte wire IDs, and private
+authority handles and revisions are forbidden in public results and events. No
+adapter that constructs this projection is joined or enabled yet.
 
 Replay and rate state survives repeated initialization under identical
 generations. Runtime replacement, navigation invalidation, and header

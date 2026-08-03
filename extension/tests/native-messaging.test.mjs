@@ -21,7 +21,7 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
         command: "walletProviderCapabilities",
         schemaVersion: 1,
         requestId: "wallet-1",
-        providerAbiVersion: 1
+        providerAbiVersion: 2
       }),
       frame({ command: "shutdown", schemaVersion: 1, requestId: "shutdown-1" })
     ]);

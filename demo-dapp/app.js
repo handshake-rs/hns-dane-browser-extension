@@ -19,13 +19,20 @@ window.dispatchEvent(new Event("hns:requestProvider"));
 setTimeout(() => {
   if (!provider) {
     document.querySelector("#provider-state").textContent =
-      "No provider: this origin may be untrusted or wallet ABI v1 is unavailable";
+      "No provider: this origin may be untrusted or private wallet ABI v2 is unavailable";
   }
 }, 1500);
 
 on("#connect", async () => {
   await call("wallet_requestPermissions", {
-    scopes: ["hns:accounts", "hns:read", "market:read", "swap:read"]
+    capabilities: [
+      "accounts",
+      "balance",
+      "names",
+      "name_market",
+      "cross_chain_market",
+      "swap_settlement"
+    ]
   });
   const accounts = await call("hns_requestAccounts");
   showOverview("HNS account", accounts);

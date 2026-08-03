@@ -85,6 +85,13 @@ maximum-fee asset, chain/finality, enumerated warnings, and applicable public
 identifiers. Missing, extra, kind-mismatched, or free-form display data fails
 closed.
 
+That descriptor is a browser-owned public projection with approval schema 2,
+not the raw private `ApprovalPrompt` frame. Private `authorityHandle` and
+`authorityRevision` fields remain native-only and are forbidden in page results
+and event payloads. A future native adapter must decode ABI-v2 frames, retain
+those fields behind the native boundary, and construct the exact public
+projection; that adapter is not implemented or enabled in this release.
+
 Only the validated public prompt is placed in `chrome.storage.session`; the
 exact tab, document, authority generations, provider request, and native
 approval dispatch context remain in service-worker memory. Approval, explicit
@@ -173,7 +180,8 @@ The Chromium product is still not end-to-end wallet complete:
 - no independently signed wallet service artifact, pinned signer, private
   Chromium child-pipe launcher, or released transport join exists;
 - no released browser-engine opaque-authority adapter is consumable by this
-  native host; and
+  native host;
+- no reviewed native-to-public approval projection adapter is joined; and
 - the checked-in wallet subprocess runtime advertises framing, restart,
   authority-registry, structured-approval, and typed-event foundations only.
   It does not advertise provider dispatch, browser integration, wallet

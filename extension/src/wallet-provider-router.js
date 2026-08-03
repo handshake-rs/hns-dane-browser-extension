@@ -276,17 +276,13 @@ export class WalletProviderRouter {
   async extractEvents(response, operation) {
     await this.revalidateOperation(operation);
     response = validateNativeResult(response);
-    if (!isRecord(response) || !Array.isArray(response.events)) return response;
-    if (response.events.length > 32) {
-      throw protocolError("invalidEvent", "native wallet returned too many events");
+    if (isRecord(response) && Object.hasOwn(response, "events")) {
+      throw protocolError(
+        "invalidEvent",
+        "wallet events require the versioned native event channel"
+      );
     }
-    const events = response.events.map(validateProviderEvent);
-    for (const event of events) {
-      await this.deliverEvent(operation.sender, operation.binding, event);
-      await this.revalidateOperation(operation);
-    }
-    const { events: _events, ...result } = response;
-    return result;
+    return response;
   }
 
   documentOperation(key, document) {

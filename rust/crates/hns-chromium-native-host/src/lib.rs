@@ -2285,7 +2285,7 @@ mod tests {
         assert_eq!(policy.recursive_hns_doh_url, "https://hnsdoh.com/dns-query");
 
         let wallet = serde_json::from_str::<NativeRequest>(
-            r#"{"command":"walletProviderRequest","schemaVersion":1,"requestId":"wallet-1","providerAbiVersion":1,"authority":{"origin":"https://example"},"request":{"schemaVersion":1,"kind":"request","requestId":"page-1","sequence":1,"method":"wallet_getStatus","params":null}}"#,
+            r#"{"command":"walletProviderRequest","schemaVersion":1,"requestId":"wallet-1","providerAbiVersion":2,"authority":{"origin":"https://example"},"request":{"schemaVersion":1,"kind":"request","requestId":"page-1","sequence":1,"method":"wallet_getStatus","params":null}}"#,
         )
         .unwrap();
         let NativeRequest::WalletProviderRequest {
@@ -2298,7 +2298,7 @@ mod tests {
         assert_eq!(provider_abi_version, WALLET_ABI_VERSION);
         assert!(
             serde_json::from_str::<NativeRequest>(
-                r#"{"command":"walletProviderCapabilities","schemaVersion":1,"requestId":"wallet-2","providerAbiVersion":1,"permissionGeneration":9}"#
+                r#"{"command":"walletProviderCapabilities","schemaVersion":1,"requestId":"wallet-2","providerAbiVersion":2,"permissionGeneration":9}"#
             )
             .is_err()
         );
@@ -3248,7 +3248,7 @@ mod tests {
             maintenance_epoch
         );
 
-        let wallet_request = br#"{"command":"walletProviderCapabilities","schemaVersion":1,"requestId":"wallet-1","providerAbiVersion":1}"#;
+        let wallet_request = br#"{"command":"walletProviderCapabilities","schemaVersion":1,"requestId":"wallet-1","providerAbiVersion":2}"#;
         let (response, shutdown) = controller.handle_json(wallet_request);
         assert!(!shutdown);
         assert!(!response.ok);

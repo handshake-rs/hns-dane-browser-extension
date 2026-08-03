@@ -35,17 +35,14 @@ test("router binds every typed request to browser, wallet, permission, and navig
       commands.push({ command, fields });
       if (command === "walletProviderCapabilities") {
         return {
-          abiVersion: 1,
+          abiVersion: 2,
           available: true,
           walletSession: "wallet-a",
           permissionGeneration: 9,
           methods: ["wallet_getStatus"]
         };
       }
-      return {
-        status: { locked: false },
-        events: [{ event: "connect", payload: { network: "mainnet" } }]
-      };
+      return { status: { locked: false } };
     },
     deliverEvent: async (_sender, binding, event) => events.push({ binding, event })
   });
@@ -70,6 +67,15 @@ test("router binds every typed request to browser, wallet, permission, and navig
     walletSession: "wallet-a",
     permissionGeneration: 9
   });
+  assert.equal(events.length, 0);
+
+  await router.deliverNativeEvent({
+    providerAbiVersion: 2,
+    binding: initialized.binding,
+    event: "connect",
+    payload: { network: "mainnet" }
+  });
+  assert.equal(events.length, 1);
   assert.equal(events[0].event.event, "connect");
 
   await assert.rejects(
@@ -81,6 +87,35 @@ test("router binds every typed request to browser, wallet, permission, and navig
   );
 });
 
+test("router rejects inline result events without delivering them", async () => {
+  const events = [];
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => authority(),
+    nativeRequest: async (command) => command === "walletProviderCapabilities"
+      ? {
+          abiVersion: 2,
+          available: true,
+          walletSession: "wallet-a",
+          permissionGeneration: 1,
+          methods: ["wallet_getStatus"]
+        }
+      : {
+          status: { locked: false },
+          events: [{ event: "connect", payload: { network: "mainnet" } }]
+        },
+    deliverEvent: async (...event) => events.push(event)
+  });
+  const initialized = await router.initialize({ origin: "https://welcome" }, sender);
+  await assert.rejects(
+    router.request(
+      bridgeRequest(initialized.binding, 1, "wallet_getStatus", null),
+      sender
+    ),
+    (error) => error.code === "invalidEvent"
+  );
+  assert.equal(events.length, 0);
+});
+
 test("router rejects origin, navigation, and forbidden-method substitution before native dispatch", async () => {
   let currentAuthority = authority();
   let requestCalls = 0;
@@ -90,7 +125,7 @@ test("router rejects origin, navigation, and forbidden-method substitution befor
       if (command === "walletProviderRequest") requestCalls += 1;
       return command === "walletProviderCapabilities"
         ? {
-            abiVersion: 1,
+            abiVersion: 2,
             available: true,
             walletSession: "wallet-a",
             permissionGeneration: 1,
@@ -140,7 +175,7 @@ test("parallel authority completion cannot turn an earlier sequence into a repla
     },
     nativeRequest: async (command) => command === "walletProviderCapabilities"
       ? {
-          abiVersion: 1,
+          abiVersion: 2,
           available: true,
           walletSession: "wallet-a",
           permissionGeneration: 1,
@@ -170,7 +205,7 @@ test("completed request identifiers and unnegotiated methods cannot be reused", 
     authorityForSender: async () => authority(),
     nativeRequest: async (command) => command === "walletProviderCapabilities"
       ? {
-          abiVersion: 1,
+          abiVersion: 2,
           available: true,
           walletSession: "wallet-a",
           permissionGeneration: 1,
@@ -204,7 +239,7 @@ test("repeated initialization with the same authority cannot reset replay state"
     authorityForSender: async () => authority(),
     nativeRequest: async (command) => command === "walletProviderCapabilities"
       ? {
-          abiVersion: 1,
+          abiVersion: 2,
           available: true,
           walletSession: "wallet-a",
           permissionGeneration: 1,
@@ -248,7 +283,7 @@ test("capabilities cannot change without an authority or wallet generation chang
     nativeRequest: async () => {
       capabilityCalls += 1;
       return {
-        abiVersion: 1,
+        abiVersion: 2,
         available: true,
         walletSession: "wallet-a",
         permissionGeneration: 1,
@@ -272,7 +307,7 @@ test("an authority generation change creates a fresh replay domain", async () =>
     authorityForSender: async () => currentAuthority,
     nativeRequest: async (command) => command === "walletProviderCapabilities"
       ? {
-          abiVersion: 1,
+          abiVersion: 2,
           available: true,
           walletSession: "wallet-a",
           permissionGeneration: 1,
@@ -331,7 +366,7 @@ test("a request completing after document authority replacement is stale", async
     nativeRequest: async (command) => {
       if (command === "walletProviderCapabilities") {
         return {
-          abiVersion: 1,
+          abiVersion: 2,
           available: true,
           walletSession: "wallet-a",
           permissionGeneration: 1,
@@ -369,7 +404,7 @@ test("a native result is stale when browser authority changes without document r
     nativeRequest: async (command) => {
       if (command === "walletProviderCapabilities") {
         return {
-          abiVersion: 1,
+          abiVersion: 2,
           available: true,
           walletSession: "wallet-a",
           permissionGeneration: 1,
@@ -392,10 +427,7 @@ test("a native result is stale when browser authority changes without document r
   );
   await requestStarted;
   currentAuthority = authority({ navigationGeneration: 6 });
-  finishRequest({
-    ok: true,
-    events: [{ event: "connect", payload: { network: "mainnet" } }]
-  });
+  finishRequest({ ok: true });
   await assert.rejects(pending, (error) => error.code === "staleContext");
   assert.equal(delivered, 0);
 });
@@ -411,7 +443,7 @@ test("explicit authority invalidation makes pending requests and approvals stale
     nativeRequest: async (command) => {
       if (command === "walletProviderCapabilities") {
         return {
-          abiVersion: 1,
+          abiVersion: 2,
           available: true,
           walletSession: "wallet-a",
           permissionGeneration: 1,
@@ -449,7 +481,7 @@ test("approval completion revalidates browser authority after native dispatch", 
   const router = new WalletProviderRouter({
     authorityForSender: async () => currentAuthority,
     nativeRequest: async () => ({
-      abiVersion: 1,
+      abiVersion: 2,
       available: true,
       walletSession: "wallet-a",
       permissionGeneration: 1,

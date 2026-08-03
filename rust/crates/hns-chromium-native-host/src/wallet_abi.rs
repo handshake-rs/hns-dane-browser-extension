@@ -1,11 +1,11 @@
 //! Discovery boundary for an independently released Chromium wallet service.
 //!
-//! `hns-wallet-ffi` currently defines a Rust JSON-frame library, not a C ABI or
-//! executable. This module therefore performs bounded local-integrity checks on
-//! a staged service artifact but deliberately does not load or execute it.
-//! Provider dispatch remains unavailable until a separately released, signed
-//! service defines the framed process transport and the browser engine exposes
-//! its opaque provider-authority context at this repository boundary.
+//! `hns-wallet-ffi` defines the private ABI v2 frame contract and the wallet
+//! repository contains a fail-closed subprocess foundation. This module
+//! performs bounded local-integrity checks on a staged service artifact but
+//! deliberately does not load or execute it. Provider dispatch remains
+//! unavailable until a separately released, signed service, reviewed process
+//! transport, and opaque browser-engine authority join all exist.
 
 #[cfg(unix)]
 use serde::Deserialize;
@@ -24,13 +24,13 @@ use std::io::{self, Read};
 use std::path::Component;
 use std::path::{Path, PathBuf};
 
-pub(crate) const WALLET_ABI_VERSION: u16 = 1;
-pub(crate) const WALLET_SERVICE_PROTOCOL_VERSION: u16 = 1;
+pub(crate) const WALLET_ABI_VERSION: u16 = 2;
+pub(crate) const WALLET_SERVICE_PROTOCOL_VERSION: u16 = 2;
 pub(crate) const WALLET_PROVIDER_SCHEMA_VERSION: u16 = 1;
 pub(crate) const WALLET_ABI_MAX_FRAME_BYTES: u32 = 1_048_576;
 const WALLET_ARTIFACT_MANIFEST_SCHEMA_VERSION: u16 = 1;
 #[cfg(unix)]
-const WALLET_ARTIFACT_DIRECTORY: &str = "wallet-abi-v1";
+const WALLET_ARTIFACT_DIRECTORY: &str = "wallet-abi-v2";
 #[cfg(unix)]
 const WALLET_ARTIFACT_MANIFEST: &str = "manifest.json";
 #[cfg(unix)]
@@ -43,11 +43,11 @@ const MAX_RELEASE_ID_BYTES: usize = 128;
 const MAX_ARTIFACT_NAME_BYTES: usize = 128;
 #[cfg(unix)]
 const REQUIRED_CAPABILITIES: [&str; 5] = [
-    "approval_decision",
-    "canonical_framed_json",
-    "provider_request",
-    "restart_generation",
-    "secret_minimizing_chromium",
+    "canonical_framing",
+    "restart_isolation",
+    "opaque_authority_registry",
+    "structured_approvals",
+    "typed_events",
 ];
 
 #[derive(Clone, Debug)]
@@ -644,7 +644,7 @@ mod tests {
             service_protocol_version: WALLET_SERVICE_PROTOCOL_VERSION,
             provider_schema_version: WALLET_PROVIDER_SCHEMA_VERSION,
             maximum_frame_bytes: WALLET_ABI_MAX_FRAME_BYTES,
-            release_id: "wallet-fixture-v1".to_owned(),
+            release_id: "wallet-fixture-v2".to_owned(),
             artifact: "wallet-service".to_owned(),
             artifact_sha256: "00".repeat(32),
             capabilities: REQUIRED_CAPABILITIES

@@ -243,18 +243,25 @@ Dispatch requires an opaque authority context produced by the browser engine,
 plus exact wallet ABI, framed-service protocol, provider-schema, capability,
 wallet-session, permission-generation, and approval-generation agreement.
 
-The native host has source-only discovery for an independently released wallet
-service under `data/wallet-abi-v1`. It performs bounded no-follow, handle-based
-Unix ownership, metadata, contract, and SHA-256 local-integrity checks. It does
-not search `PATH`, load a dynamic library, copy sibling wallet crates into the
-build, or execute the discovered file. Windows rejects discovery until a
-reviewed ownership/ACL check exists. A manifest digest is not signer
-authenticity; a future launcher needs a pinned signed release and must execute
-the retained checked handle or immediately reverify it.
+The native host has source-only discovery for a future independently released
+wallet service adapter under `data/wallet-abi-v2`. Its manifest must match
+private wallet ABI 2, framed-service protocol 2, website provider schema 1, the
+bounded frame maximum, and the exact ABI-v2 foundation capabilities. Discovery
+performs bounded no-follow, handle-based Unix ownership, metadata, contract,
+and SHA-256 local-integrity checks. It does not search `PATH`, load a dynamic
+library, copy sibling wallet crates into the build, or execute the discovered
+file. Windows rejects discovery until a reviewed ownership/ACL check exists. A
+manifest digest is not signer authenticity; a future launcher needs a pinned
+signed release and must execute the retained checked handle or immediately
+reverify it.
 
-The current wallet repository exposes a Rust JSON-frame library/trait, not a
-service executable, and the current engine exposes no consumable opaque wallet
-authority context. Consequently all three parsed wallet command envelopes fail
+The wallet repository defines the private ABI-v2 frame contract and a
+fail-closed subprocess foundation, but no signed independently released service
+artifact, reviewed Chromium transport, or native-to-public approval projection
+adapter is joined here, and the current engine exposes no consumable opaque
+wallet authority context. The projection adapter must retain private authority
+handles natively and produce only the exact browser-owned approval-schema-v2
+public prompt. Consequently all three parsed wallet command envelopes fail
 closed, `handshakeWalletProvider` is false, and provider injection cannot occur.
 The browser's DANE runtime is independent of this unavailable optional join.
 

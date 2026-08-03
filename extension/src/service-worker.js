@@ -23,7 +23,8 @@ import {
   isProviderBridgeMessage,
   protocolError,
   providerErrorPayload,
-  validatePageRequest
+  validatePageRequest,
+  WALLET_NATIVE_ABI_VERSION
 } from "./wallet-provider-protocol.js";
 import { WalletProviderRouter } from "./wallet-provider-router.js";
 import {
@@ -1036,7 +1037,7 @@ async function walletApprovalDecision(rawApprovalId, rawDecision) {
     const result = await walletProviderNativeRequest(
       "walletProviderApprovalDecision",
       {
-        providerAbiVersion: 1,
+        providerAbiVersion: WALLET_NATIVE_ABI_VERSION,
         approvalId,
         decision,
         authority: dispatch.authority,
@@ -1087,11 +1088,18 @@ async function rejectClosedWalletApproval(approvalId) {
     approvalStorageKey(approvalId)
   ).catch(() => {});
   context.rejectRequest(protocolError("userRejected", "wallet approval window was closed"));
-  await walletProviderNativeRequest("walletProviderApprovalDecision", {
-    providerAbiVersion: 1,
-    approvalId,
-    decision: "reject"
-  }).catch(() => {});
+  try {
+    const dispatch = await walletProviderRouter.revalidateApproval(context);
+    await walletProviderNativeRequest("walletProviderApprovalDecision", {
+      providerAbiVersion: WALLET_NATIVE_ABI_VERSION,
+      approvalId,
+      decision: "reject",
+      authority: dispatch.authority,
+      request: context.request
+    });
+  } catch {
+    // A closed window cannot revive stale browser or wallet authority.
+  }
 }
 
 async function cleanupWalletApprovals() {

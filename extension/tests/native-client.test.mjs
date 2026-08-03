@@ -194,7 +194,7 @@ test("native client delivers versioned unsolicited wallet events without a reque
     type: "walletProviderEvent",
     runtimeSession: "session-a",
     eventSequence: 1,
-    providerAbiVersion: 1,
+    providerAbiVersion: 2,
     binding: { documentId: "document-a" },
     event: "walletLocked",
     payload: null
