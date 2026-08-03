@@ -274,6 +274,13 @@ derivation before injection, return, or event dispatch. A stale result is
 returned without automatic retry because a mutating wallet operation may
 already have executed.
 
+The native capability snapshot accepts permission generation zero for an
+authority that has never had a permission record or tombstone. Its negotiated
+method set may still contain the non-permissioned bootstrap methods needed to
+request access; methods are runtime support, not granted permission. The first
+grant is generation one. Accepting the initial zero does not relax the exact
+wallet-session and permission-generation binding on native event delivery.
+
 ## Experimental relay boundary
 
 The browser can consume the private HNS P2P DNS-relay transport only after an

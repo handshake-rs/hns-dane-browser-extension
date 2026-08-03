@@ -190,7 +190,7 @@ export function validateNativeCapabilities(candidate) {
     candidate.walletSession.length < 1 ||
     candidate.walletSession.length > 160 ||
     !Number.isSafeInteger(candidate.permissionGeneration) ||
-    candidate.permissionGeneration < 1 ||
+    candidate.permissionGeneration < 0 ||
     !Array.isArray(candidate.methods) ||
     candidate.methods.length > WALLET_PROVIDER_METHODS.length ||
     Object.keys(candidate).some(

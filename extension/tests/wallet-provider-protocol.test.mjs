@@ -120,6 +120,29 @@ test("native capability and event envelopes are versioned and allowlisted", () =
     methods: ["hns_accounts", "wallet_getStatus"]
   });
   assert.deepEqual(capabilities.methods, ["hns_accounts", "wallet_getStatus"]);
+  const neverAuthorized = validateNativeCapabilities({
+    abiVersion: WALLET_NATIVE_ABI_VERSION,
+    available: true,
+    walletSession: "wallet-session-fresh",
+    permissionGeneration: 0,
+    methods: ["wallet_getCapabilities", "wallet_requestPermissions"]
+  });
+  assert.equal(neverAuthorized.permissionGeneration, 0);
+  assert.deepEqual(neverAuthorized.methods, [
+    "wallet_getCapabilities",
+    "wallet_requestPermissions"
+  ]);
+  assert.throws(
+    () =>
+      validateNativeCapabilities({
+        abiVersion: WALLET_NATIVE_ABI_VERSION,
+        available: true,
+        walletSession: "wallet-session-a",
+        permissionGeneration: -1,
+        methods: ["wallet_requestPermissions"]
+      }),
+    (error) => error.code === "walletUnavailable"
+  );
   assert.throws(
     () =>
       validateNativeCapabilities({

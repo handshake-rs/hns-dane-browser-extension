@@ -24,6 +24,9 @@ All notable changes to this project will be documented in this file.
   validate all 12 typed approval-summary variants, reject inline result events,
   accept events only through the service channel, and bind approval-window
   rejection or closure to its exact in-memory dispatch context.
+- Accept permission generation zero in a private native capability snapshot
+  for a never-authorized origin without relaxing native event or exact
+  wallet-session binding.
 
 ### Security
 
