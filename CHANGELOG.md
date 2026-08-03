@@ -19,10 +19,11 @@ All notable changes to this project will be documented in this file.
   ownership-checked external-extension registrations and Chromium launch
   wrappers so removing the extension remains persistent across browser
   restarts.
-- Add the source-only Chromium wallet-provider ABI v1 boundary: strict typed
-  command envelopes, exact native capability validation, HTTPS-only document
-  routing, generation-bound replay state, and explicit unavailable diagnostics
-  for the independently released wallet service join.
+- Align the source-only Chromium wallet boundary to private ABI v2 while
+  retaining website provider schema v1: stage only from `wallet-abi-v2`,
+  validate all 12 typed approval-summary variants, reject inline result events,
+  accept events only through the service channel, and bind approval-window
+  rejection or closure to its exact in-memory dispatch context.
 
 ### Security
 
@@ -38,6 +39,11 @@ All notable changes to this project will be documented in this file.
 - Invalidate wallet document and approval authority before header maintenance,
   and re-derive exact browser authority after awaited native capability,
   request, and approval results before publishing any completion or event.
+- Keep wallet artifact authenticity, private transport, runtime negotiation,
+  engine authority, provider availability, and value movement false. The
+  checked-in wallet ABI-v2 subprocess provides framing/authority/approval/event
+  foundations but no provider-dispatch, browser-integration, wallet-operation,
+  or value-movement capability, and the native host never launches it.
 
 ## 0.5.5 - 2026-07-29
 

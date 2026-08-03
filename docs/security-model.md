@@ -176,19 +176,32 @@ Wallet access cannot widen browser authority. A provider request first needs
 the exact HTTPS main-frame namespace/TLS result and document generations, then
 a native opaque browser-engine authority context, and finally the exact wallet
 session, permission generation, method capability, and approval binding.
-Extension-supplied authority-shaped JSON is never authentication. The current
-engine exposes no consumable opaque context, so native wallet capability and
-request commands fail closed and provider code is not injected.
+Extension-supplied authority-shaped JSON is never authentication. No released
+engine-authority adapter is consumable at this native-host boundary, so native
+wallet capability and request commands fail closed and provider code is not
+injected.
 
-The optional `data/wallet-abi-v1` service staging area accepts only an exact,
+The optional `data/wallet-abi-v2` service staging area accepts only an exact,
 bounded manifest and capability set. Unix discovery uses current-user-owned,
 non-shared-writable, no-follow opened directories and single-link regular-file
 handles; it checks size and metadata around a bounded same-handle digest.
 Windows remains unavailable until ACL ownership has a reviewed implementation.
-The digest is local integrity, not publisher authenticity. No service is
-executed until a future release pins a signing identity and provides a reviewed
-canonical framed transport. Future execution must retain the checked handle or
-repeat verification immediately, never reopen a previously checked path.
+The digest is local integrity, not publisher authenticity. Artifact
+authenticity, service transport, runtime negotiation, engine authority, overall
+provider availability, and value movement remain false. No artifact is launched
+or executed. Future execution requires a pinned signing identity, a reviewed
+private child-pipe transport, and retained checked handles or immediate repeat
+verification; it must never reopen a previously checked path.
+
+The private wallet ABI is version 2 while the website-facing provider schema
+remains version 1. Approval prompts form a closed union of 12 typed variants:
+permissions, module enablement, send, name transfer, name finalize, typed
+signature, name offer, name purchase, market intent, fill acceptance, swap
+redeem, and swap refund. The extension rejects mismatched method/kind, asset,
+base-unit, maximum-fee asset, chain/finality, warning, identifier, or expiry
+bindings. Approval, rejection, and window closure consume the exact dispatch
+context retained in service-worker memory. Provider results cannot contain
+inline events; only authority-bound service event frames enter event routing.
 
 Replay and rate state survives repeated initialization under identical
 generations. Runtime replacement, navigation invalidation, and header
@@ -271,7 +284,7 @@ qnames, qtypes, request timing, and source IP.
 | Chromium flavors share a native-messaging location | Treat browser selection as compatibility intent; deduplicate shared paths, bind exact allowed extension origins, and refuse replacement or removal unless the manifest is proven to be owned by this installation |
 | Page forges security metadata | Strip internal headers; publish only native checked status |
 | Page forges wallet origin, generations, or permission fields | Treat them only as lookup candidates; require a native opaque engine authority context and exact wallet generations; current release remains unavailable |
-| Wallet manifest adds unknown/duplicate capabilities or changes versions | Deny unknown fields and require the exact ABI, protocol, provider schema, frame bound, and capability set |
+| Wallet manifest adds unknown/duplicate capabilities or changes versions | Deny unknown fields and require private ABI 2, service protocol 2, website provider schema 1, the exact frame bound, and the closed foundation capability set |
 | Local path or symlink substitutes a wallet artifact | Relative no-follow opened handles, current-user ownership, single-link files, bounded same-handle digest and metadata checks; no execution without pinned signed-release authenticity |
 | Stale wallet request is retried after a generation change | Preserve replay state for repeated initialization and surface stale completion without automatic retry |
 | Browser uninstall removes independent wallet keys or databases | Store only the staged adapter manifest/artifact below browser data; wallet-owned state must remain in an independent wallet-owned location |
@@ -292,9 +305,12 @@ testing, store signing/review, and artifact provenance tied to the reviewed
 commit/tag.
 
 The wallet join has additional release gates: an independently signed service
-executable and canonical framed process protocol, pinned signer verification,
-reviewed Windows ACL ownership checks, a browser-engine opaque authority
-adapter, method-specific approval-summary mapping, restart/upgrade tests, and
+artifact, private child-pipe launcher/transport, pinned signer verification,
+reviewed Windows ACL ownership checks, a released browser-engine opaque
+authority adapter, persistent production runtime, restart/upgrade tests, and
 proof that browser uninstall removes only staged adapter files while preserving
-independent wallet state. Until those exist, local-integrity discovery remains
-diagnostic and `available` remains false.
+independent wallet state. The checked-in wallet ABI-v2 subprocess supplies only
+framing, restart, authority-registry, structured-approval, and typed-event
+foundations; it advertises no provider dispatch, browser integration, wallet
+operations, or value movement. Until the release gates exist, local-integrity
+discovery remains diagnostic and every availability/value gate remains false.

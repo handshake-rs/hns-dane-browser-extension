@@ -94,12 +94,18 @@ experimental policy inputs; unsupported selections fail closed.
 
 ## Optional wallet provider
 
-The repository contains a Handshake-specific provider surface and a strict
-source-only wallet ABI v1 artifact-discovery boundary. The released Chromium
-product keeps it unavailable: there is no signed standalone wallet service or
-canonical process transport, and the pinned browser engine does not expose the
-opaque provider-authority context required for native authentication. A staged
-manifest digest is local integrity only and no artifact is launched. See
+The repository contains a Handshake-specific website provider schema v1 and a
+strict source-only private wallet ABI-v2 artifact-discovery boundary. It
+validates the closed 12-variant typed approval union, accepts events only from
+the service event channel, and binds approval-window decisions to exact
+in-memory context. The released Chromium product keeps it unavailable: no
+signed standalone wallet service, private process transport, or released
+engine-authority adapter is joined. The standalone wallet's checked-in ABI-v2
+subprocess is a foundation only and advertises no provider dispatch, browser
+integration, wallet operations, or value movement. Artifact authenticity,
+transport, runtime, engine authority, provider, and value gates remain false;
+a staged manifest digest is local integrity only and no artifact is launched.
+See
 [Handshake wallet provider](docs/wallet-provider.md) and
 [wallet privacy](docs/wallet-privacy.md).
 
