@@ -2480,14 +2480,6 @@ mod tests {
         artifact_override: Option<Vec<u8>>,
     ) -> InstalledRelease {
         let artifact_bytes = artifact_override.unwrap_or_else(native_fixture_bytes);
-        fs::create_dir_all(artifact_directory(root)).unwrap();
-        let artifact_path = artifact_directory(root).join(TEST_ARTIFACT_NAME);
-        if artifact_path.exists() {
-            make_writable(&artifact_path);
-        }
-        fs::write(&artifact_path, &artifact_bytes).unwrap();
-        set_mode(&artifact_path, if immutable { 0o500 } else { 0o700 });
-
         let mut manifest = fixture_manifest(
             &artifact_bytes,
             sequence,
@@ -2505,20 +2497,29 @@ mod tests {
     }
 
     fn install_raw_release(root: &Path, release: &InstalledRelease, immutable: bool) {
-        fs::create_dir_all(artifact_directory(root)).unwrap();
-        let artifact_path = artifact_directory(root).join(TEST_ARTIFACT_NAME);
+        let directory = create_private_artifact_directory(root);
+        let artifact_path = directory.join(TEST_ARTIFACT_NAME);
         if artifact_path.exists() {
             make_writable(&artifact_path);
         }
         fs::write(&artifact_path, &release.artifact_bytes).unwrap();
         set_mode(&artifact_path, if immutable { 0o500 } else { 0o700 });
 
-        let manifest_path = artifact_directory(root).join(WALLET_ARTIFACT_MANIFEST);
+        let manifest_path = directory.join(WALLET_ARTIFACT_MANIFEST);
         if manifest_path.exists() {
             make_writable(&manifest_path);
         }
         fs::write(&manifest_path, &release.manifest_bytes).unwrap();
         set_mode(&manifest_path, if immutable { 0o400 } else { 0o600 });
+    }
+
+    fn create_private_artifact_directory(root: &Path) -> PathBuf {
+        fs::create_dir_all(root).unwrap();
+        set_mode(root, 0o700);
+        let directory = artifact_directory(root);
+        fs::create_dir_all(&directory).unwrap();
+        set_mode(&directory, 0o700);
+        directory
     }
 
     fn rewrite_manifest(root: &Path, manifest: &WalletArtifactManifest) {
