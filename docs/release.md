@@ -84,6 +84,17 @@ after all of the following are reviewed from immutable release evidence:
    The complete repository gate and Linux target qualification then pass at
    the exact browser commit.
 
+The focused verifier filter passed at exact source
+`a39f8759c0161b5e49cb93c0c5aea1f0298e3108`: 17 passed, 0 failed, and
+24 filtered in the library target, with 0 main-target tests. Its first
+invocation at `17d3efae6e0367e1f0ee2ef8cdafa67b5cdc20af` compiled
+successfully but had 15 fixture-only
+`walletArtifactDirectoryUnsafe` failures because the environment created the
+test directories as `0775`; the 2 pure encoding tests passed. Production
+correctly rejects that mode. `a39f8759` forced only test fixture directories
+to `0700`, and the cached rerun passed. The exact command and target/temp paths
+are recorded in [milestones](milestones.md#current-qualification-evidence-and-remaining-release-work).
+
 The current tables are empty. Linux is the only implemented sealed-execution
 boundary; macOS and Windows must stay unavailable until equivalent reviewed
 ownership and immutable-execution mechanisms land. Even a launch-admitted
@@ -91,6 +102,9 @@ artifact must not make provider or value gates true until the private
 child-pipe transport, exact runtime negotiation, browser-engine opaque
 authority, public approval projection, restart lifecycle, and installed-browser
 qualification all pass.
+The focused filter is not the full repository gate, a release build/package,
+installed-browser testing, or wallet product qualification and does not
+authorize populating the production trust-root, release-pin, or floor tables.
 
 ## Setup application packages
 

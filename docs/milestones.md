@@ -92,12 +92,29 @@ change.
 - release artifact provenance tied to the reviewed commit/tag.
 - Wallet admission source now consumes the wallet-owned manifest schema v2,
   verifies JCS/Ed25519/exact pins, retains durable per-line high-water state,
-  and provides a Linux sealed-executable primitive. Its focused
-  restart/tamper/downgrade/path/signature tests were added in this source
-  tranche but were not executed locally; CI evidence is pending. Production
-  trust roots, release pins, and floors remain empty, and macOS/Windows
-  execution, private transport, opaque engine authority, provider projection,
-  and product qualification remain release blockers.
+  and provides a Linux sealed-executable primitive. At exact source
+  `a39f8759c0161b5e49cb93c0c5aea1f0298e3108`, the focused offline command
+  below passed 17 tests with 0 failures and 24 filtered in the library target;
+  the main target contained 0 tests:
+
+  ```sh
+  CARGO_TARGET_DIR=/home/den/.codex/targets/hns-extension-wallet-abi-verifier-aug3 \
+  TMPDIR=/home/den/.codex/tmp/hns-extension-wallet-abi-verifier-aug3 \
+  cargo test --locked --offline -p hns-chromium-native-host wallet_abi::tests -- --test-threads=1
+  ```
+
+  The first invocation at
+  `17d3efae6e0367e1f0ee2ef8cdafa67b5cdc20af` compiled successfully. Two
+  pure encoding tests passed, while the other 15 reached the same
+  `walletArtifactDirectoryUnsafe` fixture precondition because the environment
+  created test roots and ABI directories as mode `0775`. That production
+  rejection was correct. `a39f8759` changed only the fixture helpers to force
+  both directories to `0700`; the cached rerun above then passed.
+  This did not run the full repository gate, a release build or package,
+  installed-browser coverage, or product qualification. Production trust
+  roots, release pins, and floors remain empty, and macOS/Windows execution,
+  private transport, opaque engine authority, provider projection, and product
+  qualification remain release blockers.
 
 Passing portable source gates is not a substitute for those release gates.
 

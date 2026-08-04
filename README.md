@@ -119,6 +119,17 @@ no qualified standalone service, private process transport, or released
 engine-authority adapter is joined. Artifact authenticity, transport, runtime,
 engine authority, provider, and value gates therefore remain false in
 production, and no staged artifact is launched.
+
+Focused offline verifier evidence at exact source
+`a39f8759c0161b5e49cb93c0c5aea1f0298e3108` is 17 passed, 0 failed, and
+24 filtered in the library target, plus 0 main-target tests. The first
+invocation at `17d3efae6e0367e1f0ee2ef8cdafa67b5cdc20af` compiled
+successfully but correctly rejected fixture directories inherited as mode
+`0775`: 2 pure encoding tests passed and the other 15 failed at the shared
+`walletArtifactDirectoryUnsafe` precondition. Commit `a39f8759` changed only
+the fixtures to mode `0700`; the cached rerun passed. This is focused source
+evidence, not the full gate, a release build/package, installed-browser
+qualification, or product readiness.
 See
 [Handshake wallet provider](docs/wallet-provider.md) and
 [wallet privacy](docs/wallet-privacy.md).
