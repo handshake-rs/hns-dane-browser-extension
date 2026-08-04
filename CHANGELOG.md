@@ -30,7 +30,8 @@ All notable changes to this project will be documented in this file.
 - Consume the wallet-owned signed-artifact manifest schema v2 at the Chromium
   boundary, including exact JCS bytes, signature-omitted payload hashing,
   Ed25519 verification, verifier-owned release pins/floors, stable atomic
-  per-release-line anti-rollback state, retained path binding, and a
+  per-release-line anti-rollback state with interprocess serialization,
+  launch-time signed-window revalidation, retained path binding, and a
   Linux-only sealed-executable launch primitive.
 
 ### Security

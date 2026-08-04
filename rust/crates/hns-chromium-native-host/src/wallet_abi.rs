@@ -48,6 +48,8 @@ const WALLET_ARTIFACT_MANIFEST: &str = "manifest.json";
 #[cfg(unix)]
 const WALLET_ANTI_ROLLBACK_STATE: &str = "wallet-abi-v2-admission-state.json";
 #[cfg(unix)]
+const WALLET_ANTI_ROLLBACK_LOCK: &str = "wallet-abi-v2-admission.lock";
+#[cfg(unix)]
 const WALLET_ANTI_ROLLBACK_STATE_SCHEMA_VERSION: u16 = 1;
 #[cfg(unix)]
 const WALLET_SOURCE_REPOSITORY: &str = "https://github.com/handshake-rs/hns-wallet-rs";
@@ -466,6 +468,8 @@ enum WalletArtifactRejection {
     #[cfg(unix)]
     ReleaseFloor,
     #[cfg(unix)]
+    ReleaseTimeWindow,
+    #[cfg(unix)]
     AntiRollback,
     #[cfg(unix)]
     PathBinding,
@@ -513,6 +517,8 @@ impl WalletArtifactRejection {
             #[cfg(unix)]
             Self::ReleaseFloor => "walletArtifactReleaseBelowFloor",
             #[cfg(unix)]
+            Self::ReleaseTimeWindow => "walletArtifactReleaseTimeInvalid",
+            #[cfg(unix)]
             Self::AntiRollback => "walletArtifactRollbackRejected",
             #[cfg(unix)]
             Self::PathBinding => "walletArtifactPathBindingChanged",
@@ -554,7 +560,9 @@ struct LaunchAdmittedWalletArtifact {
 #[cfg(unix)]
 impl LaunchAdmittedWalletArtifact {
     fn launch(&mut self) -> io::Result<Child> {
-        self.revalidate_for_launch()
+        let anti_rollback_lock = acquire_anti_rollback_lock(&self.data_directory)
+            .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
+        self.revalidate_for_launch_while_locked(&anti_rollback_lock)
             .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
         #[cfg(target_os = "linux")]
         {
@@ -569,7 +577,7 @@ impl LaunchAdmittedWalletArtifact {
                     WalletArtifactRejection::LaunchFailed.code(),
                 )
             })?;
-            self.revalidate_for_launch().map_err(|reason| {
+            self.revalidate_for_launch_while_locked(&anti_rollback_lock).map_err(|reason| {
                 io::Error::new(io::ErrorKind::PermissionDenied, reason.code())
             })?;
             spawn_sealed_linux_executable(sealed)
@@ -583,7 +591,23 @@ impl LaunchAdmittedWalletArtifact {
         }
     }
 
-    fn revalidate_for_launch(&mut self) -> Result<(), WalletArtifactRejection> {
+    fn revalidate_for_launch_while_locked(
+        &mut self,
+        anti_rollback_lock: &WalletAntiRollbackLock,
+    ) -> Result<(), WalletArtifactRejection> {
+        let initial_unix_ms =
+            current_unix_ms().ok_or(WalletArtifactRejection::ReleaseTimeWindow)?;
+        self.revalidate_for_launch_while_locked_at(initial_unix_ms, anti_rollback_lock)?;
+        let final_unix_ms =
+            current_unix_ms().ok_or(WalletArtifactRejection::ReleaseTimeWindow)?;
+        self.require_signed_time_window_at(final_unix_ms)
+    }
+
+    fn revalidate_for_launch_while_locked_at(
+        &mut self,
+        now_unix_ms: u64,
+        anti_rollback_lock: &WalletAntiRollbackLock,
+    ) -> Result<(), WalletArtifactRejection> {
         let current_data_directory = open_directory_nofollow(&self.data_directory_path)
             .map_err(|_| WalletArtifactRejection::PathBinding)?;
         let current_data_directory_metadata = current_data_directory
@@ -668,7 +692,23 @@ impl LaunchAdmittedWalletArtifact {
         {
             return Err(WalletArtifactRejection::PathBinding);
         }
-        require_anti_rollback_entry(&self.data_directory, &self.anti_rollback_entry)
+        require_anti_rollback_entry_locked(
+            &self.data_directory,
+            &self.anti_rollback_entry,
+            anti_rollback_lock,
+        )?;
+        self.require_signed_time_window_at(now_unix_ms)
+    }
+
+    fn require_signed_time_window_at(
+        &self,
+        now_unix_ms: u64,
+    ) -> Result<(), WalletArtifactRejection> {
+        let manifest = serde_json::from_slice::<WalletArtifactManifest>(&self.manifest_bytes)
+            .map_err(|_| WalletArtifactRejection::PathBinding)?;
+        valid_manifest_time_window(&manifest, now_unix_ms)
+            .then_some(())
+            .ok_or(WalletArtifactRejection::ReleaseTimeWindow)
     }
 }
 
@@ -1097,7 +1137,17 @@ fn valid_manifest_contract(manifest: &WalletArtifactManifest, now_unix_ms: u64) 
             .anti_rollback
             .expires_at_unix_ms
             .is_none_or(positive_safe_integer)
-        && manifest.release.published_at_unix_ms <= now_unix_ms
+        && valid_manifest_time_window(manifest, now_unix_ms)
+        && manifest.signature.algorithm == SIGNATURE_ALGORITHM
+        && valid_token(&manifest.signature.key_id, 128)
+        && manifest.signature.payload_canonicalization == SIGNATURE_CANONICALIZATION
+        && is_lower_hex(&manifest.signature.signed_payload_sha256, 64)
+        && valid_base64url_signature(&manifest.signature.value)
+}
+
+#[cfg(unix)]
+fn valid_manifest_time_window(manifest: &WalletArtifactManifest, now_unix_ms: u64) -> bool {
+    manifest.release.published_at_unix_ms <= now_unix_ms
         && manifest.anti_rollback.not_before_unix_ms <= now_unix_ms
         && manifest
             .anti_rollback
@@ -1107,11 +1157,6 @@ fn valid_manifest_contract(manifest: &WalletArtifactManifest, now_unix_ms: u64) 
             .anti_rollback
             .expires_at_unix_ms
             .is_none_or(|expiry| expiry > manifest.anti_rollback.not_before_unix_ms)
-        && manifest.signature.algorithm == SIGNATURE_ALGORITHM
-        && valid_token(&manifest.signature.key_id, 128)
-        && manifest.signature.payload_canonicalization == SIGNATURE_CANONICALIZATION
-        && is_lower_hex(&manifest.signature.signed_payload_sha256, 64)
-        && valid_base64url_signature(&manifest.signature.value)
 }
 
 #[cfg(unix)]
@@ -1374,13 +1419,68 @@ fn lower_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(unix)]
+struct WalletAntiRollbackLock {
+    _file: File,
+}
+
+#[cfg(unix)]
+fn acquire_anti_rollback_lock(
+    data_directory: &File,
+) -> Result<WalletAntiRollbackLock, WalletArtifactRejection> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let file = open_lock_file_at_nofollow(data_directory, WALLET_ANTI_ROLLBACK_LOCK)
+        .map_err(|_| WalletArtifactRejection::AntiRollback)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| WalletArtifactRejection::AntiRollback)?;
+    if !private_regular_file(&metadata)
+        || metadata.len() != 0
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(WalletArtifactRejection::AntiRollback);
+    }
+    lock_file_exclusive(&file).map_err(|_| WalletArtifactRejection::AntiRollback)?;
+    let current = open_file_at_nofollow(data_directory, WALLET_ANTI_ROLLBACK_LOCK)
+        .map_err(|_| WalletArtifactRejection::AntiRollback)?;
+    let current_metadata = current
+        .metadata()
+        .map_err(|_| WalletArtifactRejection::AntiRollback)?;
+    if !same_open_file(&metadata, &current_metadata)
+        || !private_regular_file(&current_metadata)
+        || current_metadata.len() != 0
+        || current_metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(WalletArtifactRejection::AntiRollback);
+    }
+    Ok(WalletAntiRollbackLock { _file: file })
+}
+
+#[cfg(unix)]
+fn lock_file_exclusive(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    loop {
+        // SAFETY: the descriptor remains owned by file throughout the call.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(unix)]
 fn commit_anti_rollback(
-    artifact_directory: &File,
+    data_directory: &File,
     manifest: &WalletArtifactManifest,
     manifest_sha256: &str,
     trusted_genesis: bool,
 ) -> Result<WalletAntiRollbackEntry, WalletArtifactRejection> {
-    let mut state = read_anti_rollback_state(artifact_directory)?.unwrap_or(
+    let anti_rollback_lock = acquire_anti_rollback_lock(data_directory)?;
+    let mut state = read_anti_rollback_state_locked(data_directory, &anti_rollback_lock)?.unwrap_or(
         WalletAntiRollbackState {
             state_schema_version: WALLET_ANTI_ROLLBACK_STATE_SCHEMA_VERSION,
             entries: Vec::new(),
@@ -1429,17 +1529,18 @@ fn commit_anti_rollback(
     }
     state.checksum_sha256 = anti_rollback_checksum(&state)
         .ok_or(WalletArtifactRejection::AntiRollback)?;
-    write_anti_rollback_state(artifact_directory, &state)?;
-    require_anti_rollback_entry(artifact_directory, &current)?;
+    write_anti_rollback_state_locked(data_directory, &state, &anti_rollback_lock)?;
+    require_anti_rollback_entry_locked(data_directory, &current, &anti_rollback_lock)?;
     Ok(current)
 }
 
 #[cfg(unix)]
-fn require_anti_rollback_entry(
-    artifact_directory: &File,
+fn require_anti_rollback_entry_locked(
+    data_directory: &File,
     expected: &WalletAntiRollbackEntry,
+    anti_rollback_lock: &WalletAntiRollbackLock,
 ) -> Result<(), WalletArtifactRejection> {
-    let state = read_anti_rollback_state(artifact_directory)?
+    let state = read_anti_rollback_state_locked(data_directory, anti_rollback_lock)?
         .ok_or(WalletArtifactRejection::AntiRollback)?;
     state
         .entries
@@ -1452,10 +1553,11 @@ fn require_anti_rollback_entry(
 }
 
 #[cfg(unix)]
-fn read_anti_rollback_state(
-    artifact_directory: &File,
+fn read_anti_rollback_state_locked(
+    data_directory: &File,
+    _anti_rollback_lock: &WalletAntiRollbackLock,
 ) -> Result<Option<WalletAntiRollbackState>, WalletArtifactRejection> {
-    let mut file = match open_file_at_nofollow(artifact_directory, WALLET_ANTI_ROLLBACK_STATE) {
+    let mut file = match open_file_at_nofollow(data_directory, WALLET_ANTI_ROLLBACK_STATE) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(WalletArtifactRejection::AntiRollback),
@@ -1522,9 +1624,10 @@ fn anti_rollback_checksum(state: &WalletAntiRollbackState) -> Option<String> {
 }
 
 #[cfg(unix)]
-fn write_anti_rollback_state(
-    artifact_directory: &File,
+fn write_anti_rollback_state_locked(
+    data_directory: &File,
     state: &WalletAntiRollbackState,
+    _anti_rollback_lock: &WalletAntiRollbackLock,
 ) -> Result<(), WalletArtifactRejection> {
     let bytes = jcs_bytes(state).ok_or(WalletArtifactRejection::AntiRollback)?;
     if bytes.is_empty() || bytes.len() as u64 > MAX_ANTI_ROLLBACK_STATE_BYTES {
@@ -1537,7 +1640,7 @@ fn write_anti_rollback_state(
         std::process::id(),
         lower_hex(&nonce)
     );
-    let mut temporary = create_file_at_exclusive(artifact_directory, &temporary_name)
+    let mut temporary = create_file_at_exclusive(data_directory, &temporary_name)
         .map_err(|_| WalletArtifactRejection::AntiRollback)?;
     let write_result = (|| -> io::Result<()> {
         temporary.write_all(&bytes)?;
@@ -1553,14 +1656,14 @@ fn write_anti_rollback_state(
         }
         temporary.sync_all()?;
         rename_at(
-            artifact_directory,
+            data_directory,
             &temporary_name,
             WALLET_ANTI_ROLLBACK_STATE,
         )?;
-        artifact_directory.sync_all()
+        data_directory.sync_all()
     })();
     if write_result.is_err() {
-        let _ = unlink_at(artifact_directory, &temporary_name);
+        let _ = unlink_at(data_directory, &temporary_name);
         return Err(WalletArtifactRejection::AntiRollback);
     }
     Ok(())
@@ -1591,6 +1694,25 @@ fn open_directory_at_nofollow(directory: &File, name: &str) -> io::Result<File> 
 #[cfg(unix)]
 fn open_file_at_nofollow(directory: &File, name: &str) -> io::Result<File> {
     open_at_nofollow(directory, name, libc::O_NONBLOCK)
+}
+
+#[cfg(unix)]
+fn open_lock_file_at_nofollow(directory: &File, name: &str) -> io::Result<File> {
+    use std::os::fd::AsRawFd;
+
+    let name = CString::new(name)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "name contains NUL"))?;
+    // SAFETY: name is NUL-terminated and the retained directory descriptor is
+    // valid. The lock contains no data; O_CREAT establishes one stable inode.
+    let descriptor = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    file_from_descriptor(descriptor)
 }
 
 #[cfg(unix)]
@@ -1908,6 +2030,8 @@ mod tests {
     use super::*;
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
+    #[cfg(target_os = "linux")]
+    use std::sync::{Arc, Barrier};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -2179,6 +2303,105 @@ mod tests {
             restarted.unavailable_code(),
             "walletArtifactRollbackRejected"
         );
+        cleanup(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn concurrent_sequences_serialize_without_regressing_the_high_water() {
+        let root = test_root("concurrent-sequences");
+        let signer = test_signer();
+        let first = install_signed_release(&root, &signer, 1, None, true, None);
+        let admitted = WalletAbiDiscovery::discover_with_configuration(
+            &root,
+            verifier_configuration(&signer, &first, 1, true, true),
+        );
+        assert_eq!(admitted.status_json()["artifactState"], "launchAdmitted");
+        drop(admitted);
+
+        let predecessor = sha256_bytes(&first.manifest_bytes);
+        let mut second =
+            fixture_manifest(&first.artifact_bytes, 2, Some(predecessor.clone()));
+        sign_manifest(&mut second, &signer);
+        let second_sha256 = sha256_bytes(&jcs_bytes(&second).unwrap());
+        let mut third = fixture_manifest(&first.artifact_bytes, 3, Some(predecessor));
+        sign_manifest(&mut third, &signer);
+        let third_sha256 = sha256_bytes(&jcs_bytes(&third).unwrap());
+
+        let barrier = Arc::new(Barrier::new(3));
+        let second_root = root.clone();
+        let second_barrier = Arc::clone(&barrier);
+        let second_commit = std::thread::spawn(move || {
+            let data_directory = open_directory_nofollow(&second_root).unwrap();
+            second_barrier.wait();
+            commit_anti_rollback(
+                &data_directory,
+                &second,
+                &second_sha256,
+                false,
+            )
+            .is_ok()
+        });
+        let third_root = root.clone();
+        let third_barrier = Arc::clone(&barrier);
+        let third_commit = std::thread::spawn(move || {
+            let data_directory = open_directory_nofollow(&third_root).unwrap();
+            third_barrier.wait();
+            commit_anti_rollback(&data_directory, &third, &third_sha256, false).is_ok()
+        });
+        barrier.wait();
+        let second_committed = second_commit.join().unwrap();
+        let third_committed = third_commit.join().unwrap();
+        assert_eq!(
+            [second_committed, third_committed]
+                .into_iter()
+                .filter(|committed| *committed)
+                .count(),
+            1
+        );
+
+        let data_directory = open_directory_nofollow(&root).unwrap();
+        let lock = acquire_anti_rollback_lock(&data_directory).unwrap();
+        let state = read_anti_rollback_state_locked(&data_directory, &lock)
+            .unwrap()
+            .unwrap();
+        let entry = state
+            .entries
+            .iter()
+            .find(|entry| entry.release_line == TEST_RELEASE_LINE)
+            .unwrap();
+        assert_eq!(
+            entry.highest_sequence,
+            if second_committed { 2 } else { 3 }
+        );
+        cleanup(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cached_admission_rechecks_expiry_and_clock_rollback_before_launch() {
+        let root = test_root("cached-time-window");
+        let signer = test_signer();
+        let release = install_signed_release(&root, &signer, 1, None, true, None);
+        let expiry = release.manifest.anti_rollback.expires_at_unix_ms.unwrap();
+        let before_publication = release.manifest.release.published_at_unix_ms - 1;
+        let mut admitted = WalletAbiDiscovery::discover_with_configuration(
+            &root,
+            verifier_configuration(&signer, &release, 1, true, true),
+        );
+        let artifact = match &mut admitted.state {
+            WalletArtifactState::LaunchAdmitted(artifact) => artifact,
+            state => panic!("expected launch admission, got {state:?}"),
+        };
+        let lock = acquire_anti_rollback_lock(&artifact.data_directory).unwrap();
+        assert!(matches!(
+            artifact.revalidate_for_launch_while_locked_at(expiry, &lock),
+            Err(WalletArtifactRejection::ReleaseTimeWindow)
+        ));
+        assert!(matches!(
+            artifact.revalidate_for_launch_while_locked_at(before_publication, &lock),
+            Err(WalletArtifactRejection::ReleaseTimeWindow)
+        ));
         cleanup(&root);
     }
 

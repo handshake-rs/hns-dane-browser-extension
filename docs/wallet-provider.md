@@ -115,6 +115,7 @@ The native host looks only at this versioned, installation-owned location:
 <native-host data>/wallet-abi-v2/manifest.json
 <native-host data>/wallet-abi-v2/<artifact basename>
 <native-host data>/wallet-abi-v2-admission-state.json
+<native-host data>/wallet-abi-v2-admission.lock
 ```
 
 The manifest is bounded to 16 KiB, denies unknown fields, and consumes the
@@ -155,13 +156,18 @@ written to an exclusive temporary file, fsynced, made read-only, fsynced again,
 atomically renamed, and followed by a parent-directory fsync. This
 owner-maintained state detects restart/replacement rollback but never grants
 trust; the compiled floor and exact pin remain authoritative.
+The empty, private, single-link stable-parent lock file supplies the advisory
+lock that covers the entire read/compare/write/verify transaction across
+processes and remains held through launch and spawn.
 
 Immediately before Linux process creation, the retained parent-to-version
-directory, manifest, and artifact inode bindings and high-water record are
-rechecked. The artifact is rehashed while copied into a sealed memfd, and only
-that sealed descriptor is executed with an empty environment and piped standard
-I/O. There is no `PATH`, dynamic-library, or reopen-by-artifact-path fallback.
-macOS and Windows reject launch pending reviewed platform equivalents.
+directory, manifest, and artifact inode bindings, high-water record, and signed
+publication/not-before/expiry window are rechecked. The time window is checked
+again after path/state work. The artifact is rehashed while copied into a
+sealed memfd, and only that sealed descriptor is executed with an empty
+environment and piped standard I/O. The verifier has no `PATH`,
+`dlopen`/plugin, or reopen-by-artifact-path fallback. macOS and Windows reject
+launch pending reviewed platform equivalents.
 The memfd seal covers only the main executable. A dynamically linked
 interpreter/library closure and the local wall clock used for signed
 not-before/expiry checks remain explicit production-qualification inputs.

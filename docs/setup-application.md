@@ -103,8 +103,8 @@ overwrite external wallet state.
 
 Complete Uninstall removes the owned browser installation root, so it also
 removes any manifest/artifact staged under `data/wallet-abi-v2` and its
-browser-owned admission high-water record. That is adapter cleanup, not wallet
-deletion. Setup must neither locate nor remove the
+browser-owned admission high-water record and empty coordination lock. That is
+adapter cleanup, not wallet deletion. Setup must neither locate nor remove the
 independent service's database, keys, backups, or other wallet-owned state.
 Damaged, partial, unsigned, unsupported-platform, or ABI-incompatible staging
 remains unavailable and cannot weaken browser/DANE operation. Artifact

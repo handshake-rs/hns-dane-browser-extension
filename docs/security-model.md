@@ -197,10 +197,12 @@ around a bounded same-handle digest. Launch-qualified manifest and artifact
 files must have no write bit. Per-release-line high-water state is outside the
 replaceable artifact directory under the stable data-directory handle; its
 canonical checksummed bytes and read-only mode are durably replaced with
-file-fsync, atomic rename, and directory-fsync. Because same-user state is not
-a trust root, its checksum is corruption/torn-write detection rather than
-tamper-proof secure storage, and the compiled floor and exact pin remain
-mandatory.
+file-fsync, atomic rename, and directory-fsync. A retained stable-parent lock
+serializes the entire state transaction across processes and is held through
+launch revalidation, sealed copy, and spawn, so a newer admission cannot race
+an older cached launch. Because same-user state is not a trust root, its
+checksum is corruption/torn-write detection rather than tamper-proof secure
+storage, and the compiled floor and exact pin remain mandatory.
 
 Linux launch rebinds every retained directory/file inode to its installed path,
 rehashes while copying to a sealed memfd, and executes only that sealed
@@ -209,6 +211,9 @@ launch remain unavailable until reviewed platform equivalents exist. The
 controller does not call this launcher until private transport, runtime
 negotiation, public projection, and opaque engine authority are released, so
 overall provider availability and value movement remain false.
+Every launch reparses the retained signed manifest bytes and rechecks
+publication, not-before, and expiry against a fresh wall-clock sample before
+and after path/state work; expiry or clock rollback fails closed.
 The seal covers the executable image, not a dynamically requested ELF
 interpreter or shared-library closure; production must qualify those
 dependencies or require a self-contained service artifact. Manifest
@@ -314,6 +319,8 @@ qnames, qtypes, request timing, and source IP.
 | Artifact supplies a key or relies on a matching hash | Ignore artifact-supplied trust; require verifier-owned release-line Ed25519 root, exact qualified manifest/artifact pin, and compiled minimum sequence |
 | Local path, symlink, or directory replacement substitutes a wallet artifact | Relative no-follow retained handles, parent-to-child inode rebinding, immutable single-link files, bounded same-handle hashes, and Linux execution only from a freshly rehashed sealed memfd |
 | Artifact-directory replacement or restart attempts a wallet downgrade | Keep canonical per-release-line high-water state under the stable parent data directory; require strict sequence increase and predecessor-manifest linkage, with compiled floor/pin as the non-owner-state authority |
+| Concurrent wallet admissions regress a sequence or lose another release line | Serialize the complete state transaction with one stable-parent interprocess lock; retain it through launch state/time/path checks, sealed copy, and spawn |
+| Cached admission launches after expiry or local clock rollback | Reparse retained signed manifest bytes and re-evaluate publication/not-before/expiry at every launch |
 | Stale wallet request is retried after a generation change | Preserve replay state for repeated initialization and surface stale completion without automatic retry |
 | Browser uninstall removes independent wallet keys or databases | Store only the staged adapter manifest/artifact below browser data; wallet-owned state must remain in an independent wallet-owned location |
 | Relay lies or sets AD | Treat response as untrusted and validate locally |

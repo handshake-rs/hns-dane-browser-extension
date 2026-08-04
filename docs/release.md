@@ -79,9 +79,10 @@ after all of the following are reviewed from immutable release evidence:
    monotonically. A trusted signer alone never qualifies an artifact.
 4. The focused verifier suite covers canonical bytes, signature/root failure,
    mutable files, wrong native format, restart, state tamper, downgrade after
-   complete ABI-directory replacement, path replacement, and sealed execution.
-   The complete repository gate and Linux target qualification then pass at the
-   exact browser commit.
+   complete ABI-directory replacement, concurrent sequence admission,
+   path/root replacement, cached expiry/clock rollback, and sealed execution.
+   The complete repository gate and Linux target qualification then pass at
+   the exact browser commit.
 
 The current tables are empty. Linux is the only implemented sealed-execution
 boundary; macOS and Windows must stay unavailable until equivalent reviewed

@@ -265,17 +265,23 @@ canonical high-water record stored under the stable native-host data directory
 is written as an immutable temporary file, fsynced, atomically renamed, and
 followed by a directory fsync. Upgrades must link
 `previousManifestSha256` to the accepted predecessor.
+One stable-parent advisory lock serializes the complete read/compare/write/
+verify transaction across native-host processes, so concurrent release lines
+cannot lose entries and concurrent sequences cannot regress the high-water.
 The state checksum detects corruption and torn/incomplete replacement; it does
 not turn same-user storage into a tamper-proof trust anchor. The compiled floor
 and exact release pin supply that independent admission authority.
 
 Immediately before Linux launch, the verifier rebinds the retained parent,
 ABI-directory, manifest, and artifact handles to their installed path inodes,
-rechecks the stable high-water record, and copies and rehashes the artifact into
-a sealed memfd. Only that sealed descriptor is executed with an empty
-environment and private pipes. It does not search `PATH`, load a dynamic
-library, or copy sibling wallet crates into the build. macOS and Windows
-execution reject until reviewed sealed/ACL equivalents exist.
+rechecks the stable high-water record and signed publication/not-before/expiry
+window, and copies and rehashes the artifact into a sealed memfd. The same
+stable-parent lock is held across both revalidations, the sealed copy, and
+process spawn, preventing a newer admission from racing an older cached launch.
+Only that sealed descriptor is executed with an empty environment and private
+pipes. The verifier has no `PATH` search, `dlopen`/plugin fallback, or sibling
+wallet-crate fallback. macOS and Windows execution reject until reviewed
+sealed/ACL equivalents exist.
 Sealing protects the main executable bytes, not an ELF interpreter or shared
 libraries requested by a dynamically linked artifact. Production
 qualification must therefore require a self-contained artifact or separately
