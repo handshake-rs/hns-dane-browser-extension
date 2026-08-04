@@ -593,18 +593,19 @@ impl LaunchAdmittedWalletArtifact {
             .data_directory
             .metadata()
             .map_err(|_| WalletArtifactRejection::PathBinding)?;
-        if !same_open_file(
+        if !same_open_directory(
             &self.data_directory_metadata,
             &current_data_directory_metadata,
-        ) || !same_open_file(
+        ) || !same_open_directory(
             &self.data_directory_metadata,
             &retained_data_directory_metadata,
         ) || !private_directory(&current_data_directory)
+            || !private_directory(&self.data_directory)
         {
             return Err(WalletArtifactRejection::PathBinding);
         }
         let current_artifact_directory =
-            open_directory_at_nofollow(&self.data_directory, WALLET_ARTIFACT_DIRECTORY)
+            open_directory_at_nofollow(&current_data_directory, WALLET_ARTIFACT_DIRECTORY)
                 .map_err(|_| WalletArtifactRejection::PathBinding)?;
         let current_artifact_directory_metadata = current_artifact_directory
             .metadata()
@@ -613,18 +614,19 @@ impl LaunchAdmittedWalletArtifact {
             .artifact_directory
             .metadata()
             .map_err(|_| WalletArtifactRejection::PathBinding)?;
-        if !same_open_file(
+        if !same_open_directory(
             &self.artifact_directory_metadata,
             &current_artifact_directory_metadata,
-        ) || !same_open_file(
+        ) || !same_open_directory(
             &self.artifact_directory_metadata,
             &retained_artifact_directory_metadata,
         ) || !private_directory(&current_artifact_directory)
+            || !private_directory(&self.artifact_directory)
         {
             return Err(WalletArtifactRejection::PathBinding);
         }
         let current_manifest =
-            open_file_at_nofollow(&self.artifact_directory, WALLET_ARTIFACT_MANIFEST)
+            open_file_at_nofollow(&current_artifact_directory, WALLET_ARTIFACT_MANIFEST)
                 .map_err(|_| WalletArtifactRejection::PathBinding)?;
         let current_manifest_metadata = current_manifest
             .metadata()
@@ -651,7 +653,7 @@ impl LaunchAdmittedWalletArtifact {
         }
 
         let current_artifact =
-            open_file_at_nofollow(&self.artifact_directory, &self.artifact_name)
+            open_file_at_nofollow(&current_artifact_directory, &self.artifact_name)
                 .map_err(|_| WalletArtifactRejection::PathBinding)?;
         let current_artifact_metadata = current_artifact
             .metadata()
@@ -1728,6 +1730,18 @@ fn source_is_executable(metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(unix)]
+fn same_open_directory(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.is_dir()
+        && after.is_dir()
+        && before.dev() == after.dev()
+        && before.ino() == after.ino()
+        && before.uid() == after.uid()
+        && before.gid() == after.gid()
+}
+
+#[cfg(unix)]
 fn same_open_file(before: &fs::Metadata, after: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
 
@@ -2190,7 +2204,28 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn exact_admitted_native_artifact_launches_only_from_a_sealed_copy() {
+    fn retained_stable_root_binding_rejects_replaced_data_directory_at_launch() {
+        let root = test_root("stable-root-path-binding");
+        let detached_root = root.with_extension("detached");
+        let signer = test_signer();
+        let release = install_signed_release(&root, &signer, 1, None, true, None);
+        let mut admitted = WalletAbiDiscovery::discover_with_configuration(
+            &root,
+            verifier_configuration(&signer, &release, 1, true, true),
+        );
+        assert_eq!(admitted.status_json()["artifactState"], "launchAdmitted");
+
+        fs::rename(&root, &detached_root).unwrap();
+        install_raw_release(&root, &release, true);
+        let error = admitted.launch_admitted_service().unwrap_err();
+        assert_eq!(error.to_string(), "walletArtifactPathBindingChanged");
+        cleanup(&root);
+        cleanup(&detached_root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn first_admission_immediately_launches_only_from_a_sealed_copy() {
         let root = test_root("sealed-launch");
         let signer = test_signer();
         let artifact_bytes = fs::read("/bin/true").unwrap();
@@ -2200,6 +2235,8 @@ mod tests {
             &root,
             verifier_configuration(&signer, &release, 1, true, true),
         );
+        assert_eq!(admitted.status_json()["artifactState"], "launchAdmitted");
+        assert!(root.join(WALLET_ANTI_ROLLBACK_STATE).is_file());
         let mut child = admitted.launch_admitted_service().unwrap();
         assert!(child.wait().unwrap().success());
         cleanup(&root);
