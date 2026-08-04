@@ -85,12 +85,13 @@ transaction to identify and remove only the recorded CA and registration.
 ## Optional wallet service staging
 
 The current Setup package does not contain or install a wallet service. The
-native host recognizes `data/wallet-abi-v2` only as a fail-closed discovery
-location for a future independently released adapter manifest and executable.
-The private host/service contract is ABI 2 while the website-facing provider
-schema remains 1. The native host does not search for a wallet elsewhere, and
-a locally matching digest does not substitute for a pinned publisher signature.
-It never launches or executes the staged artifact.
+native host recognizes `data/wallet-abi-v2` only as a fail-closed staging
+location for a future independently released signed manifest-v2 adapter and
+executable. The private host/service contract is ABI 2 while the website-facing
+provider schema remains 1. The native host does not search for a wallet
+elsewhere. Admission requires verifier-owned signer, exact release, and
+anti-rollback floor configuration; all production tables are currently empty,
+and the controller does not invoke the Linux sealed-execution primitive.
 
 That version directory may contain only the staged adapter manifest and
 artifact. Wallet databases, seeds, encryption keys, backups, logs, approvals,
@@ -101,8 +102,9 @@ version-to-version migration. Setup repair must not copy, reinterpret, or
 overwrite external wallet state.
 
 Complete Uninstall removes the owned browser installation root, so it also
-removes any manifest/artifact staged under `data/wallet-abi-v2`. That is adapter
-cleanup, not wallet deletion. Setup must neither locate nor remove the
+removes any manifest/artifact staged under `data/wallet-abi-v2` and its
+browser-owned admission high-water record. That is adapter cleanup, not wallet
+deletion. Setup must neither locate nor remove the
 independent service's database, keys, backups, or other wallet-owned state.
 Damaged, partial, unsigned, unsupported-platform, or ABI-incompatible staging
 remains unavailable and cannot weaken browser/DANE operation. Artifact

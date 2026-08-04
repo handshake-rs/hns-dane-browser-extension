@@ -243,27 +243,52 @@ Dispatch requires an opaque authority context produced by the browser engine,
 plus exact wallet ABI, framed-service protocol, provider-schema, capability,
 wallet-session, permission-generation, and approval-generation agreement.
 
-The native host has source-only discovery for a future independently released
-wallet service adapter under `data/wallet-abi-v2`. Its manifest must match
-private wallet ABI 2, framed-service protocol 2, website provider schema 1, the
-bounded frame maximum, and the exact ABI-v2 foundation capabilities. Discovery
-performs bounded no-follow, handle-based Unix ownership, metadata, contract,
-and SHA-256 local-integrity checks. It does not search `PATH`, load a dynamic
-library, copy sibling wallet crates into the build, or execute the discovered
-file. Windows rejects discovery until a reviewed ownership/ACL check exists. A
-manifest digest is not signer authenticity; a future launcher needs a pinned
-signed release and must execute the retained checked handle or immediately
-reverify it.
+The native host has a signed-release admission boundary for a future
+independently released wallet service under `data/wallet-abi-v2`. It consumes
+the wallet repository's exact signed-artifact manifest schema v2: target,
+source, release, anti-rollback, and signature objects; private wallet ABI 2;
+framed-service protocol 2; website provider schema 1; approval schema 2; the
+bounded frame maximum; and the wallet contract's closed service-capability
+vocabulary with the five foundation capabilities required. The complete
+stored manifest must itself be RFC 8785 JCS even though the upstream schema
+requires JCS only for the signature-omitted payload. This intentional stricter
+admission rule makes duplicate keys, whitespace, member order, payload digest,
+and signature bytes deterministic.
 
-The wallet repository defines the private ABI-v2 frame contract and a
-fail-closed subprocess foundation, but no signed independently released service
-artifact, reviewed Chromium transport, or native-to-public approval projection
-adapter is joined here, and the current engine exposes no consumable opaque
-wallet authority context. The projection adapter must retain private authority
-handles natively and produce only the exact browser-owned approval-schema-v2
-public prompt. Consequently all three parsed wallet command envelopes fail
-closed, `handshakeWalletProvider` is false, and provider injection cannot occur.
-The browser's DANE runtime is independent of this unavailable optional join.
+Unix inspection preserves bounded no-follow, handle-based ownership, metadata,
+single-link, and same-handle SHA-256 checks. Authenticity then requires a
+verifier-owned Ed25519 root selected by key ID and release line; launch
+admission additionally requires the exact manifest and artifact digests,
+target, release ID, and sequence in a compiled qualification pin. A compiled
+per-line minimum is authoritative even if user-owned state is removed. A
+canonical high-water record stored under the stable native-host data directory
+is written as an immutable temporary file, fsynced, atomically renamed, and
+followed by a directory fsync. Upgrades must link
+`previousManifestSha256` to the accepted predecessor.
+The state checksum detects corruption and torn/incomplete replacement; it does
+not turn same-user storage into a tamper-proof trust anchor. The compiled floor
+and exact release pin supply that independent admission authority.
+
+Immediately before Linux launch, the verifier rebinds the retained parent,
+ABI-directory, manifest, and artifact handles to their installed path inodes,
+rechecks the stable high-water record, and copies and rehashes the artifact into
+a sealed memfd. Only that sealed descriptor is executed with an empty
+environment and private pipes. It does not search `PATH`, load a dynamic
+library, or copy sibling wallet crates into the build. macOS and Windows
+execution reject until reviewed sealed/ACL equivalents exist.
+Sealing protects the main executable bytes, not an ELF interpreter or shared
+libraries requested by a dynamically linked artifact. Production
+qualification must therefore require a self-contained artifact or separately
+pin and audit its complete runtime dependency closure.
+
+No production trust root, release pin, or release floor is configured yet, and
+test keys are compiled only for tests. No independently released service,
+reviewed Chromium transport, or native-to-public approval projection adapter is
+joined, and the current engine exposes no consumable opaque wallet authority
+context. The controller therefore never calls the launcher. All three parsed
+wallet command envelopes fail closed, `handshakeWalletProvider` is false, and
+provider injection cannot occur. The browser's DANE runtime is independent of
+this unavailable optional join.
 
 Repeated provider initialization under an identical authority preserves replay
 and rate state. A generation transition replaces it. Header maintenance rotates

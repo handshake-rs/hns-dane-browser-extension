@@ -103,16 +103,22 @@ must not show a verified state until its Rust native host pins the new
 ## Optional wallet provider
 
 The repository contains a Handshake-specific website provider schema v1 and a
-strict source-only private wallet ABI-v2 artifact-discovery boundary. It
-validates the closed 12-variant typed approval union, accepts events only from
-the service event channel, and binds approval-window decisions to exact
-in-memory context. The released Chromium product keeps it unavailable: no
-signed standalone wallet service, private process transport, or released
-engine-authority adapter is joined. The standalone wallet's checked-in ABI-v2
-subprocess is a foundation only and advertises no provider dispatch, browser
-integration, wallet operations, or value movement. Artifact authenticity,
-transport, runtime, engine authority, provider, and value gates remain false;
-a staged manifest digest is local integrity only and no artifact is launched.
+strict private wallet ABI-v2 signed-artifact admission boundary. It consumes
+the wallet-owned manifest schema v2, verifies deterministic JCS bytes and
+Ed25519 signatures against verifier-owned roots, requires an exact qualified
+release pin and durable anti-rollback high-water state, and on Linux can launch
+only a freshly rehashed sealed executable image. No test key is production
+trust. The production trust-root, release-pin, and release-floor tables are
+intentionally empty until an independently released wallet service is
+qualified, and the controller does not join the launcher to a transport.
+
+The provider code validates the closed 12-variant typed approval union, accepts
+events only from the service event channel, and binds approval-window decisions
+to exact in-memory context. The released Chromium product keeps it unavailable:
+no qualified standalone service, private process transport, or released
+engine-authority adapter is joined. Artifact authenticity, transport, runtime,
+engine authority, provider, and value gates therefore remain false in
+production, and no staged artifact is launched.
 See
 [Handshake wallet provider](docs/wallet-provider.md) and
 [wallet privacy](docs/wallet-privacy.md).

@@ -14,6 +14,7 @@ hns-chromium-platform-runtime.workspace = true
 hns-loopback-proxy.workspace = true
 hns-resolution-policy.workspace = true
 libc.workspace = true
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -27,6 +27,11 @@ All notable changes to this project will be documented in this file.
 - Accept permission generation zero in a private native capability snapshot
   for a never-authorized origin without relaxing native event or exact
   wallet-session binding.
+- Consume the wallet-owned signed-artifact manifest schema v2 at the Chromium
+  boundary, including exact JCS bytes, signature-omitted payload hashing,
+  Ed25519 verification, verifier-owned release pins/floors, stable atomic
+  per-release-line anti-rollback state, retained path binding, and a
+  Linux-only sealed-executable launch primitive.
 
 ### Security
 
@@ -34,19 +39,19 @@ All notable changes to this project will be documented in this file.
   opaque provider-authority context and no signed canonical wallet service
   executable/transport exists. Caller-supplied authority-shaped fields are not
   authentication, and stale page requests are never retried automatically.
-- Discover optional Unix wallet adapter staging through current-user-owned,
-  no-follow opened handles with bounded exact manifests, duplicate/unknown
-  capability rejection, single-link file checks, and same-handle local-integrity
-  hashing. Windows remains unavailable pending reviewed ACL checks; a manifest
-  digest is not treated as publisher authenticity and no artifact is launched.
+- Admit optional Unix wallet adapter staging through current-user-owned,
+  no-follow opened handles with bounded schema-v2 manifests, closed/unique
+  capability validation, single-link immutable-file checks, same-handle
+  hashing, pinned Ed25519 authenticity, and exact release qualification. Linux
+  execution is copied and rehashed into a sealed memfd; Windows and macOS
+  execution remain unavailable pending reviewed platform equivalents.
 - Invalidate wallet document and approval authority before header maintenance,
   and re-derive exact browser authority after awaited native capability,
   request, and approval results before publishing any completion or event.
-- Keep wallet artifact authenticity, private transport, runtime negotiation,
-  engine authority, provider availability, and value movement false. The
-  checked-in wallet ABI-v2 subprocess provides framing/authority/approval/event
-  foundations but no provider-dispatch, browser-integration, wallet-operation,
-  or value-movement capability, and the native host never launches it.
+- Keep the production wallet trust-root, exact release-pin, and release-floor
+  tables empty. Private transport, runtime negotiation, engine authority,
+  provider availability, and value movement remain false; the controller does
+  not invoke the admission-only launcher.
 
 ## 0.5.5 - 2026-07-29
 

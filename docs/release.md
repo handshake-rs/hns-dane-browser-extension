@@ -54,6 +54,43 @@ releases after all required platform-signing replacement is complete. Build and
 packaging jobs remain read-only; only the final publisher receives repository
 write permission.
 
+## Wallet service artifact qualification
+
+The browser release and an independently released wallet service have separate
+signing authorities. Do not add a production wallet key from a test fixture,
+developer checkout, environment variable, manifest field, or owner-writable
+configuration. A wallet-service release can be considered for admission only
+after all of the following are reviewed from immutable release evidence:
+
+1. The complete manifest matches the wallet repository's
+   `signedArtifactManifestV2` contract and is emitted as RFC 8785 JCS. Its
+   signature-omitted JCS payload hash and Ed25519 signature verify.
+2. Source repository, clean commit/tree, source-archive digest, target triple,
+   executable format, exact artifact size/digest, version, publication window,
+   closed capabilities, release line, sequence, and predecessor manifest are
+   independently reproduced. Qualification must also demonstrate a sane
+   installation wall clock for not-before/expiry enforcement and either a
+   self-contained service binary or a pinned, audited dynamic-loader and
+   shared-library closure; sealing the main executable does not seal those
+   runtime dependencies.
+3. The signer root is added only to the verifier-owned production table with a
+   bounded release-line sequence interval. The exact manifest/artifact release
+   is separately pinned, and the compiled release-line floor is advanced
+   monotonically. A trusted signer alone never qualifies an artifact.
+4. The focused verifier suite covers canonical bytes, signature/root failure,
+   mutable files, wrong native format, restart, state tamper, downgrade after
+   complete ABI-directory replacement, path replacement, and sealed execution.
+   The complete repository gate and Linux target qualification then pass at the
+   exact browser commit.
+
+The current tables are empty. Linux is the only implemented sealed-execution
+boundary; macOS and Windows must stay unavailable until equivalent reviewed
+ownership and immutable-execution mechanisms land. Even a launch-admitted
+artifact must not make provider or value gates true until the private
+child-pipe transport, exact runtime negotiation, browser-engine opaque
+authority, public approval projection, restart lifecycle, and installed-browser
+qualification all pass.
+
 ## Setup application packages
 
 Every setup application embeds the exact native-host binary built earlier in

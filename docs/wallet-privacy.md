@@ -44,7 +44,7 @@ An independently released wallet service must keep all wallet-owned state in
 its own private location and own its migration, backup, and deletion UX. Browser
 repair and Complete Uninstall may replace or remove the staged adapter files
 but must not discover, migrate, or delete that external wallet state. The
-current release launches no wallet artifact and exports no wallet result. The
-standalone wallet's checked-in ABI-v2 subprocess foundation advertises no
-provider-dispatch, browser-integration, wallet-operation, or value-movement
-capability, and the browser does not execute it.
+current production verifier has no wallet trust root, release pin, or floor,
+the controller launches no wallet artifact, and it exports no wallet result.
+The browser-owned anti-rollback record contains only release line/sequence/ID,
+signer ID, and manifest/artifact digests; it contains no wallet state or secret.

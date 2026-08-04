@@ -114,44 +114,67 @@ The native host looks only at this versioned, installation-owned location:
 ```text
 <native-host data>/wallet-abi-v2/manifest.json
 <native-host data>/wallet-abi-v2/<artifact basename>
+<native-host data>/wallet-abi-v2-admission-state.json
 ```
 
-The manifest is bounded to 16 KiB, denies unknown fields, and must declare
-manifest schema 1, private wallet ABI 2, service protocol 2, website provider
-schema 1, a 1,048,576-byte maximum frame, a bounded release ID and artifact
-basename, a lowercase SHA-256 digest, and exactly these ABI-v2 foundation
-capabilities with no duplicates: `canonical_framing`, `restart_isolation`,
-`opaque_authority_registry`, `structured_approvals`, and `typed_events`.
-Compiled method vocabulary is never treated as negotiated availability.
+The manifest is bounded to 16 KiB, denies unknown fields, and consumes the
+wallet repository's exact signed-artifact schema v2. Its nested target declares
+private wallet ABI 2, service protocol 2, website provider schema 1, approval
+schema 2, the 1,048,576-byte frame maximum, current target triple and executable
+format, and a closed unique service-capability set containing at least
+`canonicalFraming`, `restartIsolation`, `opaqueAuthorityRegistry`,
+`structuredApprovals`, and `typedEvents`. Additional schema-defined
+capabilities do not enable product behavior; the exact qualified manifest pin
+binds the complete list and runtime availability is negotiated separately.
 
-On Unix, discovery opens the data directory, version directory, manifest, and
+The stored complete manifest must equal its RFC 8785 JCS encoding. This is an
+intentional verifier invariant stricter than the wallet schema, which specifies
+JCS for the signature-omitted payload. The verifier removes the signature
+member, canonicalizes again, recomputes `signedPayloadSha256`, enforces
+canonical base64url Ed25519 signature bytes, and verifies only a key selected
+from verifier-owned key-ID/release-line roots. It accepts no public key from
+the artifact.
+
+On Unix, inspection opens the data directory, version directory, manifest, and
 artifact with no-follow and close-on-exec semantics; children are opened
 relative to retained directory handles. Metadata and size come from the opened
-handles, the files must be owned by the current user, regular files must have
-one link, group/other write bits are forbidden, and the artifact must be
-executable. The artifact digest is streamed from that same bounded handle and
-metadata is rechecked afterward. Basenames reject separators and Windows
-alternate-stream/path-ambiguous `:` and `+` characters. Platforms without a
-reviewed ownership/ACL implementation, currently Windows, reject discovery.
-There is no `PATH`, environment-variable, sibling-Cargo-dependency, dynamic
-library, or `dlopen` fallback.
+handles, the files must be current-user-owned single-link regular files,
+group/other write bits are forbidden, and the artifact must be executable.
+The bounded artifact digest is streamed from that same handle with surrounding
+metadata checks. Launch-qualified manifest and artifact files additionally
+have no owner write bit.
 
-A matching digest proves only local integrity against the manifest; it is not
-release authenticity because no signing key is pinned. The artifact is an
-owner-writable discovery snapshot and is never executed today. Any future
-launcher must first verify a signed release and then execute the retained
-checked descriptor, or repeat all checks immediately before execution; it must
-never verify one path and reopen it later.
+A trusted signature remains insufficient. A verifier-owned qualification entry
+must exactly pin key ID, release line/sequence/ID, target triple, complete
+manifest digest, and artifact digest, and a compiled per-line sequence floor
+must admit the sequence. The stable parent data directory stores a bounded
+canonical high-water record for each release line. Genesis must be explicitly
+qualified; an upgrade is strictly increasing and its signed
+`previousManifestSha256` must equal the accepted predecessor. The new state is
+written to an exclusive temporary file, fsynced, made read-only, fsynced again,
+atomically renamed, and followed by a parent-directory fsync. This
+owner-maintained state detects restart/replacement rollback but never grants
+trust; the compiled floor and exact pin remain authoritative.
+
+Immediately before Linux process creation, the retained parent-to-version
+directory, manifest, and artifact inode bindings and high-water record are
+rechecked. The artifact is rehashed while copied into a sealed memfd, and only
+that sealed descriptor is executed with an empty environment and piped standard
+I/O. There is no `PATH`, dynamic-library, or reopen-by-artifact-path fallback.
+macOS and Windows reject launch pending reviewed platform equivalents.
+The memfd seal covers only the main executable. A dynamically linked
+interpreter/library closure and the local wall clock used for signed
+not-before/expiry checks remain explicit production-qualification inputs.
 
 ## Lifecycle, upgrade, and removal
 
-Discovery runs when the native host opens and is refreshed at the initial
-hello and proxy start. Status, diagnostics, and wallet-command rejection reuse
+Inspection runs when the native host opens and is refreshed at the initial
+hello and proxy start. Status distinguishes missing, rejected, integrity
+checked, signature verified but unqualified, and launch admitted. Every state
+still reports transport, runtime, engine authority, provider availability, and
+value movement false. Status, diagnostics, and wallet-command rejection reuse
 the bounded cached result instead of letting document probes repeatedly hash a
-large artifact. Staging changes therefore require a native-host restart (or a
-new start lifecycle) before discovery changes. Missing, rejected, incompatible,
-or locally integrity-checked artifacts all report `available: false` with a
-specific safe reason. A future service restart must rotate its wallet-session
+large artifact. A future service restart must rotate its wallet-session
 generation; native-host disconnect, service-worker restart, browser authority
 change, or permission generation change invalidates prior document and approval
 state.
@@ -177,8 +200,10 @@ discovery source exists. The standalone wallet repository also contains the
 private ABI-v2 framed subprocess foundation and its 12 typed approval summaries.
 The Chromium product is still not end-to-end wallet complete:
 
-- no independently signed wallet service artifact, pinned signer, private
-  Chromium child-pipe launcher, or released transport join exists;
+- no independently signed wallet service artifact has been qualified, so the
+  production signer, exact-release, and release-floor tables remain empty;
+- the Linux sealed-execution primitive is not joined to a released Chromium
+  child-pipe transport, and macOS/Windows equivalents do not exist;
 - no released browser-engine opaque-authority adapter is consumable by this
   native host;
 - no reviewed native-to-public approval projection adapter is joined; and
@@ -187,14 +212,14 @@ The Chromium product is still not end-to-end wallet complete:
   It does not advertise provider dispatch, browser integration, wallet
   operations, or value movement.
 
-The native host therefore parses the typed command envelopes only to return an
-explicit unavailable error. Artifact authenticity, service transport, runtime
-negotiation, engine authority, overall provider availability, and value
-movement all remain false. It never treats caller-supplied authority or
-permission fields as authentication, never launches or executes the staged
-artifact, never exports secrets, advertises `handshakeWalletProvider: false`,
-and injects no MAIN-world provider. The DANE runtime continues to work
-independently.
+The native host therefore parses typed command envelopes only to return an
+explicit unavailable error. With empty production trust and qualification
+tables, artifact authenticity is false; service transport, runtime negotiation,
+engine authority, overall provider availability, and value movement are also
+false. The controller never invokes the admission-only launcher, never treats
+caller-supplied authority fields as authentication, never exports secrets,
+advertises `handshakeWalletProvider: false`, and injects no MAIN-world provider.
+The DANE runtime continues to work independently.
 
 The static demonstration application is in `demo-dapp/`. It must be served from
 an HTTPS logical origin approved by the browser trust layer; opening it as a

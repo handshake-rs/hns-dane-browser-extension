@@ -90,6 +90,14 @@ change.
 - current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;
 - store signing, review, and published extension IDs; and
 - release artifact provenance tied to the reviewed commit/tag.
+- Wallet admission source now consumes the wallet-owned manifest schema v2,
+  verifies JCS/Ed25519/exact pins, retains durable per-line high-water state,
+  and provides a Linux sealed-executable primitive. Its focused
+  restart/tamper/downgrade/path/signature tests were added in this source
+  tranche but were not executed locally; CI evidence is pending. Production
+  trust roots, release pins, and floors remain empty, and macOS/Windows
+  execution, private transport, opaque engine authority, provider projection,
+  and product qualification remain release blockers.
 
 Passing portable source gates is not a substitute for those release gates.
 

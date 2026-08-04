@@ -181,17 +181,39 @@ engine-authority adapter is consumable at this native-host boundary, so native
 wallet capability and request commands fail closed and provider code is not
 injected.
 
-The optional `data/wallet-abi-v2` service staging area accepts only an exact,
-bounded manifest and capability set. Unix discovery uses current-user-owned,
-non-shared-writable, no-follow opened directories and single-link regular-file
-handles; it checks size and metadata around a bounded same-handle digest.
-Windows remains unavailable until ACL ownership has a reviewed implementation.
-The digest is local integrity, not publisher authenticity. Artifact
-authenticity, service transport, runtime negotiation, engine authority, overall
-provider availability, and value movement remain false. No artifact is launched
-or executed. Future execution requires a pinned signing identity, a reviewed
-private child-pipe transport, and retained checked handles or immediate repeat
-verification; it must never reopen a previously checked path.
+The optional `data/wallet-abi-v2` service staging area accepts the wallet-owned
+signed-artifact manifest schema v2. The complete file must be canonical RFC
+8785 JCS; the verifier independently canonicalizes the signature-omitted
+payload, checks its declared SHA-256, and verifies Ed25519 only against
+verifier-owned key/release-line roots. A trusted signature is still
+insufficient: admission requires an exact compiled target, sequence, release
+ID, manifest digest, and artifact digest pin plus a compiled release-line
+floor. Production root, pin, and floor tables are currently empty, and test
+keys cannot become production trust.
+
+Unix inspection retains current-user-owned, non-shared-writable, no-follow
+directory and single-link regular-file handles and checks size and metadata
+around a bounded same-handle digest. Launch-qualified manifest and artifact
+files must have no write bit. Per-release-line high-water state is outside the
+replaceable artifact directory under the stable data-directory handle; its
+canonical checksummed bytes and read-only mode are durably replaced with
+file-fsync, atomic rename, and directory-fsync. Because same-user state is not
+a trust root, its checksum is corruption/torn-write detection rather than
+tamper-proof secure storage, and the compiled floor and exact pin remain
+mandatory.
+
+Linux launch rebinds every retained directory/file inode to its installed path,
+rehashes while copying to a sealed memfd, and executes only that sealed
+descriptor with an empty environment and private pipes. macOS and Windows
+launch remain unavailable until reviewed platform equivalents exist. The
+controller does not call this launcher until private transport, runtime
+negotiation, public projection, and opaque engine authority are released, so
+overall provider availability and value movement remain false.
+The seal covers the executable image, not a dynamically requested ELF
+interpreter or shared-library closure; production must qualify those
+dependencies or require a self-contained service artifact. Manifest
+publication, not-before, and expiry checks also depend on a sane local wall
+clock, which remains an installation/operations qualification input.
 
 The private wallet ABI is version 2 while the website-facing provider schema
 remains version 1. Approval prompts form a closed union of 12 typed variants:
@@ -288,8 +310,10 @@ qnames, qtypes, request timing, and source IP.
 | Chromium flavors share a native-messaging location | Treat browser selection as compatibility intent; deduplicate shared paths, bind exact allowed extension origins, and refuse replacement or removal unless the manifest is proven to be owned by this installation |
 | Page forges security metadata | Strip internal headers; publish only native checked status |
 | Page forges wallet origin, generations, or permission fields | Treat them only as lookup candidates; require a native opaque engine authority context and exact wallet generations; current release remains unavailable |
-| Wallet manifest adds unknown/duplicate capabilities or changes versions | Deny unknown fields and require private ABI 2, service protocol 2, website provider schema 1, the exact frame bound, and the closed foundation capability set |
-| Local path or symlink substitutes a wallet artifact | Relative no-follow opened handles, current-user ownership, single-link files, bounded same-handle digest and metadata checks; no execution without pinned signed-release authenticity |
+| Wallet manifest changes shape, versions, capabilities, or signing bytes | Consume exact schema v2 with denied unknown fields; require full-file and signature-omitted JCS, recomputed payload hash, fixed ABI/protocol/schema/frame values, closed unique capabilities, and all five base capabilities |
+| Artifact supplies a key or relies on a matching hash | Ignore artifact-supplied trust; require verifier-owned release-line Ed25519 root, exact qualified manifest/artifact pin, and compiled minimum sequence |
+| Local path, symlink, or directory replacement substitutes a wallet artifact | Relative no-follow retained handles, parent-to-child inode rebinding, immutable single-link files, bounded same-handle hashes, and Linux execution only from a freshly rehashed sealed memfd |
+| Artifact-directory replacement or restart attempts a wallet downgrade | Keep canonical per-release-line high-water state under the stable parent data directory; require strict sequence increase and predecessor-manifest linkage, with compiled floor/pin as the non-owner-state authority |
 | Stale wallet request is retried after a generation change | Preserve replay state for repeated initialization and surface stale completion without automatic retry |
 | Browser uninstall removes independent wallet keys or databases | Store only the staged adapter manifest/artifact below browser data; wallet-owned state must remain in an independent wallet-owned location |
 | Relay lies or sets AD | Treat response as untrusted and validate locally |
@@ -308,13 +332,12 @@ testing on Windows and macOS, CA lifecycle and uninstall verification, upgrade
 testing, store signing/review, and artifact provenance tied to the reviewed
 commit/tag.
 
-The wallet join has additional release gates: an independently signed service
-artifact, private child-pipe launcher/transport, pinned signer verification,
-reviewed Windows ACL ownership checks, a released browser-engine opaque
-authority adapter, persistent production runtime, restart/upgrade tests, and
-proof that browser uninstall removes only staged adapter files while preserving
-independent wallet state. The checked-in wallet ABI-v2 subprocess supplies only
-framing, restart, authority-registry, structured-approval, and typed-event
-foundations; it advertises no provider dispatch, browser integration, wallet
-operations, or value movement. Until the release gates exist, local-integrity
-discovery remains diagnostic and every availability/value gate remains false.
+The wallet join has additional release gates: publish and independently review
+a signed service artifact; provision the production root, exact release pin,
+and line floor; qualify the Linux sealed launcher and private child-pipe
+transport; implement equivalent macOS and Windows ownership/execution
+boundaries; release the browser-engine opaque-authority and public-projection
+adapters; exercise persistent runtime restart/upgrade/downgrade behavior; and
+prove browser uninstall preserves independent wallet state. The admission
+source and negative tests do not satisfy those product gates. Until they do,
+every transport/provider/value gate remains false.
