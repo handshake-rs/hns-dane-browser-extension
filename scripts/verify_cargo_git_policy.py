@@ -25,6 +25,8 @@ ENGINE_REQUIREMENTS = {
 }
 ENGINE_GIT_URL = "https://github.com/handshake-rs/hns-dane-engine.git"
 APPROVED_ENGINE_GIT = {
+    "hns-core": ("0.2.0", "8d13c295ec99aa634170402ed316f16e040c7e40"),
+    "hns-browser-primitives": ("0.2.0", "8d13c295ec99aa634170402ed316f16e040c7e40"),
     "hns-cache": ("0.2.0", "d8b564fe1aaf88c32f7bbfeb4a3a5306bbc7780f"),
     "hns-dns-wire": ("0.2.0", "d8b564fe1aaf88c32f7bbfeb4a3a5306bbc7780f"),
     "hns-browser-observability": ("0.1.2", "1ab4ab626f945712b0f960945986cb52efefef7c"),
