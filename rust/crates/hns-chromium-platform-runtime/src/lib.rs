@@ -7,9 +7,10 @@
 
 use hns_browser_observability::{
     BrowserStatus as CanonicalBrowserStatus, IcannDnssecStatus as CanonicalIcannDnssecStatus,
-    IcannTlsAction as CanonicalIcannTlsAction, ProviderReadiness as CanonicalProviderReadiness,
-    RateLimitState as CanonicalRateLimitState, StatusInput as CanonicalStatusInput,
-    TransportIdentities as CanonicalTransportIdentities,
+    IcannTlsAction as CanonicalIcannTlsAction, NameTreeCurrentness as CanonicalNameTreeCurrentness,
+    ProviderReadiness as CanonicalProviderReadiness, RateLimitState as CanonicalRateLimitState,
+    StatusInput as CanonicalStatusInput, TransportIdentities as CanonicalTransportIdentities,
+    name_tree_interval as canonical_name_tree_interval,
 };
 use hns_browser_runtime::{
     AuthorityState as CanonicalAuthorityState, BrowserRuntime as CanonicalBrowserRuntime,
@@ -1229,17 +1230,9 @@ impl CanonicalAuthority {
                     "canonical authority could not verify header currentness: {error}"
                 ))
             })?;
-        let has_non_genesis_header = currentness.best_height.is_some_and(|height| height > 0);
-        let header_current = match self.readiness_network {
-            NetworkKind::Regtest => has_non_genesis_header,
-            NetworkKind::Mainnet | NetworkKind::Testnet => {
-                has_non_genesis_header && currentness.stale == Some(false)
-            }
-        };
-        if !header_current {
+        if currentness.tree_root_ready != Some(true) {
             return Err(RuntimeError::Operation(
-                "canonical authority requires a factually current non-genesis header chain"
-                    .to_owned(),
+                "canonical authority requires the corroborated name-tree root".to_owned(),
             ));
         }
         SqliteResourceValueProvider::open(self.readiness_base.join("resources.sqlite")).map_err(
@@ -5837,11 +5830,11 @@ impl GatewayProofProvider {
         if verified.root_name != root_name || verified.name_hash != name_hash || !verified.secure {
             return Err(ResolverError::ProofNameMismatch);
         }
-        if !self.anchor_is_current_tip_canonical(verified.anchor)? {
-            return Err(ResolverError::ProofUnavailable);
-        }
-        if local_chain_is_stale_for_current_resolution(&self.base, self.network)? {
+        if local_chain_lacks_authoritative_tree_root(&self.base, self.network)? {
             return Err(ResolverError::LocalChainNotCurrent);
+        }
+        if !self.anchor_matches_authoritative_tree_root(verified.anchor)? {
+            return Err(ResolverError::ProofUnavailable);
         }
         let anchor = verified.anchor.ok_or(ResolverError::ProofUnavailable)?;
         let observed_at_unix = now_unix_seconds();
@@ -5858,23 +5851,14 @@ impl GatewayProofProvider {
         ProvenNameRecords::from_verified_resource_value(verified)
     }
 
-    fn anchor_is_current_tip_canonical(
+    fn anchor_matches_authoritative_tree_root(
         &self,
         anchor: Option<ResourceValueAnchor>,
     ) -> Result<bool, ResolverError> {
         let Some(anchor) = anchor else {
             return Ok(false);
         };
-        let header_store = SqliteHeaderStore::open(self.base.join("headers.sqlite"))
-            .map_err(|error| ResolverError::Storage(format!("open header store: {error}")))?;
-        let chain = chain_for_network(header_store, self.network);
-        let best = chain
-            .best_header()
-            .map_err(|error| ResolverError::Storage(format!("read best header: {error}")))?;
-        let Some(best) = best else {
-            return Ok(false);
-        };
-        Ok(anchor.height == best.height && anchor.tree_root == best.header.tree_root)
+        hns_anchor_matches_authoritative_tree_root(&self.base, self.network, anchor)
     }
 
     fn fetch_and_store_live_proof(
@@ -5882,10 +5866,13 @@ impl GatewayProofProvider {
         root_name: &str,
         name_hash: NameHash,
     ) -> Result<(), ResolverError> {
+        if local_chain_lacks_authoritative_tree_root(&self.base, self.network)? {
+            return Err(ResolverError::LocalChainNotCurrent);
+        }
         let peer_store_path = self.base.join("peers.sqlite");
         let process_peer_state_path =
             peer_state_lock_path(&peer_store_path).map_err(ResolverError::Storage)?;
-        let best = best_synced_header(&self.base, self.network)?;
+        let authority = authoritative_tree_root_header(&self.base, self.network)?;
         let network = self.network.network();
         let (mut peers, baseline_peers, selected) = {
             let _peer_state = match self.peer_state.as_ref() {
@@ -5921,7 +5908,7 @@ impl GatewayProofProvider {
                 &network,
                 self.preferred_peers,
                 now_unix_seconds(),
-                best.height,
+                authority.height,
             );
             (peers, baseline_peers, selected)
         };
@@ -5937,8 +5924,8 @@ impl GatewayProofProvider {
                 address,
                 root_name,
                 name_hash,
-                best.header.tree_root,
-                best.height,
+                authority.header.tree_root,
+                authority.height,
             ) {
                 Ok(()) => {
                     // The proof is verified against our already validated local
@@ -10526,9 +10513,18 @@ fn resolution_trace_json(
         CurrentnessTargetSource::Unknown.as_str()
     };
     let local_chain_stale = optional_bool_json(local_currentness.and_then(|value| value.stale));
+    let authoritative_tree_root_height =
+        optional_u32_json(local_currentness.and_then(|value| value.authoritative_tree_root_height));
+    let local_tree_root_height =
+        optional_u32_json(local_currentness.and_then(|value| value.local_tree_root_height));
+    let tree_root_ready =
+        optional_bool_json(local_currentness.and_then(|value| value.tree_root_ready));
+    let blocks_until_authoritative_tree_root = optional_u32_json(
+        local_currentness.and_then(|value| value.blocks_until_authoritative_tree_root),
+    );
 
     format!(
-        r#"{{"host":"{}","url":"{}","nameClass":"{}","root":"{}","namespaceResolution":{},"network":"{}","mode":"{}","hnsProof":"{}","localBestHeight":{},"targetHeight":{},"estimatedTargetHeight":{},"localChainLagBlocks":{},"localChainFreshness":"{}","localChainTargetSource":"{}","localChainFreshnessThresholdBlocks":{},"localChainStale":{},"delegation":{},"resolutionSource":"{}","resourceRecords":[{}],"nameserverCandidates":{},"authoritativeDns":{},"p2pDnsRelay":{},"port53Interception":"{}","dnssec":"{}","originAddress":"{}","tls":{},"fallback":{{"used":{},"type":{},"reason":{}}},"dnsAttempts":[{}],"finalError":{}}}"#,
+        r#"{{"host":"{}","url":"{}","nameClass":"{}","root":"{}","namespaceResolution":{},"network":"{}","mode":"{}","hnsProof":"{}","localBestHeight":{},"targetHeight":{},"estimatedTargetHeight":{},"localChainLagBlocks":{},"localChainFreshness":"{}","localChainTargetSource":"{}","localChainFreshnessThresholdBlocks":{},"localChainStale":{},"authoritativeTreeRootHeight":{},"localTreeRootHeight":{},"treeRootReady":{},"blocksUntilAuthoritativeTreeRoot":{},"delegation":{},"resolutionSource":"{}","resourceRecords":[{}],"nameserverCandidates":{},"authoritativeDns":{},"p2pDnsRelay":{},"port53Interception":"{}","dnssec":"{}","originAddress":"{}","tls":{},"fallback":{{"used":{},"type":{},"reason":{}}},"dnsAttempts":[{}],"finalError":{}}}"#,
         json_escape(input.host),
         json_escape(&gateway_request_address(input)),
         selected_namespace
@@ -10551,6 +10547,10 @@ fn resolution_trace_json(
         local_chain_target_source,
         LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG,
         local_chain_stale,
+        authoritative_tree_root_height,
+        local_tree_root_height,
+        tree_root_ready,
+        blocks_until_authoritative_tree_root,
         delegation,
         resolution_source,
         resource_types,
@@ -10675,11 +10675,11 @@ fn hns_proof_trace_status(
         (_, Some(GatewayError::Resolver(ResolverError::NameNotFound))) => "not_found",
         (_, Some(GatewayError::Resolver(ResolverError::LocalChainNotCurrent))) => {
             match local_chain_currentness_for_trace(input.data_dir, network)
-                .map(|currentness| currentness.freshness)
+                .and_then(|currentness| currentness.tree_root_ready)
             {
-                Some(ChainFreshness::Stale) => "stale",
-                Some(ChainFreshness::Current) => "verified",
-                Some(ChainFreshness::Unknown) | None => "currentness_unknown",
+                Some(false) => "stale",
+                Some(true) => "verified",
+                None => "currentness_unknown",
             }
         }
         (_, Some(GatewayError::Resolver(ResolverError::ProofNameMismatch))) => "failed",
@@ -10705,11 +10705,11 @@ fn hns_cached_proof_trace_status(
         Ok(verified) if !verified.secure => Some("failed"),
         Ok(verified) if verified.value.is_some() => Some("verified"),
         Ok(_) => match local_chain_currentness_for_trace(data_dir, network)
-            .map(|currentness| currentness.freshness)
+            .and_then(|currentness| currentness.tree_root_ready)
         {
-            Some(ChainFreshness::Current) => Some("not_found"),
-            Some(ChainFreshness::Stale) => Some("stale"),
-            Some(ChainFreshness::Unknown) | None => Some("currentness_unknown"),
+            Some(true) => Some("not_found"),
+            Some(false) => Some("stale"),
+            None => Some("currentness_unknown"),
         },
         Err(ResolverError::ProofUnavailable) => Some("unavailable"),
         Err(ResolverError::ProofNameMismatch) => Some("failed"),
@@ -11616,15 +11616,16 @@ fn proof_cache_status(
     network: NetworkKind,
     anchor: Option<ResourceValueAnchor>,
 ) -> String {
-    match (anchor, best_synced_header(base, network).ok()) {
-        (None, _) => "no_anchor".to_owned(),
-        (Some(anchor), Some(best))
-            if anchor.height == best.height && anchor.tree_root == best.header.tree_root =>
+    match anchor {
+        None => "no_anchor".to_owned(),
+        Some(anchor)
+            if hns_anchor_matches_authoritative_tree_root(base, network, anchor)
+                .unwrap_or(false) =>
         {
-            "anchored_to_current_tip".to_owned()
+            "anchored_to_authoritative_tree_root".to_owned()
         }
-        (Some(_), Some(_)) => "anchored_to_height".to_owned(),
-        (Some(_), None) => "anchored_no_current_tip".to_owned(),
+        Some(_) if best_synced_header(base, network).is_ok() => "anchored_to_height".to_owned(),
+        Some(_) => "anchored_no_current_tip".to_owned(),
     }
 }
 
@@ -12994,8 +12995,12 @@ fn run_sync_once(
     let best_height = best.as_ref().map(|header| header.height.0);
     let estimated_tip_height = estimated_tip_height_for_network(network_kind, now);
     let peer_target = assess_peer_target(&peers, &network_kind.network(), now);
-    let currentness =
-        LocalChainCurrentness::new(best_height, peer_target.height, estimated_tip_height);
+    let currentness = LocalChainCurrentness::new(
+        network_kind,
+        best_height,
+        peer_target.height,
+        estimated_tip_height,
+    );
     let resource_cache_evicted =
         prune_resource_cache_to_best_chain(&base, coordinator.chain())?.saturating_add(
             enforce_resource_cache_limit(&base, resource_cache_limit_bytes)?,
@@ -13036,6 +13041,11 @@ fn run_sync_once(
         lag_blocks: currentness.lag_blocks,
         freshness: currentness.freshness.as_str(),
         freshness_threshold_blocks: LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG,
+        tree_interval_blocks: canonical_name_tree_interval(canonical_network(network_kind)),
+        authoritative_tree_root_height: currentness.authoritative_tree_root_height,
+        local_tree_root_height: currentness.local_tree_root_height,
+        tree_root_ready: currentness.tree_root_ready,
+        blocks_until_authoritative_tree_root: currentness.blocks_until_authoritative_tree_root,
         target_source: peer_target
             .height
             .map(|_| CurrentnessTargetSource::CorroboratedPeers.as_str())
@@ -13405,6 +13415,10 @@ struct LocalChainCurrentness {
     lag_blocks: Option<u32>,
     freshness: ChainFreshness,
     stale: Option<bool>,
+    authoritative_tree_root_height: Option<u32>,
+    local_tree_root_height: Option<u32>,
+    tree_root_ready: Option<bool>,
+    blocks_until_authoritative_tree_root: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -13441,6 +13455,7 @@ impl CurrentnessTargetSource {
 
 impl LocalChainCurrentness {
     fn new(
+        network: NetworkKind,
         best_height: Option<u32>,
         target_height: Option<u32>,
         estimated_tip_height: Option<u32>,
@@ -13466,6 +13481,21 @@ impl LocalChainCurrentness {
             ChainFreshness::Stale => Some(true),
             ChainFreshness::Unknown => None,
         };
+        let authority_target_height = match network {
+            NetworkKind::Mainnet | NetworkKind::Testnet => target_height,
+            NetworkKind::Regtest => target_height.or(best_height),
+        };
+        let name_tree = CanonicalNameTreeCurrentness::assess(
+            canonical_network(network),
+            best_height,
+            authority_target_height,
+        );
+        let authoritative_tree_root_height = name_tree.target_authority_height();
+        let local_tree_root_height = name_tree.local_authority_height();
+        let tree_root_ready = match (local_tree_root_height, authoritative_tree_root_height) {
+            (Some(_), Some(_)) => Some(name_tree.is_ready()),
+            _ => None,
+        };
         Self {
             best_height,
             target_height,
@@ -13473,24 +13503,54 @@ impl LocalChainCurrentness {
             lag_blocks,
             freshness,
             stale,
+            authoritative_tree_root_height,
+            local_tree_root_height,
+            tree_root_ready,
+            blocks_until_authoritative_tree_root: name_tree.blocks_until_authority(),
         }
     }
 }
 
-fn local_chain_is_stale_for_current_resolution(
+fn local_chain_lacks_authoritative_tree_root(
     base: &Path,
     network: NetworkKind,
 ) -> Result<bool, ResolverError> {
+    Ok(local_chain_currentness(base, network)?.tree_root_ready != Some(true))
+}
+
+fn authoritative_tree_root_header(
+    base: &Path,
+    network: NetworkKind,
+) -> Result<hns_chain::StoredHeader, ResolverError> {
     let currentness = local_chain_currentness(base, network)?;
-    match network {
-        NetworkKind::Regtest => Ok(currentness.best_height.is_none_or(|height| height == 0)),
-        NetworkKind::Mainnet | NetworkKind::Testnet => {
-            // Unknown peer currentness is not equivalent to current. Failing
-            // closed prevents an isolated or offline client from authorizing
-            // current HNS state using an arbitrarily old local tip.
-            Ok(currentness.freshness != ChainFreshness::Current)
-        }
+    if currentness.tree_root_ready != Some(true) {
+        return Err(ResolverError::LocalChainNotCurrent);
     }
+    let required_height = currentness
+        .authoritative_tree_root_height
+        .or(currentness.local_tree_root_height)
+        .ok_or(ResolverError::LocalChainNotCurrent)?;
+    let store = SqliteHeaderStore::open(base.join("headers.sqlite"))
+        .map_err(|error| ResolverError::Storage(format!("open header store: {error}")))?;
+    chain_for_network(store, network)
+        .canonical_header(Height(required_height))
+        .ok_or(ResolverError::LocalChainNotCurrent)
+}
+
+fn hns_anchor_matches_authoritative_tree_root(
+    base: &Path,
+    network: NetworkKind,
+    anchor: ResourceValueAnchor,
+) -> Result<bool, ResolverError> {
+    let authority = authoritative_tree_root_header(base, network)?;
+    let store = SqliteHeaderStore::open(base.join("headers.sqlite"))
+        .map_err(|error| ResolverError::Storage(format!("open header store: {error}")))?;
+    let chain = chain_for_network(store, network);
+    let canonical_anchor = chain.canonical_header(anchor.height);
+    Ok(canonical_anchor.is_some_and(|header| {
+        header.header.tree_root == anchor.tree_root
+            && authority.header.tree_root == anchor.tree_root
+    }))
 }
 
 fn local_chain_currentness(
@@ -13525,6 +13585,7 @@ fn local_chain_currentness(
     let now = now_unix_seconds();
     let target_height = assess_peer_target(&peers, &network_policy, now).height;
     Ok(LocalChainCurrentness::new(
+        network,
         best_height,
         target_height,
         estimated_tip_height_for_network(network, now),
@@ -13601,8 +13662,12 @@ fn read_sync_status(data_dir: &str, network: NetworkKind) -> Result<NativeSyncSt
             evidence_valid_until_unix: None,
         }
     };
-    let currentness =
-        LocalChainCurrentness::new(best_height, peer_target.height, estimated_tip_height);
+    let currentness = LocalChainCurrentness::new(
+        network,
+        best_height,
+        peer_target.height,
+        estimated_tip_height,
+    );
     let (resource_cache_entries, resource_cache_bytes) = resource_cache_stats(&base)?;
 
     Ok(NativeSyncStatus {
@@ -13621,6 +13686,11 @@ fn read_sync_status(data_dir: &str, network: NetworkKind) -> Result<NativeSyncSt
         lag_blocks: currentness.lag_blocks,
         freshness: currentness.freshness.as_str(),
         freshness_threshold_blocks: LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG,
+        tree_interval_blocks: canonical_name_tree_interval(canonical_network(network)),
+        authoritative_tree_root_height: currentness.authoritative_tree_root_height,
+        local_tree_root_height: currentness.local_tree_root_height,
+        tree_root_ready: currentness.tree_root_ready,
+        blocks_until_authoritative_tree_root: currentness.blocks_until_authoritative_tree_root,
         target_source: peer_target
             .height
             .map(|_| CurrentnessTargetSource::CorroboratedPeers.as_str())
@@ -13793,6 +13863,11 @@ pub struct SyncStatus {
     pub lag_blocks: Option<u32>,
     pub freshness: &'static str,
     pub freshness_threshold_blocks: u32,
+    pub tree_interval_blocks: u32,
+    pub authoritative_tree_root_height: Option<u32>,
+    pub local_tree_root_height: Option<u32>,
+    pub tree_root_ready: Option<bool>,
+    pub blocks_until_authoritative_tree_root: Option<u32>,
     pub target_source: &'static str,
     pub target_peer_groups: usize,
     pub target_evidence_expired: bool,
@@ -13831,6 +13906,11 @@ impl SyncStatus {
             lag_blocks: None,
             freshness: ChainFreshness::Unknown.as_str(),
             freshness_threshold_blocks: LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG,
+            tree_interval_blocks: canonical_name_tree_interval(canonical_network(network)),
+            authoritative_tree_root_height: None,
+            local_tree_root_height: None,
+            tree_root_ready: None,
+            blocks_until_authoritative_tree_root: None,
             target_source: CurrentnessTargetSource::Unknown.as_str(),
             target_peer_groups: 0,
             target_evidence_expired: false,
@@ -13864,6 +13944,11 @@ impl SyncStatus {
             lag_blocks: None,
             freshness: ChainFreshness::Unknown.as_str(),
             freshness_threshold_blocks: LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG,
+            tree_interval_blocks: canonical_name_tree_interval(canonical_network(network)),
+            authoritative_tree_root_height: None,
+            local_tree_root_height: None,
+            tree_root_ready: None,
+            blocks_until_authoritative_tree_root: None,
             target_source: CurrentnessTargetSource::Unknown.as_str(),
             target_peer_groups: 0,
             target_evidence_expired: false,
@@ -13897,6 +13982,19 @@ impl SyncStatus {
             .lag_blocks
             .map(|lag| lag.to_string())
             .unwrap_or_else(|| "null".to_owned());
+        let authoritative_tree_root_height = self
+            .authoritative_tree_root_height
+            .map(|height| height.to_string())
+            .unwrap_or_else(|| "null".to_owned());
+        let local_tree_root_height = self
+            .local_tree_root_height
+            .map(|height| height.to_string())
+            .unwrap_or_else(|| "null".to_owned());
+        let tree_root_ready = json_bool_or_null(self.tree_root_ready);
+        let blocks_until_authoritative_tree_root = self
+            .blocks_until_authoritative_tree_root
+            .map(|blocks| blocks.to_string())
+            .unwrap_or_else(|| "null".to_owned());
         let target_evidence_valid_until_unix = self
             .target_evidence_valid_until_unix
             .map(|deadline| deadline.to_string())
@@ -13914,7 +14012,7 @@ impl SyncStatus {
             .join(",");
 
         format!(
-            r#"{{"network":"{}","status":"{}","attempted":{},"successful":{},"accepted":{},"failed":{},"peerCount":{},"peerGroups":{},"bestHeight":{},"bestPeerHeight":{},"estimatedTipHeight":{},"effectiveTargetHeight":{},"lagBlocks":{},"freshness":"{}","freshnessThresholdBlocks":{},"targetSource":"{}","targetPeerGroups":{},"targetEvidenceExpired":{},"targetEvidenceValidUntilUnix":{},"resourceCacheEntries":{},"resourceCacheBytes":{},"resourceCacheEvicted":{},"error":{},"failures":[{}]}}"#,
+            r#"{{"network":"{}","status":"{}","attempted":{},"successful":{},"accepted":{},"failed":{},"peerCount":{},"peerGroups":{},"bestHeight":{},"bestPeerHeight":{},"estimatedTipHeight":{},"effectiveTargetHeight":{},"lagBlocks":{},"freshness":"{}","freshnessThresholdBlocks":{},"treeIntervalBlocks":{},"authoritativeTreeRootHeight":{},"localTreeRootHeight":{},"treeRootReady":{},"blocksUntilAuthoritativeTreeRoot":{},"targetSource":"{}","targetPeerGroups":{},"targetEvidenceExpired":{},"targetEvidenceValidUntilUnix":{},"resourceCacheEntries":{},"resourceCacheBytes":{},"resourceCacheEvicted":{},"error":{},"failures":[{}]}}"#,
             self.network.as_str(),
             self.status,
             self.attempted,
@@ -13930,6 +14028,11 @@ impl SyncStatus {
             lag_blocks,
             self.freshness,
             self.freshness_threshold_blocks,
+            self.tree_interval_blocks,
+            authoritative_tree_root_height,
+            local_tree_root_height,
+            tree_root_ready,
+            blocks_until_authoritative_tree_root,
             self.target_source,
             self.target_peer_groups,
             self.target_evidence_expired,
@@ -14540,10 +14643,7 @@ mod tests {
         assert!(authority.admits(old_stamp));
 
         let base = data_dir.join("hns");
-        store_peer_height(
-            &base,
-            anchor_height.0 + LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG + 1,
-        );
+        store_peer_height(&base, 37);
         assert!(!authority.admits(old_stamp));
         assert_eq!(
             authority.runtime.lock().unwrap().authority_state(),
@@ -15094,7 +15194,7 @@ mod tests {
 
     #[test]
     fn staged_origin_body_is_not_published_after_readiness_turns_stale() {
-        let (data_dir, runtime, anchor_height) =
+        let (data_dir, runtime, _anchor_height) =
             runtime_with_current_mainnet_authority("staged-origin-stale");
         let proxy = runtime.start_proxy("welcome").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -15104,10 +15204,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let request = String::from_utf8(read_test_http_head(&mut stream).unwrap()).unwrap();
             assert!(request.starts_with("GET /download HTTP/1.1\r\n"));
-            store_peer_height(
-                &stale_base,
-                anchor_height.0 + LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG + 1,
-            );
+            store_peer_height(&stale_base, 37);
             stream
                 .write_all(
                     b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 12\r\nConnection: close\r\n\r\nsecret-bytes",
@@ -17463,18 +17560,21 @@ mod tests {
 
     #[test]
     fn local_chain_freshness_is_two_blocks_and_never_uses_schedule_estimate() {
-        let current = LocalChainCurrentness::new(Some(100), Some(102), Some(50_000));
+        let current =
+            LocalChainCurrentness::new(NetworkKind::Mainnet, Some(100), Some(102), Some(50_000));
         assert_eq!(current.target_height, Some(102));
         assert_eq!(current.lag_blocks, Some(2));
         assert_eq!(current.freshness, ChainFreshness::Current);
         assert_eq!(current.stale, Some(false));
 
-        let stale = LocalChainCurrentness::new(Some(100), Some(103), Some(100));
+        let stale =
+            LocalChainCurrentness::new(NetworkKind::Mainnet, Some(100), Some(103), Some(100));
         assert_eq!(stale.lag_blocks, Some(3));
         assert_eq!(stale.freshness, ChainFreshness::Stale);
         assert_eq!(stale.stale, Some(true));
 
-        let unknown = LocalChainCurrentness::new(Some(100), None, Some(50_000));
+        let unknown =
+            LocalChainCurrentness::new(NetworkKind::Mainnet, Some(100), None, Some(50_000));
         assert_eq!(unknown.target_height, None);
         assert_eq!(unknown.lag_blocks, None);
         assert_eq!(unknown.freshness, ChainFreshness::Unknown);
@@ -17483,6 +17583,25 @@ mod tests {
             LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG,
             RESOURCE_PROOF_CACHE_CANONICAL_WINDOW
         );
+    }
+
+    #[test]
+    fn name_tree_readiness_waits_only_for_the_target_authority_epoch() {
+        let same_epoch = LocalChainCurrentness::new(NetworkKind::Mainnet, Some(1), Some(36), None);
+        assert_eq!(same_epoch.authoritative_tree_root_height, Some(1));
+        assert_eq!(same_epoch.local_tree_root_height, Some(1));
+        assert_eq!(same_epoch.tree_root_ready, Some(true));
+        assert_eq!(same_epoch.blocks_until_authoritative_tree_root, Some(0));
+
+        let boundary = LocalChainCurrentness::new(NetworkKind::Mainnet, Some(36), Some(37), None);
+        assert_eq!(boundary.authoritative_tree_root_height, Some(37));
+        assert_eq!(boundary.local_tree_root_height, Some(1));
+        assert_eq!(boundary.tree_root_ready, Some(false));
+        assert_eq!(boundary.blocks_until_authoritative_tree_root, Some(1));
+
+        let regtest = LocalChainCurrentness::new(NetworkKind::Regtest, Some(5), None, None);
+        assert_eq!(regtest.authoritative_tree_root_height, Some(1));
+        assert_eq!(regtest.tree_root_ready, Some(true));
     }
 
     #[test]
@@ -17625,6 +17744,11 @@ mod tests {
             lag_blocks: None,
             freshness: "unknown",
             freshness_threshold_blocks: LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG,
+            tree_interval_blocks: 36,
+            authoritative_tree_root_height: None,
+            local_tree_root_height: None,
+            tree_root_ready: None,
+            blocks_until_authoritative_tree_root: None,
             target_source: "unknown",
             target_peer_groups: 0,
             target_evidence_expired: false,
@@ -17859,6 +17983,7 @@ mod tests {
         let name_hash = NameHash::from_name(&root_name).unwrap();
         let anchor_root = Hash::new([8; 32]);
         let anchor_height = store_best_header_with_tree_root(&base, anchor_root);
+        store_peer_height(&base, anchor_height.0);
         let resource = owner_glue4_resource(&root_name, [127, 0, 0, 1]);
         resources
             .insert(
@@ -17873,7 +17998,7 @@ mod tests {
         assert!(json.contains(r#""name":"welcome""#));
         assert!(json.contains(&format!(r#""nameHash":"{}""#, name_hash.as_hash())));
         assert!(json.contains(r#""proofStatus":"verified""#));
-        assert!(json.contains(r#""cacheStatus":"anchored_to_current_tip""#));
+        assert!(json.contains(r#""cacheStatus":"anchored_to_authoritative_tree_root""#));
         assert!(json.contains(&format!(r#""treeRoot":"{}""#, anchor_root)));
         assert!(json.contains(r#""blockHeight":1"#));
         assert!(json.contains(&format!(r#""resourceValueHex":"{}""#, hex_lower(&resource))));
@@ -19577,7 +19702,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let proof_root = Hash::new([12; 32]);
         let proof_height = store_best_header_with_tree_root(&base, proof_root);
-        let target_height = proof_height.0 + LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG + 2;
+        let target_height = 37;
         store_peer_height(&base, target_height);
         let marker = FallbackMarker::default();
         marker.mark("local_chain_not_current");
@@ -22063,7 +22188,7 @@ mod tests {
         let name_hash = NameHash::from_name(&root_name).unwrap();
         let proof_root = Hash::new([9; 32]);
         let proof_height = store_best_header_with_tree_root(&base, proof_root);
-        let target_height = proof_height.0 + LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG + 1;
+        let target_height = 37;
         store_peer_height(&base, target_height);
         resources
             .insert(
@@ -22110,10 +22235,7 @@ mod tests {
         let name_hash = NameHash::from_name(&root_name).unwrap();
         let proof_root = Hash::new([12; 32]);
         let proof_height = store_best_header_with_tree_root(&base, proof_root);
-        store_peer_height(
-            &base,
-            proof_height.0 + LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG + 1,
-        );
+        store_peer_height(&base, 37);
         resources
             .insert(
                 VerifiedResourceValue::inclusion(
@@ -22253,10 +22375,7 @@ mod tests {
         let name_hash = NameHash::from_name(&root_name).unwrap();
         let proof_root = Hash::new([11; 32]);
         let proof_height = store_best_header_with_tree_root(&base, proof_root);
-        store_peer_height(
-            &base,
-            proof_height.0 + LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG + 25,
-        );
+        store_peer_height(&base, 37);
         resources
             .insert(
                 VerifiedResourceValue::non_inclusion(root_name.clone(), name_hash)

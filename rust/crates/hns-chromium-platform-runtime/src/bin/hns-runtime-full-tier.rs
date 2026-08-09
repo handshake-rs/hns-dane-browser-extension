@@ -193,7 +193,7 @@ fn run() -> Result<(), String> {
         (r#""secure":true"#, "proof security"),
         (r#""exists":true"#, "registered name existence"),
         (
-            r#""cacheStatus":"anchored_to_current_tip""#,
+            r#""cacheStatus":"anchored_to_authoritative_tree_root""#,
             "proof chain anchor",
         ),
     ] {

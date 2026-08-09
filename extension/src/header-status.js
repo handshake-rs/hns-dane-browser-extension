@@ -63,7 +63,8 @@ export function authoritativeHeaderSync(candidate) {
       ? sync.targetEvidenceValidUntilUnix !== null
       : !isUnixSeconds(sync.targetEvidenceValidUntilUnix)) ||
     (sync.freshness !== "unknown" &&
-      sync.targetPeerGroups < REQUIRED_TARGET_PEER_GROUPS)
+      sync.targetPeerGroups < REQUIRED_TARGET_PEER_GROUPS) ||
+    !validNameTreeCurrentness(sync)
   ) {
     return null;
   }
@@ -77,7 +78,8 @@ export function headerSyncReadyForProxyActivation(
   if (!Number.isSafeInteger(nowUnixSeconds) || nowUnixSeconds < 0) return false;
   const sync = authoritativeHeaderSync(candidate);
   return (
-    sync?.freshness === "current" &&
+    sync?.treeRootReady === true &&
+    sync.blocksUntilAuthoritativeTreeRoot === 0 &&
     sync.targetEvidenceExpired === false &&
     Number.isSafeInteger(sync.targetEvidenceValidUntilUnix) &&
     sync.targetEvidenceValidUntilUnix > nowUnixSeconds
@@ -161,8 +163,12 @@ export function headerChainView(candidate, operation = {}) {
   const authoritative = authoritativeHeaderSync(sync) != null;
   const state = syncing
     ? "Syncing"
-    : authoritative
-      ? freshnessLabel(sync.freshness)
+    : authoritative && sync.treeRootReady === true
+      ? sync.freshness === "current"
+        ? "Current"
+        : "Name state ready"
+      : authoritative
+        ? freshnessLabel(sync.freshness)
       : "Unknown";
 
   return {
@@ -221,6 +227,49 @@ function validFreshness(candidate) {
     : lag <= candidate.freshnessThresholdBlocks;
 }
 
+function validNameTreeCurrentness(candidate) {
+  if (
+    !isHeight(candidate.treeIntervalBlocks) ||
+    candidate.treeIntervalBlocks === 0 ||
+    !optionalHeight(candidate.authoritativeTreeRootHeight) ||
+    !optionalHeight(candidate.localTreeRootHeight) ||
+    !optionalHeight(candidate.blocksUntilAuthoritativeTreeRoot) ||
+    !optionalBoolean(candidate.treeRootReady)
+  ) {
+    return false;
+  }
+  if (candidate.freshness === "unknown") {
+    return (
+      candidate.authoritativeTreeRootHeight == null &&
+      candidate.treeRootReady == null &&
+      candidate.blocksUntilAuthoritativeTreeRoot == null
+    );
+  }
+  if (
+    candidate.bestHeight == null ||
+    candidate.bestHeight < 1 ||
+    candidate.localTreeRootHeight == null ||
+    candidate.localTreeRootHeight < 1 ||
+    candidate.localTreeRootHeight > candidate.bestHeight ||
+    candidate.authoritativeTreeRootHeight == null ||
+    candidate.authoritativeTreeRootHeight < 1 ||
+    candidate.blocksUntilAuthoritativeTreeRoot == null
+  ) {
+    return false;
+  }
+  if (candidate.treeRootReady === true) {
+    return (
+      candidate.blocksUntilAuthoritativeTreeRoot === 0 &&
+      candidate.localTreeRootHeight === candidate.authoritativeTreeRootHeight &&
+      candidate.bestHeight >= candidate.authoritativeTreeRootHeight
+    );
+  }
+  return (
+    candidate.treeRootReady === false &&
+    candidate.blocksUntilAuthoritativeTreeRoot > 0
+  );
+}
+
 function headerDetail(sync, { authoritative, syncing, syncError }) {
   const diagnosticNote =
     "The highest peer claim and schedule estimate are diagnostic only.";
@@ -234,6 +283,13 @@ function headerDetail(sync, { authoritative, syncing, syncError }) {
     return `${reason} ${diagnosticNote}`;
   }
   if (sync.freshness === "stale") {
+    if (sync.treeRootReady === true) {
+      return `The authoritative HNS name state at ${formatHeight(
+        sync.authoritativeTreeRootHeight
+      )} is ready while validated headers continue catching up; the tip is ${formatBlocks(
+        sync.lagBlocks
+      )} behind the corroborated target. ${diagnosticNote}`;
+    }
     return `The validated tip is ${formatBlocks(
       sync.lagBlocks
     )} behind the corroborated target. ${diagnosticNote}`;
@@ -270,6 +326,10 @@ function optionalHeight(value) {
 
 function optionalUnixSeconds(value) {
   return value == null || isUnixSeconds(value);
+}
+
+function optionalBoolean(value) {
+  return value == null || typeof value === "boolean";
 }
 
 function isUnixSeconds(value) {

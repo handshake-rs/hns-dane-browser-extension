@@ -26,6 +26,11 @@ function headerSync(overrides = {}) {
     lagBlocks: 2,
     freshness: "current",
     freshnessThresholdBlocks: 2,
+    treeIntervalBlocks: 36,
+    authoritativeTreeRootHeight: 339_913,
+    localTreeRootHeight: 339_913,
+    treeRootReady: true,
+    blocksUntilAuthoritativeTreeRoot: 0,
     targetSource: "corroboratedPeers",
     targetPeerGroups: 3,
     targetEvidenceExpired: false,
@@ -59,7 +64,7 @@ test("header UI uses authoritative freshness and exposes active synchronization"
       freshness: "stale"
     })
   );
-  assert.equal(stale.state, "Stale");
+  assert.equal(stale.state, "Name state ready");
   assert.match(stale.detail, /4 blocks behind/);
 
   const syncing = headerChainView(headerSync(), { syncing: true });
@@ -108,6 +113,9 @@ test("unknown freshness requires an unconfirmed target and lag", () => {
     lagBlocks: null,
     freshness: "unknown",
     targetSource: "unknown",
+    authoritativeTreeRootHeight: null,
+    treeRootReady: null,
+    blocksUntilAuthoritativeTreeRoot: null,
     targetEvidenceValidUntilUnix: null
   });
 
@@ -151,6 +159,10 @@ test("native lifecycle rejects weak freshness policy or insufficient corroborati
     null
   );
   assert.equal(
+    authoritativeHeaderSync(headerSync({ localTreeRootHeight: 339_914 })),
+    null
+  );
+  assert.equal(
     authoritativeHeaderSync(
       headerSync({ targetEvidenceValidUntilUnix: null })
     ),
@@ -183,7 +195,7 @@ test("native lifecycle rejects weak freshness policy or insufficient corroborati
   );
 });
 
-test("proxy activation requires current target evidence beyond the current second", () => {
+test("proxy activation requires authority evidence beyond the current second", () => {
   const now = 1_753_399_900;
   assert.equal(headerSyncReadyForProxyActivation(headerSync(), now), true);
   assert.equal(
@@ -202,6 +214,20 @@ test("proxy activation requires current target evidence beyond the current secon
       }),
       now
     ),
+    true
+  );
+  assert.equal(
+    headerSyncReadyForProxyActivation(
+      headerSync({
+        bestHeight: 339_912,
+        effectiveTargetHeight: 339_913,
+        lagBlocks: 1,
+        localTreeRootHeight: 339_877,
+        treeRootReady: false,
+        blocksUntilAuthoritativeTreeRoot: 1
+      }),
+      now
+    ),
     false
   );
   assert.equal(
@@ -211,6 +237,9 @@ test("proxy activation requires current target evidence beyond the current secon
         lagBlocks: null,
         freshness: "unknown",
         targetSource: "unknown",
+        authoritativeTreeRootHeight: null,
+        treeRootReady: null,
+        blocksUntilAuthoritativeTreeRoot: null,
         targetPeerGroups: 0,
         targetEvidenceExpired: true,
         targetEvidenceValidUntilUnix: null
