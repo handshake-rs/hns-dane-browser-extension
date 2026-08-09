@@ -1814,7 +1814,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-primitives"
 version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=8d13c295ec99aa634170402ed316f16e040c7e40#8d13c295ec99aa634170402ed316f16e040c7e40"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=b546ad07962326435dc67f89ff1b3756e66f2482#b546ad07962326435dc67f89ff1b3756e66f2482"
 dependencies = [
  "blake2",
  "hex",
@@ -1842,6 +1842,15 @@ dependencies = [
  "sha2",
  "thiserror 2.0.19",
  "winit",
+]
+
+[[package]]
+name = "hns-browser-urkel"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=b546ad07962326435dc67f89ff1b3756e66f2482#b546ad07962326435dc67f89ff1b3756e66f2482"
+dependencies = [
+ "hns-browser-primitives",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1893,6 +1902,7 @@ dependencies = [
  "hns-browser-observability",
  "hns-browser-primitives",
  "hns-browser-runtime",
+ "hns-browser-urkel",
  "hns-chain",
  "hns-dane",
  "hns-gateway",
@@ -1903,7 +1913,6 @@ dependencies = [
  "hns-resolver",
  "hns-sync",
  "hns-transport",
- "hns-urkel",
  "http",
  "httparse",
  "rusqlite",
@@ -1916,8 +1925,8 @@ name = "hns-dane"
 version = "0.5.5"
 dependencies = [
  "hns-browser-primitives",
+ "hns-browser-urkel",
  "hns-dnssec",
- "hns-urkel",
  "sha2",
  "thiserror 2.0.19",
 ]
@@ -1991,7 +2000,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "hns-browser-primitives",
- "hns-urkel",
+ "hns-browser-urkel",
  "rusqlite",
  "thiserror 2.0.19",
 ]
@@ -2019,10 +2028,10 @@ name = "hns-sync"
 version = "0.5.5"
 dependencies = [
  "hns-browser-primitives",
+ "hns-browser-urkel",
  "hns-chain",
  "hns-p2p",
  "hns-resolver",
- "hns-urkel",
  "thiserror 2.0.19",
 ]
 
@@ -2045,14 +2054,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "webpki-roots",
-]
-
-[[package]]
-name = "hns-urkel"
-version = "0.5.5"
-dependencies = [
- "hns-browser-primitives",
- "thiserror 2.0.19",
 ]
 
 [[package]]
