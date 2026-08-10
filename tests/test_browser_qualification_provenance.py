@@ -24,18 +24,33 @@ from create_browser_qualification_provenance import (  # noqa: E402
 
 COMMIT = "a" * 40
 RUST_TARGET = "aarch64-unknown-linux-musl"
+REPOSITORY = "https://github.com/handshake-rs/hns-dane-browser-extension"
 
 
 class BrowserQualificationProvenanceTests(unittest.TestCase):
-    def fixture(self, root: Path) -> argparse.Namespace:
+    def fixture(
+        self, root: Path, *, claimed_tag: bool = False
+    ) -> argparse.Namespace:
         host = root / "hns-chromium-native-host"
         host.write_bytes(b"exact native host")
 
         native_archive = root / "native.tar.gz"
         prefix = "hns-dane-browser-native-host-v0.5.6-linux-arm64"
+        source = {
+            "repository": REPOSITORY,
+            "commit": COMMIT,
+            "commitUrl": f"{REPOSITORY}/commit/{COMMIT}",
+            "qualificationCandidate": True,
+        }
+        if claimed_tag:
+            source["tag"] = "v0.5.6"
+        candidate_metadata = {
+            "source": source,
+            "license": {"url": f"{REPOSITORY}/blob/{COMMIT}/LICENSE"},
+        }
         native_metadata = json.dumps(
             {
-                "source": {"commit": COMMIT},
+                **candidate_metadata,
                 "nativeHost": {"rustTarget": RUST_TARGET},
             }
         ).encode()
@@ -55,7 +70,7 @@ class BrowserQualificationProvenanceTests(unittest.TestCase):
                 "RELEASE-METADATA.json",
                 json.dumps(
                     {
-                        "source": {"commit": COMMIT},
+                        **candidate_metadata,
                         "extensionPackageVariant": "canonicalUnpacked",
                     }
                 ),
@@ -107,6 +122,12 @@ class BrowserQualificationProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ProvenanceError, "exact staged native host"):
                 build_provenance(arguments)
 
+    def test_rejects_a_claimed_release_tag_in_candidate_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self.fixture(Path(directory), claimed_tag=True)
+            with self.assertRaisesRegex(ProvenanceError, "only the exact source commit"):
+                build_provenance(arguments)
+
     def test_rejects_private_key_material_inside_extension(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -146,6 +167,10 @@ class BrowserQualificationWorkflowTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", qualification)
         self.assertIn("scripts/check-runtime-boundaries.sh", qualification)
         self.assertIn("create_browser_qualification_provenance.py", qualification)
+        self.assertIn('test "$qualification_file_count" -eq 6', qualification)
+        self.assertIn(
+            "find dist/qualification -mindepth 1 ! -type f", qualification
+        )
         self.assertNotIn("secrets.", qualification)
         self.assertNotRegex(
             qualification,

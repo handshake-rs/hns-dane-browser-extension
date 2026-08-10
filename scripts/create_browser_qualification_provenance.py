@@ -154,6 +154,26 @@ def load_json_entry(payloads: dict[str, bytes], suffix: str) -> dict[str, object
     return value
 
 
+def verify_candidate_metadata(metadata: dict[str, object], source_commit: str) -> None:
+    source = metadata.get("source")
+    license_metadata = metadata.get("license")
+    if not isinstance(source, dict) or not isinstance(license_metadata, dict):
+        raise ProvenanceError("candidate archive metadata is incomplete")
+    if (
+        source.get("repository") != REPOSITORY
+        or source.get("commit") != source_commit
+        or source.get("commitUrl") != f"{REPOSITORY}/commit/{source_commit}"
+        or source.get("qualificationCandidate") is not True
+        or "tag" in source
+        or "tagUrl" in source
+    ):
+        raise ProvenanceError(
+            "candidate archive must identify only the exact source commit"
+        )
+    if license_metadata.get("url") != f"{REPOSITORY}/blob/{source_commit}/LICENSE":
+        raise ProvenanceError("candidate archive license URL is not commit-scoped")
+
+
 def verify_sidecar(sidecar: Path, artifact: Path) -> None:
     try:
         fields = sidecar.read_text(encoding="ascii").strip().split()
@@ -192,15 +212,13 @@ def validate_inputs(
     if native_matches[0] != raw_host:
         raise ProvenanceError("native archive does not contain the exact staged native host")
     native_metadata = load_json_entry(native_payloads, "/RELEASE-METADATA.json")
-    if native_metadata.get("source", {}).get("commit") != source_commit:
-        raise ProvenanceError("native archive source commit does not match")
+    verify_candidate_metadata(native_metadata, source_commit)
     if native_metadata.get("nativeHost", {}).get("rustTarget") != rust_target:
         raise ProvenanceError("native archive Rust target does not match")
 
     extension_payloads = zip_payloads(files["canonicalExtension"])
     extension_metadata = load_json_entry(extension_payloads, "RELEASE-METADATA.json")
-    if extension_metadata.get("source", {}).get("commit") != source_commit:
-        raise ProvenanceError("extension archive source commit does not match")
+    verify_candidate_metadata(extension_metadata, source_commit)
     if extension_metadata.get("extensionPackageVariant") != "canonicalUnpacked":
         raise ProvenanceError("extension archive is not the canonical unpacked package")
     try:

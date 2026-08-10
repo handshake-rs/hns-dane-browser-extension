@@ -21,6 +21,10 @@ The artifact name is
 `installed-browser-qualification-<40-character-commit>-linux-arm64` and it is
 retained for 14 days. Provenance records the source repository and commit,
 runner/platform/Rust target, and every file's name, size, role, and SHA-256.
+The archives use candidate metadata with commit-scoped source and license links;
+they contain no release-tag or release-URL claim. Tagged release packaging
+remains a separate, tag-required mode. The upload rejects anything beyond the
+six expected top-level regular files, including nested directories.
 Generation rejects symlinks, archive links, unsafe paths, encrypted ZIP
 entries, secret-bearing filenames, PEM private-key material, bad sidecars,
 source/target mismatches, and a native archive that does not contain the exact

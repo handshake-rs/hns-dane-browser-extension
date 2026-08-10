@@ -249,13 +249,13 @@ jobs:
             --output-dir dist/qualification \
             --source-date-epoch "$source_date_epoch" \
             --source-commit "$SOURCE_COMMIT" \
-            --source-tag "v$version" \
+            --candidate-source \
             --extension-id "$canonical_id"
           python3 scripts/package-release.py native \
             --output-dir dist/qualification \
             --source-date-epoch "$source_date_epoch" \
             --source-commit "$SOURCE_COMMIT" \
-            --source-tag "v$version" \
+            --candidate-source \
             --extension-id "$canonical_id" \
             --platform linux \
             --architecture arm64 \
@@ -283,6 +283,25 @@ jobs:
             --file "canonicalExtension=$canonical_extension" \
             --file "canonicalExtensionChecksum=${canonical_extension}.sha256" \
             --output dist/qualification/QUALIFICATION-PROVENANCE.json
+          for expected in \
+            hns-chromium-native-host \
+            "${native_archive##*/}" \
+            "${native_archive##*/}.sha256" \
+            "${canonical_extension##*/}" \
+            "${canonical_extension##*/}.sha256" \
+            QUALIFICATION-PROVENANCE.json; do
+            test -f "dist/qualification/$expected"
+            test ! -L "dist/qualification/$expected"
+          done
+          qualification_file_count="$(
+            find dist/qualification -mindepth 1 -maxdepth 1 -type f | wc -l
+          )"
+          test "$qualification_file_count" -eq 6
+          if find dist/qualification -mindepth 1 ! -type f -print -quit \
+            | grep -q .; then
+            echo "::error::Qualification artifact contains a nested or special entry."
+            exit 1
+          fi
 
       - name: Retain exact-SHA installed-browser inputs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -259,6 +259,80 @@ class ReleasePackagingTests(unittest.TestCase):
                 )
                 self.assertFalse(store_metadata["manifestKeyIncluded"])
 
+    def test_candidate_extension_metadata_claims_only_its_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "candidate"
+            self.run_packager(
+                "extension",
+                "--output-dir",
+                str(output),
+                "--source-date-epoch",
+                EPOCH,
+                "--source-commit",
+                COMMIT,
+                "--candidate-source",
+                "--extension-id",
+                EXTENSION_ID,
+            )
+            archive_path = (
+                output
+                / f"hns-dane-browser-extension-v{self.version}-mv3.zip"
+            )
+            with zipfile.ZipFile(archive_path) as archive:
+                metadata = json.loads(archive.read("RELEASE-METADATA.json"))
+                build_metadata = json.loads(archive.read("BUILD-METADATA.json"))
+            self.assertEqual(metadata["source"]["commit"], COMMIT)
+            self.assertTrue(metadata["source"]["qualificationCandidate"])
+            self.assertNotIn("tag", metadata["source"])
+            self.assertNotIn("tagUrl", metadata["source"])
+            self.assertEqual(
+                metadata["license"]["url"],
+                "https://github.com/handshake-rs/"
+                f"hns-dane-browser-extension/blob/{COMMIT}/LICENSE",
+            )
+            self.assertNotIn("sourceTag", build_metadata)
+
+    def test_candidate_native_metadata_and_readme_are_commit_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "candidate"
+            binary = root / "hns-chromium-native-host"
+            binary.write_bytes(fake_native_binary("linux", "x64"))
+            binary.chmod(0o755)
+            self.run_packager(
+                "native",
+                "--output-dir",
+                str(output),
+                "--source-date-epoch",
+                EPOCH,
+                "--source-commit",
+                COMMIT,
+                "--candidate-source",
+                "--extension-id",
+                EXTENSION_ID,
+                "--platform",
+                "linux",
+                "--architecture",
+                "x64",
+                "--rust-target",
+                "x86_64-unknown-linux-musl",
+                "--native-host",
+                str(binary),
+            )
+            stem = f"hns-dane-browser-native-host-v{self.version}-linux-x64"
+            with tarfile.open(output / f"{stem}.tar.gz", "r:gz") as archive:
+                metadata = json.load(
+                    archive.extractfile(f"{stem}/RELEASE-METADATA.json")
+                )
+                readme = archive.extractfile(f"{stem}/README.md").read().decode()
+            self.assertTrue(metadata["source"]["qualificationCandidate"])
+            self.assertNotIn("tag", metadata["source"])
+            self.assertIn(
+                f"Source: https://github.com/handshake-rs/"
+                f"hns-dane-browser-extension/commit/{COMMIT}",
+                readme,
+            )
+
     def test_linux_native_bundle_is_deterministic_and_installable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

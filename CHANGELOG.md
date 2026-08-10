@@ -7,13 +7,14 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - Repin every product, fuzzing, and snapshot-exporter engine dependency from
-  the previously qualified `d57eb672` consolidation to the final dated
+  the previously CI-qualified `d57eb672` consolidation to the final dated
   `hns-dane-engine` `0.2.0` source revision and synchronize the extension,
   native-host, Setup, and Rust workspace release version.
 - Retain a required, exact-commit Linux arm64 CI bundle containing the static
   native-host executable, its canonical archive, the canonical-ID unpacked
   extension package, checksum sidecars, and machine-readable file/platform
-  provenance for isolated installed-browser qualification.
+  provenance for isolated installed-browser qualification. Candidate archives
+  use commit-scoped metadata and cannot claim a future release tag.
 - Consolidate the private Chromium adapters and five canonical browser
   contracts on one exact `hns-dane-engine` `0.2.0` Git revision, removing the
   temporary split compatibility patch while retaining non-publishable desktop

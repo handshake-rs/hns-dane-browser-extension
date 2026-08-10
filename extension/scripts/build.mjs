@@ -40,7 +40,6 @@ writeFileSync(
       version: manifest.version,
       sourceRepository:
         "https://github.com/handshake-rs/hns-dane-browser-extension",
-      sourceTag: `v${manifest.version}`,
       license: "PolyForm-Noncommercial-1.0.0",
       licenseFile: "LICENSE",
       privacyPolicy:

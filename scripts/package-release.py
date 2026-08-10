@@ -154,7 +154,7 @@ def canonical_json(value: object) -> bytes:
 def load_release_context(
     repository_root: Path,
     source_commit: str,
-    source_tag: str,
+    source_tag: str | None,
     extension_id: str,
 ) -> dict[str, object]:
     if not COMMIT_PATTERN.fullmatch(source_commit):
@@ -175,7 +175,7 @@ def load_release_context(
         raise PackagingError("the Chromium manifest has an invalid release version")
     if package.get("version") != version:
         raise PackagingError("package.json and the Chromium manifest versions disagree")
-    if source_tag != f"v{version}":
+    if source_tag is not None and source_tag != f"v{version}":
         raise PackagingError(
             f"source tag {source_tag!r} does not match manifest version {version!r}"
         )
@@ -196,12 +196,31 @@ def load_release_context(
     native_registration_ids = list(
         dict.fromkeys([canonical_extension_id, extension_id])
     )
+    source_metadata: dict[str, object] = {
+        "repository": REPOSITORY_URL,
+        "commit": source_commit,
+        "commitUrl": f"{REPOSITORY_URL}/commit/{source_commit}",
+    }
+    if source_tag is None:
+        source_metadata["qualificationCandidate"] = True
+        source_reference = source_commit
+        source_url = f"{REPOSITORY_URL}/commit/{source_commit}"
+    else:
+        source_metadata.update(
+            {
+                "tag": source_tag,
+                "tagUrl": f"{REPOSITORY_URL}/releases/tag/{source_tag}",
+            }
+        )
+        source_reference = source_tag
+        source_url = f"{REPOSITORY_URL}/tree/{source_tag}"
 
     return {
         "canonical_extension_id": canonical_extension_id,
         "version": version,
         "manifest": manifest,
         "native_registration_ids": native_registration_ids,
+        "source_url": source_url,
         "metadata": {
             "schemaVersion": 1,
             "name": "HNS DANE Browser",
@@ -222,17 +241,11 @@ def load_release_context(
                     "Vivaldi",
                 ],
             },
-            "source": {
-                "repository": REPOSITORY_URL,
-                "commit": source_commit,
-                "commitUrl": f"{REPOSITORY_URL}/commit/{source_commit}",
-                "tag": source_tag,
-                "tagUrl": f"{REPOSITORY_URL}/releases/tag/{source_tag}",
-            },
+            "source": source_metadata,
             "license": {
                 "name": LICENSE_NAME,
                 "path": "LICENSE",
-                "url": f"{REPOSITORY_URL}/blob/{source_tag}/LICENSE",
+                "url": f"{REPOSITORY_URL}/blob/{source_reference}/LICENSE",
             },
             "donationUrls": [GITHUB_SPONSORS_URL, DONATION_URL],
         },
@@ -507,7 +520,7 @@ def native_installation_readme(
     architecture: str,
     canonical_extension_id: str,
     extension_id: str,
-    source_tag: str,
+    source_url: str,
     macos_signed_notarized: bool,
     windows_authenticode_signed: bool,
 ) -> bytes:
@@ -612,7 +625,7 @@ the browsers and run:
 {uninstall_command}
 ```
 
-Source: {REPOSITORY_URL}/tree/{source_tag}
+Source: {source_url}
 License: {LICENSE_NAME} (the included LICENSE file)
 Third-party notices: extension/THIRD_PARTY_NOTICES.txt
 Donate with GitHub Sponsors: {GITHUB_SPONSORS_URL}
@@ -676,7 +689,7 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
                 arguments.architecture,
                 str(context["canonical_extension_id"]),
                 arguments.extension_id,
-                arguments.source_tag,
+                str(context["source_url"]),
                 arguments.macos_signed_notarized,
                 arguments.windows_authenticode_signed,
             ),
@@ -1087,7 +1100,7 @@ def setup_installation_readme(
     version: str,
     platform: str,
     architecture: str,
-    source_tag: str,
+    source_url: str,
     macos_signed_notarized: bool,
     windows_authenticode_signed: bool,
 ) -> bytes:
@@ -1176,7 +1189,7 @@ the Chromium browsers and extension IDs selected by the user. {layout}
 Do not move individual files out of the extracted application layout. Verify
 the archive checksum before launching it.
 
-Source: {REPOSITORY_URL}/tree/{source_tag}
+Source: {source_url}
 License: {LICENSE_NAME} (the included LICENSE file)
 Third-party notices: THIRD_PARTY_NOTICES.txt
 {runtime_license_line}\
@@ -1434,7 +1447,7 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
                 version,
                 arguments.platform,
                 arguments.architecture,
-                arguments.source_tag,
+                str(context["source_url"]),
                 arguments.macos_signed_notarized,
                 arguments.windows_authenticode_signed,
             ),
@@ -1581,7 +1594,16 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--source-date-epoch", type=positive_epoch, required=True)
     parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--source-tag", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--source-tag")
+    source.add_argument(
+        "--candidate-source",
+        action="store_true",
+        help=(
+            "emit exact-commit qualification metadata without claiming a "
+            "release tag"
+        ),
+    )
     parser.add_argument("--extension-id", required=True)
 
 
