@@ -1596,8 +1596,17 @@ fn configure_created_file(_options: &mut OpenOptions, _private: bool) {}
 
 #[cfg(unix)]
 fn secure_directory(path: &Path) -> Result<(), NativeHostError> {
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(local_ca_io)
+
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(local_ca_io)?;
+    directory
+        .set_permissions(fs::Permissions::from_mode(0o700))
+        .map_err(local_ca_io)
 }
 
 #[cfg(not(unix))]
@@ -1642,6 +1651,8 @@ pub struct NativeHostController {
 
 impl NativeHostController {
     pub fn open(data_dir: &Path, network: NetworkKind) -> Result<Self, NativeHostError> {
+        fs::create_dir_all(data_dir).map_err(local_ca_io)?;
+        secure_directory(data_dir)?;
         let local_ca = LocalCaStore::open(data_dir)?;
         let runtime = BrowserRuntime::open(RuntimeConfiguration::new(data_dir, network))
             .map_err(|error| NativeHostError::Runtime(error.to_string()))?;
@@ -3200,13 +3211,42 @@ mod tests {
         fs::remove_dir_all(path).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn controller_rejects_a_symlink_data_root_before_mutation() {
+        use std::os::unix::fs::symlink;
+
+        let nonce = generate_host_session().unwrap();
+        let target = std::env::temp_dir().join(format!("hns-native-host-target-{nonce}"));
+        let link = std::env::temp_dir().join(format!("hns-native-host-link-{nonce}"));
+        fs::create_dir_all(&target).unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(NativeHostController::open(&link, NetworkKind::Regtest).is_err());
+        assert!(fs::read_dir(&target).unwrap().next().is_none());
+
+        fs::remove_file(link).unwrap();
+        fs::remove_dir(target).unwrap();
+    }
+
     #[test]
     fn controller_lifecycle_returns_pac_credentials_and_monotonic_observability() {
         let path = std::env::temp_dir().join(format!(
             "hns-chromium-native-host-test-{}",
             generate_host_session().unwrap()
         ));
+        fs::create_dir_all(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o770)).unwrap();
+        }
         let mut controller = NativeHostController::open(&path, NetworkKind::Regtest).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0);
+        }
         let start = br#"{"command":"start","schemaVersion":1,"requestId":"start-1","policy":{}}"#;
         let (response, shutdown) = controller.handle_json(start);
 
