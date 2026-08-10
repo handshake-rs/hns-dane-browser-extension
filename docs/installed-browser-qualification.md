@@ -118,6 +118,47 @@ any disabled capability becomes available. Remove the disposable profile,
 registration, CA, runtime data, and extracted artifacts afterward; retain only
 non-secret hashes and observations in release evidence.
 
+## Current `0.5.6` exact-artifact evidence (partial)
+
+Exact source `5a7683e70162220c8bfbdae9e8a7d4c3c37acf02` passed
+[CI run 31404782077](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31404782077)
+and
+[CodeQL run 31404781059](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31404781059).
+The CI artifact used for the isolated Debian 13 arm64 / Chromium
+`149.0.7827.196` run had these exact SHA-256 identities:
+
+- provenance: `bc73451efe1c9490d2da171683b0ea3c734da78a749defbd211edd3a15fd6bdd`;
+- raw native host: `096be59083d014e821433a18dc8a206ee5e5491bec85e9771f7937e5650b4e65`;
+- native-host archive: `454be5151e0bb9e880018d413321e245bd149c9ce4f7af012db81c98ee561d53`;
+- canonical extension ZIP: `5e81b3f5e2df4d8090784714b7c7f30335d453aadde5a26d5a62f26d3dae8567`;
+  and
+- extension manifest: `4329a0cfde5d24b10c1f0723589a342b70e4fc1eeeea74c6c43e0a8606c5b171`.
+
+The loaded package and registered native host were byte-identical to those
+inputs under canonical ID `idejjnoplngbhpnpjekblpalblbianio`. Current
+corroborated headers, proxy/CA activation, ordinary ICANN WebPKI passthrough,
+native-host restart/reconnect with a fresh runtime session, and the required
+false HNSA/HNSR/relay/ODoH/wallet/provider/value/settlement/market diagnostics
+passed. Clean uninstall removed the isolated registration, runtime, CA, and
+profile without touching the normal Chromium profile.
+
+Two `https://welcome/` attempts failed closed with a local 502 because the
+synthetic routing hostname's sole delegated authority was unreachable from the
+qualification network and did not supply the DS/DNSSEC/TLSA evidence required
+for HNS HTTPS. This is not evidence of a proxy regression, but it is also not a
+positive HNS/DANE navigation. The positive-origin gate remains open and must be
+rerun with a preflighted known-good origin.
+
+The later documentation-only main commit
+`d091bcf3ecd72ed36acdf17ce54dad80c3003bd0` passed
+[CI run 31409759063](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31409759063)
+and
+[CodeQL run 31409753614](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31409753614).
+If that commit is selected as the release tag, its exact SHA-keyed artifact
+still needs the installed-profile observations above plus the positive
+known-good HNS/DANE navigation; evidence from `5a7683e` is not silently
+relabelled as evidence for a later commit.
+
 ## Historical mixed-version evidence
 
 On 2026-08-10, source
@@ -154,7 +195,6 @@ any later release candidate passed installed-browser qualification. The
 temporary profile and registration were removed and the normal profile was
 not changed.
 
-The `0.5.6` candidate repins the engine to
-`2b23bd55d14d36fe60073606869d75b4796c54f7`. It still requires a new run of
-the isolated-profile gate using the exact SHA-keyed CI artifact from the final
-candidate commit.
+The current `0.5.6` candidate repins the engine to
+`2b23bd55d14d36fe60073606869d75b4796c54f7`; its newer exact-artifact evidence
+and remaining positive-origin gate are recorded above.

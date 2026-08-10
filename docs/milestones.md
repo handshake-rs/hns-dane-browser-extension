@@ -101,15 +101,26 @@ change.
   [installed-browser qualification](installed-browser-qualification.md#historical-mixed-version-evidence).
 - The `0.5.6` candidate repins every engine dependency to
   `2b23bd55d14d36fe60073606869d75b4796c54f7` and adds a required
-  `installed-browser-qualification-<commit>-linux-arm64` CI artifact. Its final
-  remote-main commit still needs exact CI and CodeQL success followed by the
-  isolated-profile gate using that exact artifact. No prior source or old
-  installed host qualifies it.
-- native install, browsing, restart, upgrade, and complete removal on supported
+  `installed-browser-qualification-<commit>-linux-arm64` CI artifact. Exact
+  code source `5a7683e70162220c8bfbdae9e8a7d4c3c37acf02` passed CI
+  [31404782077](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31404782077),
+  CodeQL
+  [31404781059](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31404781059),
+  and the available exact-artifact isolated Chromium checks. Current
+  documentation-only main `d091bcf3ecd72ed36acdf17ce54dad80c3003bd0`
+  passed CI
+  [31409759063](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31409759063)
+  and CodeQL
+  [31409753614](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31409753614).
+  A positive navigation with a preflighted DNSSEC/TLSA-qualified HNS origin
+  remains required; `welcome` was only a synthetic routing hostname and failed
+  closed against unavailable authority. Exact hashes and observations are in
+  [installed-browser qualification](installed-browser-qualification.md#current-056-exact-artifact-evidence-partial).
+- Native install, browsing, restart, upgrade, and complete removal on supported
   Windows and macOS versions;
-- current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;
+- a current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;
 - store signing, review, and published extension IDs; and
-- release artifact provenance tied to the reviewed commit/tag.
+- release artifact provenance tied to the selected reviewed commit/tag.
 - Wallet admission source now consumes the wallet-owned manifest schema v2,
   verifies JCS/Ed25519/exact pins, retains durable per-line high-water state,
   and provides a Linux sealed-executable primitive. At exact source

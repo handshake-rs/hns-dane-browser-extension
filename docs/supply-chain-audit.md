@@ -116,9 +116,20 @@ Consolidated browser source
 and
 [CodeQL run 31394857474](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31394857474).
 Its isolated Chromium run used an older incompatible host and is preserved
-only as browser-code/fail-closed evidence. The `0.5.6` candidate has not passed
-exact-native-host qualification until its final SHA-keyed CI bundle completes
-the documented isolated-profile gate.
+only as browser-code/fail-closed evidence. Final `0.5.6` code source
+`5a7683e70162220c8bfbdae9e8a7d4c3c37acf02` subsequently passed exact CI
+[31404782077](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31404782077),
+CodeQL
+[31404781059](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31404781059),
+and the available exact-artifact isolated-profile checks. The positive
+HNS/DANE origin remained open because the synthetic `welcome` origin was not a
+reachable DNSSEC/TLSA-qualified service. Documentation-only main
+`d091bcf3ecd72ed36acdf17ce54dad80c3003bd0` then passed exact CI
+[31409759063](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31409759063)
+and CodeQL
+[31409753614](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31409753614).
+See the exact hashes and retained boundary in
+[installed-browser qualification](installed-browser-qualification.md#current-056-exact-artifact-evidence-partial).
 
 ## Residual risks
 

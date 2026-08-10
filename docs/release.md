@@ -60,8 +60,11 @@ write permission.
 
 The qualification CI artifact has no signing credentials and is not a release
 asset. It exists to avoid a second local Rust build while preserving exact
-source/native/extension identity. Its provenance status remains pending until
-the installed-browser observations are recorded, and none of its disabled
+source/native/extension identity. The current `0.5.6` code artifact has partial
+exact-artifact observations recorded in
+[installed-browser qualification](installed-browser-qualification.md#current-056-exact-artifact-evidence-partial),
+but the positive known-good HNS/DANE navigation remains open. A later release
+checkout must be qualified under its own SHA. None of the artifact's disabled
 HNSA, HNSR, wallet-provider, value, or marketplace fields may be promoted by
 the packaging job.
 
