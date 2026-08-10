@@ -341,15 +341,6 @@ test("approval schema v3 validates and renders exact HNS name disclosures", () =
       hnsNames: [hnsDisclosure("a".repeat(63))]
     }
   );
-  approve(
-    "wallet_requestPermissions",
-    { capabilities: ["names"] },
-    {
-      kind: "permissions",
-      capabilities: ["names"],
-      hnsNames: [hnsDisclosure("example")]
-    }
-  );
 });
 
 test("approval schema v3 HNS disclosure constraints fail closed", () => {
@@ -392,6 +383,7 @@ test("approval schema v3 HNS disclosure constraints fail closed", () => {
     "_alpha",
     "alpha_",
     "alpha.name",
+    "example",
     "a".repeat(64)
   ]) {
     rejects(candidate([hnsDisclosure(name)]), "wallet_requestPermissions", params);

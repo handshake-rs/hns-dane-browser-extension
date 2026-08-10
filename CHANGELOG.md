@@ -24,6 +24,9 @@ All notable changes to this project will be documented in this file.
   validate all 12 typed approval-summary variants, reject inline result events,
   accept events only through the service channel, and bind approval-window
   rejection or closure to its exact in-memory dispatch context.
+- Adopt wallet approval schema v3, including the required bounded `hnsNames`
+  disclosure, exact canonical HNS name and SHA3-256 hash validation, and trusted
+  rendering of every disclosed name/hash pair.
 - Accept permission generation zero in a private native capability snapshot
   for a never-authorized origin without relaxing native event or exact
   wallet-session binding.

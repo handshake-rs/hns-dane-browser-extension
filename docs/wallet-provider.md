@@ -93,7 +93,7 @@ an `hnsNames` list. It is empty without Names authority and for
 unique canonical names and lowercase hashes that exactly equal
 `hns-covenants::hash_name` (SHA3-256 over the raw name bytes). Canonical names
 are 1–63 lowercase ASCII letters or digits with `-` and `_` allowed only
-internally; approval validation applies no separate reserved-name filter. The trusted window
+internally, subject to the pinned `hns-covenants` reserved-name exclusions. The trusted window
 renders every disclosed name/hash pair and rejects missing, malformed,
 mismatched, duplicated, or reordered disclosures. Private `authorityHandle` and
 `authorityRevision` fields remain native-only and are forbidden in page results
