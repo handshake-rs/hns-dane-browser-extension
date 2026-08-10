@@ -2,9 +2,10 @@
 """Generate the Chromium extension/native-host third-party notices.
 
 Generation is deliberately offline. Rust package metadata and license files
-come from Cargo's checksum-verified registry cache. The
-lightweight ``--check`` mode verifies the complete asset digest and every
-committed input fingerprint, so it is suitable for a clean CI checkout.
+come from Cargo's checksum-verified registry cache or exact Git revisions
+admitted by the repository's Cargo source policy. The lightweight ``--check``
+mode verifies the complete asset digest and every committed input fingerprint,
+so it is suitable for a clean CI checkout.
 """
 
 from __future__ import annotations
@@ -19,13 +20,17 @@ import subprocess
 import sys
 import tomllib
 
-from verify_cargo_git_policy import CRATES_IO_SOURCE
+from verify_cargo_git_policy import (
+    APPROVED_ENGINE_GIT,
+    CRATES_IO_SOURCE,
+    ENGINE_GIT_URL,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "extension/THIRD_PARTY_NOTICES.txt"
 OUTPUT_SHA256 = ROOT / "scripts/third-party-notices.sha256"
-SCHEMA = "5"
+SCHEMA = "6"
 LOCKED_INPUT_PATHS = (
     "scripts/generate-third-party-notices.py",
     "scripts/verify_cargo_git_policy.py",
@@ -120,6 +125,19 @@ SUPPLEMENTAL_PACKAGE_LICENSE_FILES = {
 
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def license_declaration(package: dict) -> str:
+    expression = package.get("license")
+    if isinstance(expression, str) and expression:
+        return expression
+    license_file = package.get("license_file")
+    if isinstance(license_file, str) and license_file:
+        return f"license-file {license_file}"
+    raise RuntimeError(
+        f"Rust package {package['name']} {package['version']} has neither a "
+        "declared license expression nor a license-file declaration."
+    )
 
 
 def input_fingerprints() -> dict[str, str]:
@@ -239,10 +257,7 @@ def shipping_rust_packages(metadata: dict, root_package: str) -> list[dict]:
             f"The {root_package} Rust dependency closure unexpectedly contains no external Cargo packages."
         )
     for package in third_party:
-        if not package.get("license"):
-            raise RuntimeError(
-                f"Rust package {package['name']} {package['version']} has no declared license expression."
-            )
+        license_declaration(package)
     return third_party
 
 
@@ -281,7 +296,7 @@ def registry_license_files(package: dict) -> list[tuple[str, str]]:
             files.append(candidate)
     license_file = package.get("license_file")
     if license_file:
-        candidate = Path(license_file).resolve()
+        candidate = (package_dir / license_file).resolve()
         try:
             candidate.relative_to(package_dir)
         except ValueError as error:
@@ -303,6 +318,87 @@ def registry_license_files(package: dict) -> list[tuple[str, str]]:
         if content:
             result.append((candidate.relative_to(package_dir).as_posix(), content))
     return result
+
+
+def approved_git_checkout(package: dict) -> tuple[Path, str]:
+    name = package["name"]
+    approved = APPROVED_ENGINE_GIT.get(name)
+    if approved is None:
+        raise RuntimeError(
+            f"Unreviewed Git package in the shipping closure: {name} "
+            f"{package['version']}."
+        )
+    version, revision = approved
+    expected_source = f"git+{ENGINE_GIT_URL}?rev={revision}#{revision}"
+    if package.get("version") != version or package.get("source") != expected_source:
+        raise RuntimeError(
+            f"Git package {name} {package['version']} does not match its exact "
+            "reviewed engine revision."
+        )
+
+    manifest = Path(package["manifest_path"]).resolve()
+    try:
+        git_identity = subprocess.check_output(
+            ["git", "-C", str(manifest.parent), "rev-parse", "--show-toplevel", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).splitlines()
+    except (FileNotFoundError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(
+            f"Unable to verify the Cargo Git checkout for {name} {version}."
+        ) from error
+    if len(git_identity) != 2:
+        raise RuntimeError(f"Unexpected Cargo Git checkout identity for {name} {version}.")
+    checkout_root = Path(git_identity[0]).resolve()
+    if git_identity[1] != revision:
+        raise RuntimeError(
+            f"Cargo Git checkout for {name} is at {git_identity[1]}, expected {revision}."
+        )
+    try:
+        manifest_relative = manifest.relative_to(checkout_root).as_posix()
+        committed_manifest = subprocess.check_output(
+            ["git", "-C", str(checkout_root), "show", f"{revision}:{manifest_relative}"],
+            stderr=subprocess.DEVNULL,
+        )
+    except (ValueError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(
+            f"Manifest for {name} escapes or is absent from its reviewed Git checkout."
+        ) from error
+    if committed_manifest != manifest.read_bytes():
+        raise RuntimeError(
+            f"Manifest for {name} differs from the reviewed Git revision {revision}."
+        )
+    return checkout_root, revision
+
+
+def approved_git_license_files(package: dict) -> list[tuple[str, str]]:
+    checkout_root, revision = approved_git_checkout(package)
+    license_file = package.get("license_file")
+    if not license_file:
+        return []
+
+    manifest_dir = Path(package["manifest_path"]).resolve().parent
+    candidate = (manifest_dir / license_file).resolve()
+    try:
+        relative = candidate.relative_to(checkout_root).as_posix()
+        content_bytes = subprocess.check_output(
+            ["git", "-C", str(checkout_root), "show", f"{revision}:{relative}"],
+            stderr=subprocess.DEVNULL,
+        )
+    except (ValueError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(
+            f"License file for {package['name']} escapes or is absent from its "
+            "reviewed Git checkout."
+        ) from error
+    if len(content_bytes) > MAX_NOTICE_FILE_SIZE:
+        raise RuntimeError(f"License file has an unexpected size: {candidate}")
+    try:
+        content = content_bytes.decode("utf-8").replace("\r\n", "\n").strip()
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"License file is not UTF-8 text: {candidate}") from error
+    if not content:
+        raise RuntimeError(f"License file is unexpectedly empty: {candidate}")
+    return [(f"reviewed Git {revision}/{relative}", content)]
 
 
 def package_relative_text_files(
@@ -417,13 +513,14 @@ def declared_license_fallback_files(
 
 def rust_package_license_files(package: dict) -> list[tuple[str, str]]:
     source = package.get("source")
-    if source != CRATES_IO_SOURCE:
-        raise RuntimeError(
-            f"Unreviewed non-crates.io source for {package['name']} "
-            f"{package['version']}: "
-            f"{source}"
-        )
-    return registry_license_files(package)
+    if source == CRATES_IO_SOURCE:
+        return registry_license_files(package)
+    if isinstance(source, str) and source.startswith("git+"):
+        return approved_git_license_files(package)
+    raise RuntimeError(
+        f"Unreviewed external Cargo source for {package['name']} "
+        f"{package['version']}: {source}"
+    )
 
 
 def sqlite_public_domain_notice(rust_packages: list[dict]) -> tuple[str, str] | None:
@@ -536,9 +633,9 @@ def generate() -> str:
             for closure in sorted(rust_target_counts)
         ),
         "",
-        "License expressions are the declarations in the verified package metadata. The reproduced",
-        "texts come from checksum-verified registry packages or fingerprinted canonical license",
-        "texts reviewed in this repository.",
+        "License entries reproduce the expression or license-file declaration in verified package",
+        "metadata. Texts come from checksum-verified registry packages, exact policy-approved Git",
+        "revisions, or fingerprinted canonical license texts reviewed in this repository.",
         "Inclusion here does not imply endorsement by the component authors.",
         "",
         f"Generator schema: {SCHEMA}",
@@ -549,7 +646,9 @@ def generate() -> str:
 
     lines.extend(["", f"RUST COMPONENTS ({len(rust_packages)})"])
     for package in rust_packages:
-        lines.append(f"  {package['name']} {package['version']} | {package['license']}")
+        lines.append(
+            f"  {package['name']} {package['version']} | {license_declaration(package)}"
+        )
 
     lines.extend(["", "LICENSE AND NOTICE TEXTS"])
     for digest in sorted(notice_groups):
