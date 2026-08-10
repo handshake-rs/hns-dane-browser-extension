@@ -78,6 +78,22 @@ through **Load unpacked**, and register only its exact canonical ID against the
 artifact's exact host. The local CA private key is generated inside that
 disposable runtime during installation; it is not shipped in the CI bundle.
 
+`welcome`, as used by PAC and routing tests, is a synthetic hostname. It proves
+that an ordinary DNS name is routed to Rust; it is not a guaranteed live
+HNS/DANE origin and must not be used as release evidence without the same
+preflight as any other candidate origin.
+
+Before counting an HNS/DANE navigation, preflight and record that the origin
+has:
+
+- a current authenticated HNS name proof under the candidate's current header
+  state;
+- either redundant reachable authoritative DNS or proof-anchored
+  authoritative DoH on HTTPS 443;
+- a valid DS-anchored DNSSEC chain for delegated answers;
+- a secure `_443._tcp.<host>` TLSA RRset for the tested HTTPS service; and
+- an HTTPS certificate matching that TLSA policy and hostname.
+
 Record at least:
 
 1. the commit, CI run, artifact name, provenance digest, raw host digest,
