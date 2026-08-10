@@ -423,7 +423,7 @@ enum WalletArtifactState {
     #[cfg(unix)]
     AuthenticityVerified(WalletArtifactSummary),
     #[cfg(unix)]
-    LaunchAdmitted(LaunchAdmittedWalletArtifact),
+    LaunchAdmitted(Box<LaunchAdmittedWalletArtifact>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -994,7 +994,7 @@ fn inspect_manifest(
         Ok(entry) => entry,
         Err(reason) => return rejected(reason),
     };
-    WalletArtifactState::LaunchAdmitted(LaunchAdmittedWalletArtifact {
+    WalletArtifactState::LaunchAdmitted(Box::new(LaunchAdmittedWalletArtifact {
         summary,
         data_directory_path: data_dir.to_owned(),
         data_directory,
@@ -1008,7 +1008,7 @@ fn inspect_manifest(
         manifest_bytes,
         artifact_name: manifest.release.artifact,
         anti_rollback_entry,
-    })
+    }))
 }
 
 #[cfg(not(unix))]
@@ -1906,8 +1906,7 @@ fn sealed_executable_copy(
 ) -> io::Result<File> {
     use std::os::fd::AsRawFd;
 
-    let name =
-        CString::new("hns-wallet-service").expect("static sealed executable name contains no NUL");
+    let name = c"hns-wallet-service";
     // SAFETY: name is a valid C string and a successful descriptor is
     // transferred immediately to File.
     let descriptor =
