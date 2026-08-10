@@ -8,8 +8,9 @@ proxy, and their local Handshake and ICANN resolution stack. Current mobile
 security claims belong to
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-Five canonical contracts are pinned to the checksum-verified
-`handshake-rs/hns-dane-engine` crates.io `0.1.0` release:
+Five canonical contracts and the consolidated private adapters are pinned to
+the exact reviewed `handshake-rs/hns-dane-engine` Git revisions recorded in
+the manifest, lockfile, source-policy verifier, and notices:
 
 - session-bound browser request authority;
 - checked browser observability;

@@ -29,13 +29,14 @@ so one host can serve verified installations from more than one catalog.
    GitHub's remote name, size, and SHA-256 digest for every asset against the
    local file, and publishes the release with the GitHub CLI.
 
-For example:
+For the version selected in the release commit:
 
 ```sh
-git tag -a v0.5.5 -m "HNS DANE Browser 0.5.5"
-git push origin v0.5.5
+release_version=X.Y.Z
+git tag -a "v${release_version}" -m "HNS DANE Browser ${release_version}"
+git push origin "v${release_version}"
 gh run watch --repo handshake-rs/hns-dane-browser-extension
-gh release view v0.5.5 \
+gh release view "v${release_version}" \
   --repo handshake-rs/hns-dane-browser-extension \
   --json isDraft,isPrerelease,url,assets
 ```
@@ -195,10 +196,11 @@ it does not accept an Azure client secret.
 Run and follow the manual workflow with:
 
 ```sh
+release_tag=vX.Y.Z
 gh workflow run resign-windows-release.yml \
   --repo handshake-rs/hns-dane-browser-extension \
   --ref main \
-  -f release_tag=v0.5.5 \
+  -f release_tag="$release_tag" \
   -f confirm_replacement=true
 gh run watch \
   --repo handshake-rs/hns-dane-browser-extension \
@@ -279,10 +281,11 @@ unset HNS_P12_PASSWORD
 After configuring the issuer ID, run and follow the manual workflow with:
 
 ```sh
+release_tag=vX.Y.Z
 gh workflow run resign-macos-release.yml \
   --repo handshake-rs/hns-dane-browser-extension \
   --ref main \
-  -f release_tag=v0.5.5 \
+  -f release_tag="$release_tag" \
   -f confirm_replacement=true
 gh run watch \
   --repo handshake-rs/hns-dane-browser-extension \

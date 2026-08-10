@@ -14,9 +14,10 @@
 
 ### Canonical browser contracts
 
-The Chromium adapter consumes these contracts from
-the checksum-verified `handshake-rs/hns-dane-engine` crates.io `0.1.0`
-release:
+The Chromium adapter now consumes the consolidated engine source through exact
+reviewed Git revisions: private browser adapters at `b8bdfbf7e234e64166886ade6f79d698e23056af`
+and five compatibility patches at `1ab4ab626f945712b0f960945986cb52efefef7c`.
+The split is temporary and must converge before the next feature release:
 
 - runtime request authority;
 - checked browser observability;
@@ -120,8 +121,11 @@ Passing portable source gates is not a substitute for those release gates.
 
 ## Next engineering milestone
 
-Move the remaining platform-neutral loopback admission and publication
-mechanics into the canonical engine while retaining browser-specific listener,
-native-messaging, CA/TLS integration, lifecycle, and installer code here.
-Preserve the current request stamp, full-host namespace plan, typed DANE
-failure, and checked status invariants during that extraction.
+Adopt one current engine revision and join its HNSA admission, HNSR requester,
+and opaque provider-authority lifecycles to the native host. Retain only the
+browser-specific listener, native-messaging, CA/TLS, lifecycle, installer, and
+approval UI here. The first wallet product slice remains non-value status,
+lock, and capability controls; private transport, production wallet trust
+roots, native approval rendering, and installed-browser qualification must land
+before provider installation. Value movement and P2P marketplace controls are
+separate later gates and remain disabled.

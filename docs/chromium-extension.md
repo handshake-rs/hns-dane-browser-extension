@@ -24,8 +24,10 @@ malformed data, and resolver failure fail closed. TCP applications use
 `_<port>._tcp.<host>` and HTTPS/SVCB-selected HTTP/3 uses
 `_<port>._udp.<host>`. The UI describes this as `DANE via ICANN DoH`.
 
-The five canonical browser contracts are pinned to the checksum-verified
-`handshake-rs/hns-dane-engine` crates.io `0.1.0` release.
+The five canonical browser contracts and consolidated private adapters are
+pinned to exact reviewed `handshake-rs/hns-dane-engine` Git revisions. The
+manifest, lockfile, source policy, and notices record the same split revisions;
+they must converge before the next feature release.
 
 ## Header currentness and UI
 
