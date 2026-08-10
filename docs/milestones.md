@@ -151,8 +151,25 @@ Passing portable source gates is not a substitute for those release gates.
 
 ## Next engineering milestone
 
-Join the adopted engine's HNSA admission to the public-feed parser with durable
-platform state and installed-browser qualification while keeping HNSR disabled.
+Add a profile-specific native HNSA admission path for the public-feed parser
+with durable platform state and installed-browser qualification while keeping
+HNSR disabled. Do not treat the configured HTTP endpoint or proof objects
+served by that endpoint as the HNS identity. The authorization carries only a
+name hash, so the product must obtain the expected canonical HNS name through
+an independent user/discovery input, resolve its current proof-backed `hsa1`
+record, and require the authorization identity to match that name, network,
+`pool-stats` service, and private `0xff00` profile exactly.
+
+The adopted engine's current named-route selector admits the HNS Web and Chat
+profiles, not MeshMine's private pool-statistics profile. The pool slice must
+therefore compose the canonical `hns-service-authority` verification with the
+profile's endpoint-snapshot signature and lifetime rules, then atomically
+commit authorization serial, endpoint sequence, snapshot sequence, trusted
+time high-water, and terminal equal-sequence conflict state. None of those
+records may be advanced by the JavaScript parser or operator-controlled HTTPS
+response. Only the minimized verified snapshot may return to the popup; every
+failure remains unavailable rather than being presented as trusted data.
+
 Retain only the browser-specific listener, native-messaging, CA/TLS, lifecycle,
 installer, and approval UI here. The first wallet product slice remains
 non-value status, lock, and capability controls; private transport, production

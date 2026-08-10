@@ -102,10 +102,15 @@ MeshMine operator, so viewing pool status does not require pool membership.
 It omits credentials and referrer data, rejects redirects and oversized or
 malformed objects, and labels every decoded value unverified. The feed includes
 the draft HNSA proof objects and endpoint-signed snapshot. The adopted engine
-revision includes HNSA validation, but the extension has not connected the
-feed to that admission boundary, supplied the required durable platform state,
-or qualified the complete product chain. The popup must continue to label the
-feed unverified.
+revision includes HNSA validation for its admitted HNS Web and Chat named-route
+profiles, but that selector does not admit MeshMine's private `0xff00`
+pool-statistics profile. The feed endpoint is also not an identity authority:
+an authorization contains a name hash, not a reversible HNS label. A verified
+product therefore still needs an independently selected HNS name, a current
+proof-backed `hsa1` record for that exact name, profile-specific authorization,
+delegation and snapshot verification, and durable conflict/sequence state. The
+extension has not assembled or qualified that chain, so the popup must continue
+to label the feed unverified.
 
 ## Optional wallet provider
 
