@@ -24,6 +24,7 @@ use hns_chromium_platform_runtime::{
     normalize_configured_hns_doh_resolver,
 };
 use hns_loopback_proxy::LocalCertificateAuthority;
+use hns_meshmine_pool_stats::VERIFIER_SCHEMA_VERSION as MESHMINE_POOL_STATS_VERIFIER_SCHEMA_VERSION;
 use hns_resolution_policy::{
     DnsRelayRequesterPolicy, EvidenceState as CanonicalEvidenceState, HnsrPolicy,
     Network as CanonicalNetwork, ObliviousDnsPolicy, PolicyConfig, ProviderPolicy,
@@ -1729,6 +1730,9 @@ impl NativeHostController {
                                 "perInstallLocalCa": true,
                                 "chromiumSecurityResults": true,
                                 "userConfiguredRecursiveHnsDoh": true,
+                                "meshminePoolStatsVerifierCore": true,
+                                "meshminePoolStatsVerifierSchemaVersion": MESHMINE_POOL_STATS_VERIFIER_SCHEMA_VERSION,
+                                "meshmineVerifiedPoolStats": false,
                                 "handshakeWalletProvider": false,
                                 "p2pDnsRelay": true,
                                 "p2pOdoh": false,
@@ -3227,6 +3231,34 @@ mod tests {
 
         fs::remove_file(link).unwrap();
         fs::remove_dir(target).unwrap();
+    }
+
+    #[test]
+    fn hello_distinguishes_pool_verifier_core_from_product_availability() {
+        let path = std::env::temp_dir().join(format!(
+            "hns-chromium-native-pool-capability-test-{}",
+            generate_host_session().unwrap()
+        ));
+        let mut controller = NativeHostController::open(&path, NetworkKind::Regtest).unwrap();
+        let (response, shutdown) = controller
+            .handle_json(br#"{"command":"hello","schemaVersion":1,"requestId":"hello-pool"}"#);
+
+        assert!(!shutdown);
+        assert!(response.ok);
+        let result = response.result.unwrap();
+        assert_eq!(
+            result["capabilities"]["meshminePoolStatsVerifierCore"],
+            true
+        );
+        assert_eq!(
+            result["capabilities"]["meshminePoolStatsVerifierSchemaVersion"],
+            MESHMINE_POOL_STATS_VERIFIER_SCHEMA_VERSION
+        );
+        assert_eq!(result["capabilities"]["meshmineVerifiedPoolStats"], false);
+        assert_eq!(result["capabilities"]["hnsr"], false);
+
+        drop(controller);
+        fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

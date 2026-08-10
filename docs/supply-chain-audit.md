@@ -14,17 +14,18 @@ desktop notices. Mobile build and release evidence is maintained in
 - Rust is pinned to toolchain 1.92.0.
 - Cargo metadata, build, test, Clippy, cargo-deny, and notice generation use
   the committed `rust/Cargo.lock` with `--locked`.
-- Cargo Git dependencies are denied except for one exact reviewed
-  `handshake-rs/hns-dane-engine` revision; other dependencies resolve only
-  from checksum-verified registries.
+- Cargo Git dependencies are denied except for the exact reviewed
+  `handshake-rs/hns-dane-engine` revision and its exact reviewed
+  `handshake-rs/hns-rs` authority dependency revision; other dependencies
+  resolve only from checksum-verified registries.
 - Exactly five canonical engine packages are required:
   `hns-browser-runtime`, `hns-browser-observability`, `hns-icann-dane`,
   `hns-namespace-resolution`, and `hns-resolution-policy`.
 - Every canonical package and private Chromium adapter is pinned and locked to
   engine version `0.2.0` at that same revision.
 - The source-policy verifier and its negative tests reject unreviewed Git
-  inputs, moving engine requirements or revisions, canonical registry
-  fallbacks, and different locked engine versions.
+  inputs, moving engine or HNSA-authority revisions, canonical registry
+  fallbacks, and different locked versions.
 - cargo-deny reviews active licenses, advisories, bans, and sources.
 - Node.js 22 or later is required for extension lint, tests, and the unpacked
   Manifest V3 build.
@@ -56,9 +57,10 @@ make publisher approval enforcement match the signing-job boundary.
 
 The notice generator inventories the locked non-development dependency
 closures of `hns-chromium-native-host` and `hns-browser-setup` for Linux,
-macOS, and Windows. It records license text for registry and canonical engine
-dependencies, includes fingerprinted reviewed standard-license texts when a
-published crate omits its workspace-level copy, fingerprints active manifests
+macOS, and Windows. It records license text for registry dependencies,
+canonical engine dependencies, and exact HNSA authority dependencies; includes
+fingerprinted reviewed standard-license texts when a published crate omits its
+workspace-level copy, fingerprints active manifests
 and the lock, and checks the committed notice digest. The license policy also
 explicitly permits the Setup GUI's Boost, CC0, Open Font, and Ubuntu Font
 licenses.
@@ -151,4 +153,4 @@ See the exact hashes and retained boundary in
   native-host and Setup assets completed Developer ID signing and Apple
   notarization on 2026-07-29; Windows artifacts remain unsigned.
 - An immutable Git revision is stronger than a branch selector but still
-  requires deliberate review before changing the pinned engine commit.
+  requires deliberate review before changing either pinned HNS source commit.

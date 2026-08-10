@@ -46,6 +46,12 @@ All notable changes to this project will be documented in this file.
   per-release-line anti-rollback state with interprocess serialization,
   launch-time signed-window revalidation, retained path binding, and a
   Linux-only sealed-executable launch primitive.
+- Add a native MeshMine `pool-stats` verifier core that accepts only an
+  independently selected HNS name and network plus the canonical non-forgeable
+  `VerifiedHnsResource`, verifies the exact HNSA authorization/delegation and
+  endpoint-signed snapshot chain, and returns a minimized value only after a
+  caller-provided atomic compare-generation state commit. The value is capped
+  by proof-anchor expiry and its exact committed admission generation.
 
 ### Security
 
@@ -58,6 +64,12 @@ All notable changes to this project will be documented in this file.
   contains HNSA and HNSR lifecycles: every HNSR role, provider role, market
   gossip, wallet transport, wallet authority, and value/settlement capability
   remains disabled and unavailable.
+- Retain authorization serial, endpoint delegation sequence, per-operator
+  snapshot sequence/digest, trusted-time high-water, and sticky conflict or
+  capacity state in one bounded checksummed blob. The current Chromium proof
+  cache cannot fabricate the required private light-chain resource authority,
+  and no authenticated rollback-resistant store or native request is joined,
+  so verified MeshMine display and every HNSR role remain unavailable.
 - Keep wallet injection fail-closed while the browser engine lacks a consumable
   opaque provider-authority context and no signed canonical wallet service
   executable/transport exists. Caller-supplied authority-shaped fields are not

@@ -473,6 +473,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64ct"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
 name = "bit-set"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -995,6 +1001,7 @@ dependencies = [
  "elliptic-curve",
  "rfc6979",
  "signature",
+ "spki",
 ]
 
 [[package]]
@@ -1136,6 +1143,7 @@ dependencies = [
  "ff",
  "generic-array",
  "group",
+ "pkcs8",
  "rand_core 0.6.4",
  "sec1",
  "subtle",
@@ -2007,6 +2015,7 @@ dependencies = [
  "hns-browser-resolver",
  "hns-browser-runtime",
  "hns-chromium-platform-runtime",
+ "hns-meshmine-pool-stats",
  "hns-resolution-policy",
  "libc",
  "ring",
@@ -2043,9 +2052,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "hns-covenants"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
+dependencies = [
+ "blake2",
+ "hns-encoding",
+ "hns-primitives",
+ "sha3",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "hns-dns-wire"
 version = "0.2.0"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
+
+[[package]]
+name = "hns-encoding"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
+dependencies = [
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-header-consensus"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
+dependencies = [
+ "blake2",
+ "hns-encoding",
+ "hns-primitives",
+ "sha3",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "hns-icann-dane"
@@ -2053,14 +2094,72 @@ version = "0.2.0"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
 
 [[package]]
+name = "hns-light-chain"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
+dependencies = [
+ "hns-covenants",
+ "hns-encoding",
+ "hns-header-consensus",
+ "hns-primitives",
+ "hns-urkel-proof",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-meshmine-pool-stats"
+version = "0.5.6"
+dependencies = [
+ "blake2",
+ "hex",
+ "hns-light-chain",
+ "hns-service-authority",
+ "k256",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "hns-namespace-resolution"
 version = "0.2.0"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
 
 [[package]]
+name = "hns-primitives"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
+dependencies = [
+ "hex",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "hns-resolution-policy"
 version = "0.2.0"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
+
+[[package]]
+name = "hns-service-authority"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
+dependencies = [
+ "blake2",
+ "hns-encoding",
+ "k256",
+ "thiserror 2.0.19",
+ "zeroize",
+]
+
+[[package]]
+name = "hns-urkel-proof"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
+dependencies = [
+ "blake2",
+ "hns-primitives",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "http"
@@ -2303,6 +2402,20 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "k256"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
+dependencies = [
+ "cfg-if",
+ "ecdsa",
+ "elliptic-curve",
+ "once_cell",
+ "sha2",
+ "signature",
 ]
 
 [[package]]
@@ -3089,6 +3202,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pkcs8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
+dependencies = [
+ "der",
+ "spki",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3331,6 +3454,9 @@ name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
+]
 
 [[package]]
 name = "rand_core"
@@ -3580,6 +3706,7 @@ dependencies = [
  "base16ct",
  "der",
  "generic-array",
+ "pkcs8",
  "subtle",
  "zeroize",
 ]
@@ -3847,6 +3974,16 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "spki"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
+dependencies = [
+ "base64ct",
+ "der",
 ]
 
 [[package]]

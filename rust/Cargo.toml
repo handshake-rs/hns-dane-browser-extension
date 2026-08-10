@@ -5,6 +5,7 @@ members = [
     "crates/hns-browser-setup",
     "crates/hns-chromium-native-host",
     "crates/hns-chromium-platform-runtime",
+    "crates/hns-meshmine-pool-stats",
 ]
 
 [workspace.package]
@@ -34,6 +35,8 @@ hns-browser-runtime = { version = "=0.2.0", git = "https://github.com/handshake-
 hns-icann-dane = { version = "=0.2.0", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "2b23bd55d14d36fe60073606869d75b4796c54f7" }
 hns-namespace-resolution = { version = "=0.2.0", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "2b23bd55d14d36fe60073606869d75b4796c54f7" }
 hns-resolution-policy = { version = "=0.2.0", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "2b23bd55d14d36fe60073606869d75b4796c54f7" }
+hns-light-chain = { version = "=0.2.0", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "2b23bd55d14d36fe60073606869d75b4796c54f7" }
+hns-service-authority = { version = "=0.2.0", git = "https://github.com/handshake-rs/hns-rs.git", rev = "b24b66c382de53330ec21dd3137e056a2bea3e2d" }
 hns-loopback-proxy = { package = "hns-browser-loopback-proxy", version = "=0.2.0", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "2b23bd55d14d36fe60073606869d75b4796c54f7", default-features = false, features = ["chromium"] }
 h2 = "0.4"
 h3 = "0.0.8"
@@ -47,6 +50,7 @@ http = "1"
 httparse = "1.10"
 idna = "1.1"
 libc = "0.2"
+k256 = "0.13"
 num-bigint = "0.4"
 num-traits = "0.2"
 p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }

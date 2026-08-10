@@ -100,17 +100,38 @@ fail closed.
 The popup can independently fetch the bounded public feed exposed by a
 MeshMine operator, so viewing pool status does not require pool membership.
 It omits credentials and referrer data, rejects redirects and oversized or
-malformed objects, and labels every decoded value unverified. The feed includes
-the draft HNSA proof objects and endpoint-signed snapshot. The adopted engine
-revision includes HNSA validation for its admitted HNS Web and Chat named-route
-profiles, but that selector does not admit MeshMine's private `0xff00`
-pool-statistics profile. The feed endpoint is also not an identity authority:
-an authorization contains a name hash, not a reversible HNS label. A verified
-product therefore still needs an independently selected HNS name, a current
-proof-backed `hsa1` record for that exact name, profile-specific authorization,
-delegation and snapshot verification, and durable conflict/sequence state. The
-extension has not assembled or qualified that chain, so the popup must continue
-to label the feed unverified.
+malformed objects, and labels every decoded value unverified. The feed endpoint
+is not an identity authority: an authorization contains a name hash, not a
+reversible HNS label.
+
+The native Rust workspace now contains a profile-specific verifier core for
+MeshMine's private `0xff00` `pool-stats` profile. Its only production entry
+accepts an independently supplied lowercase HNS name and configured Handshake
+network plus the canonical engine's non-forgeable
+`hns-light-chain::VerifiedHnsResource`. It requires a
+current proof-backed, single-string `hsa1` record for that exact name, verifies
+the root-signed service authorization and service-signed endpoint delegation
+under the exact read-only capability/flags/constraints policy, verifies the
+endpoint snapshot signature and lifetime, and returns no raw proof, key, HNSA
+object, or signature. A bounded state retains authorization serial, endpoint
+sequence, global per-operator snapshot sequence, resource/policy generation
+and trusted-time high-water, and sticky
+equal-sequence conflict/capacity state. The API cannot release a verified value
+until a caller-provided compare-generation commit durably accepts the complete
+state. Its minimized result expires at the earlier of snapshot or proof-anchor
+expiry and is reusable only while its admission generation still matches the
+persisted state. Counts, mode, tip, and production eligibility remain
+authenticated operator claims, never consensus or settlement authority.
+
+That verifier is intentionally not connected to the popup. The Chromium
+runtime currently owns `hns-browser-resolver::VerifiedResourceValue`, while
+the HNSA contract requires `hns-light-chain::VerifiedHnsResource` with private
+chainwork and currency authority; there is no safe conversion or constructor.
+No authenticated rollback-resistant state store or native-message admission
+has been joined either. The native hello capability therefore reports verifier
+core schema 1 but `meshmineVerifiedPoolStats: false`, and the popup continues
+to label every feed unverified. The HTTP endpoint, operator response, and
+JavaScript parser advance none of the native state.
 
 ## Optional wallet provider
 

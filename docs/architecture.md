@@ -213,10 +213,24 @@ explicitly unavailable.
 - `hns-chain`, `hns-sync`, `hns-p2p`, and `hns-urkel`: exact-commit private
   adapters from `hns-dane-engine` for the Handshake header and proof trust path.
   The source-policy gate forbids restoring product-local copies.
+- `hns-meshmine-pool-stats`: profile-specific native verification over the
+  canonical non-forgeable `hns-light-chain::VerifiedHnsResource`, exact
+  `hns-service-authority` objects, endpoint-signed snapshot, and a bounded
+  commit-before-release replacement-state contract. It has no HTTP endpoint,
+  HNSR, wallet, value, provider, or marketplace role.
 
 The product-specific adapter remains in this repository. The canonical engine
 contracts constrain authority and policy without claiming that every product
 adapter has already been consolidated into the engine.
+
+The current Chromium cache exposes a separate
+`hns-browser-resolver::VerifiedResourceValue`. It carries useful proof result,
+tree-root, and height data, but it cannot be converted into the HNSA verifier's
+private current-chain resource authority. Consequently the verifier core is a
+native dependency and reported capability, but no message reaches it and no
+verified pool value reaches JavaScript. A future adapter must preserve the
+canonical chainwork/currency/name/network/resource guarantees and commit the complete
+state atomically before returning the minimized snapshot.
 
 ## Setup and runtime separation
 

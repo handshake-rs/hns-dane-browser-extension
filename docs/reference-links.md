@@ -13,6 +13,12 @@ or release gate has passed.
   https://github.com/handshake-rs/hns-dane-engine
 - Engine source used here:
   exact Git revision recorded in `rust/Cargo.toml`
+- Canonical HNSA authority types:
+  https://github.com/handshake-rs/hns-rs
+- HNSA authority source used here:
+  exact Git revision recorded in `rust/Cargo.toml`
+- MeshMine public pool-statistics profile:
+  https://github.com/handshake-rs/MeshMine/blob/main/specs/pool-stats-profile.md
 - Handshake full node:
   https://github.com/handshake-org/hsd
 - Handshake documentation:

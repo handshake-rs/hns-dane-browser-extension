@@ -21,9 +21,8 @@ import sys
 import tomllib
 
 from verify_cargo_git_policy import (
-    APPROVED_ENGINE_GIT,
+    APPROVED_CARGO_GIT,
     CRATES_IO_SOURCE,
-    ENGINE_GIT_URL,
 )
 
 
@@ -322,18 +321,18 @@ def registry_license_files(package: dict) -> list[tuple[str, str]]:
 
 def approved_git_checkout(package: dict) -> tuple[Path, str]:
     name = package["name"]
-    approved = APPROVED_ENGINE_GIT.get(name)
+    approved = APPROVED_CARGO_GIT.get(name)
     if approved is None:
         raise RuntimeError(
             f"Unreviewed Git package in the shipping closure: {name} "
             f"{package['version']}."
         )
-    version, revision = approved
-    expected_source = f"git+{ENGINE_GIT_URL}?rev={revision}#{revision}"
+    version, repository, revision = approved
+    expected_source = f"git+{repository}?rev={revision}#{revision}"
     if package.get("version") != version or package.get("source") != expected_source:
         raise RuntimeError(
             f"Git package {name} {package['version']} does not match its exact "
-            "reviewed engine revision."
+            "reviewed source revision."
         )
 
     manifest = Path(package["manifest_path"]).resolve()

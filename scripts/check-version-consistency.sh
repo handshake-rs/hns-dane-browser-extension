@@ -33,6 +33,7 @@ expected_product_packages = {
         "hns-browser-setup",
         "hns-chromium-native-host",
         "hns-chromium-platform-runtime",
+        "hns-meshmine-pool-stats",
     },
 }
 for relative, names in expected_product_packages.items():
@@ -77,7 +78,7 @@ for relative, expected in expected_engine_packages.items():
         )
 
 print(
-    f"Chromium extension, native host, Setup application, and Rust workspace "
+    f"Chromium extension, native host, Setup application, verifier core, and Rust workspace "
     f"agree on {rust_version}; standalone tools pin the expected consolidated "
     f"hns-browser packages."
 )

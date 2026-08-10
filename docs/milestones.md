@@ -50,9 +50,32 @@ change.
   `false → Disabled`, `true → Auto`.
 - The Chromium product opts out of opaque relay serving and enables no output
   or provider role.
-- The adopted engine contains HNSR and HNSA lifecycles, but the Chromium
-  product joins neither one yet. It explicitly constructs disabled HNSR policy;
-  P2P ODoH also remains unimplemented and fails closed.
+- The adopted engine contains HNSR and HNSA named-route lifecycles, but the
+  Chromium product joins neither route lifecycle. It explicitly constructs
+  disabled HNSR policy; P2P ODoH also remains unimplemented and fails closed.
+
+### MeshMine public-feed verifier core
+
+- `hns-meshmine-pool-stats` implements the private `0xff00` read-only profile
+  over the canonical non-forgeable `VerifiedHnsResource` and exact
+  `hns-service-authority` types.
+- The independently supplied HNS name and configured network, current
+  single-string `hsa1` authority, name hash, current height/time, zero flags, zero detached
+  constraints, exact read-statistics capability, authorization ID, delegation
+  ID, endpoint sequence, endpoint key, snapshot signature, and lifetime are
+  all bound before a minimized value exists.
+- Its bounded canonical state retains authorization, delegation, global
+  per-operator snapshot, resource/policy generation, trusted-time, and
+  terminal conflict/capacity history. The public
+  entry returns a verified value only after a caller-provided atomic
+  compare-generation commit accepts every mutation, including mutations made
+  on a failing verification.
+- This is an enabling core, not product availability. The existing Chromium
+  proof/cache authority cannot manufacture the required private
+  `VerifiedHnsResource`, and no authenticated rollback-resistant native store
+  or message/UI join exists. Native capabilities keep
+  `meshmineVerifiedPoolStats` false, JavaScript remains display-only, and HNSR
+  stays disabled.
 
 ### Desktop Setup and signed macOS distribution
 
@@ -151,24 +174,23 @@ Passing portable source gates is not a substitute for those release gates.
 
 ## Next engineering milestone
 
-Add a profile-specific native HNSA admission path for the public-feed parser
-with durable platform state and installed-browser qualification while keeping
-HNSR disabled. Do not treat the configured HTTP endpoint or proof objects
-served by that endpoint as the HNS identity. The authorization carries only a
-name hash, so the product must obtain the expected canonical HNS name through
-an independent user/discovery input, resolve its current proof-backed `hsa1`
-record, and require the authorization identity to match that name, network,
-`pool-stats` service, and private `0xff00` profile exactly.
+Join the existing Chromium proof/sync runtime to the verifier without
+fabricating `hns-light-chain::VerifiedHnsResource`. This requires either one
+canonical proof authority shared by browsing and HNSA or a new engine-reviewed
+adapter that preserves the private chainwork, current-anchor, exact-name, and
+resource guarantees. The product must then obtain the expected canonical HNS
+name through an independent user/discovery input, add a serialized atomic and
+authenticated rollback-resistant state store for the verifier's canonical
+blob, and expose one native request that returns only the minimized committed
+snapshot. The configured HTTP endpoint and proof objects served by it remain
+untrusted transport input, never identity or state authority.
 
-The adopted engine's current named-route selector admits the HNS Web and Chat
-profiles, not MeshMine's private pool-statistics profile. The pool slice must
-therefore compose the canonical `hns-service-authority` verification with the
-profile's endpoint-snapshot signature and lifetime rules, then atomically
-commit authorization serial, endpoint sequence, snapshot sequence, trusted
-time high-water, and terminal equal-sequence conflict state. None of those
-records may be advanced by the JavaScript parser or operator-controlled HTTPS
-response. Only the minimized verified snapshot may return to the popup; every
-failure remains unavailable rather than being presented as trusted data.
+Installed-browser qualification must cover valid admission, malformed and
+expired objects, identity mismatch, clock rollback, serial/sequence rollback,
+sticky equal-sequence conflict across native-host restart, commit failure, and
+authority rotation under a greater resource generation. Until that adapter,
+store, request, UI, and qualification land, `meshmineVerifiedPoolStats` remains
+false and the popup remains unverified.
 
 Retain only the browser-specific listener, native-messaging, CA/TLS, lifecycle,
 installer, and approval UI here. The first wallet product slice remains

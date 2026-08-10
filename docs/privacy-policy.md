@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: 2026-08-03
+Last updated: 2026-08-10
 
 HNS DANE Browser Extension is published by Denuo Web, LLC. Privacy and
 support questions can be sent to `info@denuoweb.com`. Do not post personal
@@ -81,8 +81,11 @@ If the user enters a MeshMine public-statistics endpoint in the popup, the
 extension sends a credential-free, no-referrer GET request directly to that
 operator. The operator can observe the caller's network address, request time,
 and ordinary transport metadata. The returned snapshot is bounded and decoded
-for display, but is explicitly marked unverified until the native HNSA
-validation path is available. Denuo Web does not receive the endpoint or feed.
+for display, but is explicitly marked unverified. A native profile verifier
+core exists, but the current Chromium proof authority and persistent store are
+not joined to it; the HTTP response and JavaScript parser cannot advance
+verifier state or claim a trusted identity. Denuo Web does not receive the
+endpoint or feed.
 
 ## Retention and removal
 

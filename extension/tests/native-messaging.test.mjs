@@ -1,11 +1,35 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const nativeHost = resolve("rust/target/debug/hns-chromium-native-host");
+const cargoTargetDir = resolve(
+  process.env.CARGO_TARGET_DIR ??
+    JSON.parse(
+      execFileSync(
+        "cargo",
+        [
+          "+1.92.0",
+          "metadata",
+          "--no-deps",
+          "--format-version",
+          "1",
+          "--manifest-path",
+          "rust/Cargo.toml"
+        ],
+        { encoding: "utf8" }
+      )
+    ).target_directory
+);
+const nativeHost = join(
+  cargoTargetDir,
+  "debug",
+  process.platform === "win32"
+    ? "hns-chromium-native-host.exe"
+    : "hns-chromium-native-host"
+);
 const missingWalletArtifactCode =
   process.platform === "win32"
     ? "walletArtifactPlatformUnsupported"
@@ -30,7 +54,8 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
       ["--data-dir", dataDir, "--network", "regtest"],
       { input, maxBuffer: 1024 * 1024 }
     );
-    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(result.error, undefined, result.error?.message);
+    assert.equal(result.status, 0, result.stderr?.toString() ?? "native host failed");
     const responses = decodeFrames(result.stdout);
     assert.equal(responses.length, 4);
     assert.equal(responses[0].ok, true);
@@ -38,6 +63,12 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     assert.equal(responses[0].requestId, "hello-1");
     assert.equal(responses[0].eventSequence, 1);
     assert.equal(responses[0].result.capabilities.chromiumSecurityResults, true);
+    assert.equal(responses[0].result.capabilities.meshminePoolStatsVerifierCore, true);
+    assert.equal(
+      responses[0].result.capabilities.meshminePoolStatsVerifierSchemaVersion,
+      1
+    );
+    assert.equal(responses[0].result.capabilities.meshmineVerifiedPoolStats, false);
     assert.equal(responses[0].result.capabilities.handshakeWalletProvider, false);
     assert.equal(responses[0].result.walletAbi.available, false);
     assert.equal(responses[0].result.walletAbi.runtimeNegotiated, false);

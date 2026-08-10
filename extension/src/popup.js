@@ -305,7 +305,7 @@ function renderPoolStats(snapshot) {
   const expired = BigInt(Math.floor(Date.now() / 1000)) >= snapshot.expiresAt;
   document.querySelector("#pool-detail").textContent = expired
     ? "The bounded snapshot is expired. Values are display-only and unverified."
-    : "Signed snapshot and HNSA proof objects are present. Native HNSA verification is pending.";
+    : "Verifier core is not joined to native proof and durable state. Values remain unverified.";
   document.querySelector("#pool-trust").textContent = expired
     ? "Expired / unverified"
     : "Unverified";

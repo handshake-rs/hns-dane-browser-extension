@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require registry inputs or one exact reviewed engine revision."""
+"""Require registry inputs or the exact reviewed HNS source revisions."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ ENGINE_REQUIREMENTS = {
 }
 ENGINE_GIT_URL = "https://github.com/handshake-rs/hns-dane-engine.git"
 ENGINE_REVISION = "2b23bd55d14d36fe60073606869d75b4796c54f7"
+HNS_RS_GIT_URL = "https://github.com/handshake-rs/hns-rs.git"
+HNS_RS_REVISION = "b24b66c382de53330ec21dd3137e056a2bea3e2d"
 APPROVED_ENGINE_GIT = {
     package: ("0.2.0", ENGINE_REVISION)
     for package in {
@@ -56,7 +58,26 @@ APPROVED_ENGINE_GIT = {
         "hns-icann-dane",
         "hns-namespace-resolution",
         "hns-resolution-policy",
+        "hns-light-chain",
     }
+}
+APPROVED_HNS_RS_GIT = {
+    package: ("0.2.0", HNS_RS_REVISION)
+    for package in {
+        "hns-covenants",
+        "hns-encoding",
+        "hns-header-consensus",
+        "hns-primitives",
+        "hns-service-authority",
+        "hns-urkel-proof",
+    }
+}
+APPROVED_CARGO_GIT = {
+    package: (version, ENGINE_GIT_URL, revision)
+    for package, (version, revision) in APPROVED_ENGINE_GIT.items()
+} | {
+    package: (version, HNS_RS_GIT_URL, revision)
+    for package, (version, revision) in APPROVED_HNS_RS_GIT.items()
 }
 CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 ENGINE_PACKAGES = frozenset(ENGINE_VERSIONS)
@@ -128,18 +149,18 @@ def validate_manifests(root: Path, manifests: list[Path]) -> None:
         for location, specification in git_specs(document):
             rendered_location = ".".join(location) or "<document root>"
             package = location[-1] if location else ""
-            approved = APPROVED_ENGINE_GIT.get(package)
+            approved = APPROVED_CARGO_GIT.get(package)
             if (
                 approved is None
-                or specification.get("git") != ENGINE_GIT_URL
-                or specification.get("rev") != approved[1]
+                or specification.get("git") != approved[1]
+                or specification.get("rev") != approved[2]
                 or specification.get("version") != f"={approved[0]}"
                 or "branch" in specification
                 or "tag" in specification
             ):
                 raise CargoSourcePolicyError(
                     f"{relative_path}:{rendered_location}: Cargo Git dependency "
-                    "is not an exact reviewed hns-dane-engine revision"
+                    "is not an exact reviewed HNS source revision"
                 )
 
     root_document = load_toml(root / ROOT_MANIFEST)
@@ -183,9 +204,9 @@ def validate_lockfiles(root: Path) -> None:
             source = package.get("source")
             name = package.get("name", "<unknown>")
             if isinstance(source, str) and source.startswith("git+"):
-                approved = APPROVED_ENGINE_GIT.get(name)
+                approved = APPROVED_CARGO_GIT.get(name)
                 expected_prefix = (
-                    f"git+{ENGINE_GIT_URL}?rev={approved[1]}#"
+                    f"git+{approved[1]}?rev={approved[2]}#"
                     if approved is not None
                     else ""
                 )
@@ -194,7 +215,7 @@ def validate_lockfiles(root: Path) -> None:
                     approved is None
                     or package.get("version") != approved[0]
                     or not source.startswith(expected_prefix)
-                    or revision != approved[1]
+                    or revision != approved[2]
                 ):
                     raise CargoSourcePolicyError(
                         f"{relative_path}: locked Cargo Git package {name!r} is not allowed"
@@ -202,10 +223,10 @@ def validate_lockfiles(root: Path) -> None:
                 if relative_path == Path("rust/Cargo.lock") and name in root_packages:
                     root_packages[name] += 1
                 continue
-            if name in APPROVED_ENGINE_GIT:
+            if name in APPROVED_CARGO_GIT:
                 raise CargoSourcePolicyError(
-                    f"{relative_path}: {name} must come from the exact reviewed "
-                    f"hns-dane-engine revision, found {source!r}"
+                    f"{relative_path}: {name} must come from its exact reviewed "
+                    f"HNS source revision, found {source!r}"
                 )
 
     for package, count in sorted(root_packages.items()):
@@ -244,8 +265,8 @@ def main() -> int:
         print(f"Cargo source policy failed: {error}", file=sys.stderr)
         return 1
     print(
-        "Cargo source policy permits registry inputs plus one exact reviewed "
-        "hns-dane-engine revision and pins the canonical packages."
+        "Cargo source policy permits registry inputs plus the exact reviewed "
+        "hns-dane-engine and hns-rs revisions and pins the canonical packages."
     )
     return 0
 

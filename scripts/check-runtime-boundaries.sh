@@ -107,6 +107,7 @@ required_disabled_boundaries=(
   "$native_host_source|hnsr: HnsrPolicy::disabled(),"
   "$native_host_source|market_gossip: false,"
   "$native_host_source|\"handshakeWalletProvider\": false"
+  "$native_host_source|\"meshmineVerifiedPoolStats\": false"
   "$wallet_source|const PRODUCTION_WALLET_TRUST_ROOTS: &[ProductionWalletTrustRoot] = &[];"
   "$wallet_source|const PRODUCTION_QUALIFIED_WALLET_RELEASES: &[ProductionQualifiedWalletRelease] = &[];"
   "$wallet_source|const PRODUCTION_WALLET_RELEASE_FLOORS: &[ProductionWalletReleaseFloor] = &[];"

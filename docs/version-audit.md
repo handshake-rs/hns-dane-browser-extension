@@ -15,6 +15,7 @@ upstream release.
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
 | Consolidated engine source | Git `2b23bd55d14d36fe60073606869d75b4796c54f7`, version `0.2.0` |
+| HNSA authority source | `hns-rs` Git `b24b66c382de53330ec21dd3137e056a2bea3e2d`, version `0.2.0` |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
 | rcgen | `0.14.8` |
@@ -23,6 +24,7 @@ upstream release.
 | h3-quinn | `0.0.10` |
 | rusqlite | `0.39` |
 | p256 | `0.13` |
+| k256 | `0.13` |
 | ring | `0.17.14` |
 
 Published `v0.5.5` used the five checksum-verified crates.io `0.1.0` packages
@@ -36,13 +38,15 @@ adapters from the one exact, final dated engine Git revision shown above:
 - `hns-resolution-policy`.
 
 The committed Cargo lock, source-policy verifier, notice generator, cargo-deny
-policy, and CI gates must change together for an intentional engine upgrade.
-The adopted engine includes HNSA/HNSR source, while this product still joins
-neither lifecycle. HNSA remains unverified in the product until durable state
-and exact-artifact installed-browser qualification land; HNSR transport,
-discovery, and persistence remain explicitly disabled. Version alignment and
-an exact Git pin prepare a candidate; they do not publish it or satisfy those
-product gates.
+policy, and CI gates must change together for an intentional engine or HNSA
+authority upgrade. The native MeshMine verifier core is source-complete for
+the private read-only profile, but the product has no compatible Chromium
+`VerifiedHnsResource` adapter, authenticated rollback-resistant store, native
+request/UI join, or exact-artifact installed-browser qualification. Verified
+HNSA feed display therefore remains unavailable. HNSR transport, discovery,
+and persistence remain explicitly disabled. Version alignment and exact Git
+pins prepare a candidate; they do not publish it or satisfy those product
+gates.
 
 ## Moving-source review
 
