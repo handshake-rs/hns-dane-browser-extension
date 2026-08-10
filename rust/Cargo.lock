@@ -1800,6 +1800,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hns-browser-chain"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=09ba06771d2f36cb38fff1e5e5a0b41d2472fc87#09ba06771d2f36cb38fff1e5e5a0b41d2472fc87"
+dependencies = [
+ "hns-browser-primitives",
+ "rusqlite",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "hns-browser-observability"
 version = "0.1.2"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=1ab4ab626f945712b0f960945986cb52efefef7c#1ab4ab626f945712b0f960945986cb52efefef7c"
@@ -1814,7 +1824,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-primitives"
 version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=b546ad07962326435dc67f89ff1b3756e66f2482#b546ad07962326435dc67f89ff1b3756e66f2482"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=09ba06771d2f36cb38fff1e5e5a0b41d2472fc87#09ba06771d2f36cb38fff1e5e5a0b41d2472fc87"
 dependencies = [
  "blake2",
  "hex",
@@ -1847,7 +1857,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-urkel"
 version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=b546ad07962326435dc67f89ff1b3756e66f2482#b546ad07962326435dc67f89ff1b3756e66f2482"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=09ba06771d2f36cb38fff1e5e5a0b41d2472fc87#09ba06771d2f36cb38fff1e5e5a0b41d2472fc87"
 dependencies = [
  "hns-browser-primitives",
  "thiserror 2.0.19",
@@ -1864,24 +1874,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "hns-chain"
-version = "0.5.5"
-dependencies = [
- "hns-browser-primitives",
- "rusqlite",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "hns-chromium-native-host"
 version = "0.5.5"
 dependencies = [
  "base64",
  "getrandom 0.3.4",
+ "hns-browser-chain",
  "hns-browser-observability",
  "hns-browser-primitives",
  "hns-browser-runtime",
- "hns-chain",
  "hns-chromium-platform-runtime",
  "hns-loopback-proxy",
  "hns-resolution-policy",
@@ -1899,11 +1900,11 @@ dependencies = [
 name = "hns-chromium-platform-runtime"
 version = "0.5.5"
 dependencies = [
+ "hns-browser-chain",
  "hns-browser-observability",
  "hns-browser-primitives",
  "hns-browser-runtime",
  "hns-browser-urkel",
- "hns-chain",
  "hns-dane",
  "hns-gateway",
  "hns-loopback-proxy",
@@ -2027,9 +2028,9 @@ dependencies = [
 name = "hns-sync"
 version = "0.5.5"
 dependencies = [
+ "hns-browser-chain",
  "hns-browser-primitives",
  "hns-browser-urkel",
- "hns-chain",
  "hns-p2p",
  "hns-resolver",
  "thiserror 2.0.19",
