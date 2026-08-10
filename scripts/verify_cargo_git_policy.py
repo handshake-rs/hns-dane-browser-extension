@@ -23,7 +23,7 @@ ENGINE_REQUIREMENTS = {
     package: f"={version}" for package, version in ENGINE_VERSIONS.items()
 }
 ENGINE_GIT_URL = "https://github.com/handshake-rs/hns-dane-engine.git"
-ENGINE_REVISION = "d57eb672030ebbcd0ccd44780720e0efc73a4e87"
+ENGINE_REVISION = "2b23bd55d14d36fe60073606869d75b4796c54f7"
 APPROVED_ENGINE_GIT = {
     package: ("0.2.0", ENGINE_REVISION)
     for package in {

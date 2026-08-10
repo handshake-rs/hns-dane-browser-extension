@@ -206,6 +206,12 @@ HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
 npm run check:extension
 ```
 
+For a release candidate, do not rebuild the native host locally for the final
+browser gate. Download the successful commit-keyed Linux arm64 CI bundle and
+follow [installed-browser qualification](installed-browser-qualification.md),
+which keeps the normal browser profile and registration untouched and records
+the exact host/extension hashes.
+
 The unpacked extension is written to `dist/chromium-extension`. The extension
 bundle does not contain the native executable, a CA private key, or a trust
 anchor.

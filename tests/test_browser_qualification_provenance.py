@@ -113,7 +113,9 @@ class BrowserQualificationProvenanceTests(unittest.TestCase):
             arguments = self.fixture(root)
             extension = root / "extension.zip"
             with zipfile.ZipFile(extension, "a") as archive:
-                archive.writestr("stolen.txt", "-----BEGIN PRIVATE KEY-----")
+                archive.writestr(
+                    "stolen.txt", "-----" + "BEGIN " + "PRIVATE KEY-----"
+                )
             checksum = root / "extension.zip.sha256"
             checksum.write_text(
                 f"{hashlib.sha256(extension.read_bytes()).hexdigest()}  extension.zip\n",

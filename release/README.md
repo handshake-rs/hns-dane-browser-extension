@@ -32,6 +32,14 @@ packaged manifest so unpacked installations derive the canonical ID. The
 `-mv3-store.zip` first-submission package remains keyless so each catalog can
 assign its own ID. No private key is distributed in either package.
 
+Required source CI separately retains a 14-day, exact-commit Linux arm64
+installed-browser-input artifact containing the static raw host, its canonical
+archive, the canonical-ID extension ZIP, checksum sidecars, and
+machine-readable provenance. It receives no credentials, is not a published
+release asset, and must be exercised only in a disposable profile as documented
+in
+[`docs/installed-browser-qualification.md`](../docs/installed-browser-qualification.md).
+
 The tag workflow contains no signing authority and initially creates unsigned
 Windows and macOS archives. Two manual, default-branch-only replacement
 workflows can rebuild the same tagged source on x64 and arm64. The Windows flow
@@ -93,7 +101,7 @@ loader/shared-library closure, package versions, hashes, and licenses. The setup
 process uses the host's complete Wayland/X11/OpenGL stack and does not prepend an
 AppDir library directory. This keeps Mesa, NVIDIA, GLVND, libdecor, X11/XCB,
 Wayland, and the compiler runtime from resolving against a mixed-version
-userspace stack. The v0.5.5 Linux Setup requires glibc 2.39 or newer and common
+userspace stack. Linux Setup requires glibc 2.39 or newer and common
 desktop GUI libraries (Ubuntu 24.04 / Debian 13 generation). The release gate
 rejects setup shared libraries, a launcher-level `LD_LIBRARY_PATH`, and any
 packaged ELF object requiring a later glibc version. Its clean-environment

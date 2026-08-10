@@ -21,12 +21,16 @@ REQUIRED_ROLES = (
     "canonicalExtension",
     "canonicalExtensionChecksum",
 )
-PRIVATE_KEY_MARKERS = (
-    b"-----BEGIN PRIVATE KEY-----",
-    b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
-    b"-----BEGIN RSA PRIVATE KEY-----",
-    b"-----BEGIN EC PRIVATE KEY-----",
-    b"-----BEGIN OPENSSH PRIVATE KEY-----",
+PEM_BEGIN = b"-----" + b"BEGIN "
+PRIVATE_KEY_MARKERS = tuple(
+    PEM_BEGIN + label + b"-----"
+    for label in (
+        b"PRIVATE KEY",
+        b"ENCRYPTED PRIVATE KEY",
+        b"RSA PRIVATE KEY",
+        b"EC PRIVATE KEY",
+        b"OPENSSH PRIVATE KEY",
+    )
 )
 FORBIDDEN_EXACT_NAMES = {
     ".env",

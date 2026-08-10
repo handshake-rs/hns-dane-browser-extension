@@ -8,13 +8,13 @@ upstream release.
 
 | Component | Configured version/source |
 | --- | --- |
-| Extension package | `0.5.5` |
-| Rust workspace | `0.5.5` |
-| HNS DANE Browser Setup | `0.5.5` |
+| Extension package | `0.5.6` |
+| Rust workspace | `0.5.6` |
+| HNS DANE Browser Setup | `0.5.6` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
-| Consolidated engine source | Git `d57eb672030ebbcd0ccd44780720e0efc73a4e87`, version `0.2.0` |
+| Consolidated engine source | Git `2b23bd55d14d36fe60073606869d75b4796c54f7`, version `0.2.0` |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
 | rcgen | `0.14.8` |
@@ -26,8 +26,8 @@ upstream release.
 | ring | `0.17.14` |
 
 Published `v0.5.5` used the five checksum-verified crates.io `0.1.0` packages
-below. Current unreleased source consumes their `0.2.0` successors and the
-private adapters from the one exact engine Git revision shown above:
+below. The `0.5.6` candidate consumes their `0.2.0` successors and the private
+adapters from the one exact, final dated engine Git revision shown above:
 
 - `hns-browser-runtime`;
 - `hns-browser-observability`;
@@ -37,12 +37,12 @@ private adapters from the one exact engine Git revision shown above:
 
 The committed Cargo lock, source-policy verifier, notice generator, cargo-deny
 policy, and CI gates must change together for an intentional engine upgrade.
-Pre-consolidation source head `bfa089992b427d6b090989b6289dc68ef1e74fee`
-passed CI run 31372012912 and CodeQL run 31372012126 but is unreleased. The
-adopted engine includes HNSA/HNSR source, while this product still joins
+The adopted engine includes HNSA/HNSR source, while this product still joins
 neither lifecycle. HNSA remains unverified in the product until durable state
-and installed-browser qualification land; HNSR transport, discovery, and
-persistence remain explicitly disabled.
+and exact-artifact installed-browser qualification land; HNSR transport,
+discovery, and persistence remain explicitly disabled. Version alignment and
+an exact Git pin prepare a candidate; they do not publish it or satisfy those
+product gates.
 
 ## Moving-source review
 

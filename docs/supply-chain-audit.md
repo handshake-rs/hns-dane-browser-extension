@@ -70,7 +70,9 @@ a release failure.
 ## Required portable gates
 
 ```sh
-python3 -m unittest -v tests/test_cargo_git_policy.py
+python3 -m unittest -v \
+  tests/test_cargo_git_policy.py \
+  tests/test_browser_qualification_provenance.py
 python3 scripts/verify_cargo_git_policy.py
 python3 scripts/generate-third-party-notices.py --check
 ./scripts/check-version-consistency.sh
@@ -89,9 +91,14 @@ HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
 npm run check:extension
 ```
 
-CI has separate policy, Rust/native-host, and extension jobs plus a required
-aggregate result. A release must record the exact commit and exact-current-main
-CI run; historical runs do not qualify later source.
+CI has separate policy, Rust/native-host, extension, and Linux arm64
+installed-browser-input jobs plus a required aggregate result. The latter
+packages the exact static host and canonical extension, verifies their inner
+source/platform identity and secret-free boundary, and uploads the SHA-keyed
+artifact described in
+[installed-browser qualification](installed-browser-qualification.md). A
+release must record the exact commit and exact-current-main CI run; historical
+runs or artifact creation do not qualify later source.
 
 Exact-current-main release commit
 `86b18497285753944ec1b9196ec05ee359c6db11` passed
@@ -102,6 +109,16 @@ The default-branch macOS replacement, including its protected credentialed
 signing jobs, then passed in
 [run 30436887463](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30436887463).
 Future releases must repeat rather than inherit these dated results.
+
+Consolidated browser source
+`ae702ebdea59050dd9395636f549ff9c2b8f2e4b` later passed
+[CI run 31394858244](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31394858244)
+and
+[CodeQL run 31394857474](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31394857474).
+Its isolated Chromium run used an older incompatible host and is preserved
+only as browser-code/fail-closed evidence. The `0.5.6` candidate has not passed
+exact-native-host qualification until its final SHA-keyed CI bundle completes
+the documented isolated-profile gate.
 
 ## Residual risks
 
@@ -114,6 +131,10 @@ Future releases must repeat rather than inherit these dated results.
 - Installer unit tests and package-structure gates do not replace real
   user-level registration, trust, restart, upgrade, and removal tests on every
   Windows and macOS target.
+- The exact-SHA Linux arm64 CI bundle removes local-build ambiguity but still
+  depends on a hosted runner and does not prove installation, browser behavior,
+  x64, Windows, macOS, or store distribution until the corresponding target
+  gates are run.
 - Store signing and review require external credentials and policy decisions;
   source CI must not fabricate their completion. The published v0.5.5 macOS
   native-host and Setup assets completed Developer ID signing and Apple

@@ -180,6 +180,12 @@ python3 scripts/generate-third-party-notices.py --check
 npm run check:extension
 ```
 
+Required CI also publishes a read-only, exact-SHA Linux arm64 bundle containing
+the static native host and canonical extension package for qualification in a
+disposable Chromium profile. See
+[installed-browser qualification](docs/installed-browser-qualification.md);
+artifact creation is not itself qualification.
+
 See [HNS DANE Browser Setup](docs/setup-application.md) for the primary desktop
 installation flow and [Chromium Extension and Native Host](docs/chromium-extension.md)
 for build, trust, recovery, and manual-installation details.
@@ -188,8 +194,8 @@ Store submission copy, reviewer disclosures, permission justifications, and
 shared Chrome/Edge/Opera artwork are maintained in [`store/`](store/README.md).
 Tagged GitHub Releases provide the browser-neutral extension ZIP, six
 platform-matched setup applications, and matching manual native-host bundles.
-The v0.5.5 Linux Setup baseline is glibc 2.39 or newer (for example Ubuntu
-24.04 or Debian 13).
+The Linux Setup ABI ceiling remains glibc 2.39 (for example Ubuntu 24.04 or
+Debian 13).
 Chrome Web Store distribution also serves Brave and Vivaldi, while Edge and
 Opera can use their own catalog listings.
 See the [Chromium release process](docs/release.md) for the immutable-tag,

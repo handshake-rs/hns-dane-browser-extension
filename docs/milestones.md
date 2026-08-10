@@ -16,7 +16,7 @@
 
 The Chromium adapter now consumes the consolidated engine source through one
 exact reviewed Git revision,
-`d57eb672030ebbcd0ccd44780720e0efc73a4e87`, for both private browser adapters
+`2b23bd55d14d36fe60073606869d75b4796c54f7`, for both private browser adapters
 and the five canonical `0.2.0` contracts:
 
 - runtime request authority;
@@ -88,13 +88,23 @@ change.
   and the macOS replacement completed in
   [run 30436887463](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30436887463).
   Repeat and retain these gates for each future release commit.
-- The latest pre-consolidation main source
-  `bfa089992b427d6b090989b6289dc68ef1e74fee` passed
-  [CI run 31372012912](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31372012912)
+- Consolidated source
+  `ae702ebdea59050dd9395636f549ff9c2b8f2e4b` passed
+  [CI run 31394858244](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31394858244)
   and
-  [CodeQL run 31372012126](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31372012126).
-  That evidence does not qualify this dependency consolidation; its final
-  commit must repeat both gates.
+  [CodeQL run 31394857474](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31394857474).
+  Its exact JavaScript was loaded in an isolated Chromium 149 profile and
+  stayed fail-closed against an incompatible older native host. The old host
+  reported approval schema 2 while the browser source required schema 3, so
+  that evidence is historical browser-code/negative-compatibility evidence,
+  not exact-native-host qualification. Full hashes and observations are in
+  [installed-browser qualification](installed-browser-qualification.md#historical-mixed-version-evidence).
+- The `0.5.6` candidate repins every engine dependency to
+  `2b23bd55d14d36fe60073606869d75b4796c54f7` and adds a required
+  `installed-browser-qualification-<commit>-linux-arm64` CI artifact. Its final
+  remote-main commit still needs exact CI and CodeQL success followed by the
+  isolated-profile gate using that exact artifact. No prior source or old
+  installed host qualifies it.
 - native install, browsing, restart, upgrade, and complete removal on supported
   Windows and macOS versions;
 - current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;

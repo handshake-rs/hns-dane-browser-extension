@@ -20,10 +20,13 @@ so one host can serve verified installations from more than one catalog.
    versions agree.
 2. Run `bash scripts/check.sh`.
 3. Commit and push the release source to the default branch, then require its
-   exact CI run to pass.
-4. Create and push an annotated `v<version>` tag at that unchanged default
+   exact CI and CodeQL runs to pass.
+4. Download the exact SHA-keyed installed-browser artifact and complete the
+   isolated-profile gate in
+   [installed-browser qualification](installed-browser-qualification.md).
+5. Create and push an annotated `v<version>` tag at that unchanged default
    branch tip.
-5. Follow the tag-triggered `Release` workflow. It creates or reuses a draft,
+6. Follow the tag-triggered `Release` workflow. It creates or reuses a draft,
    reruns the portable gate, builds all 14 required archives, verifies all 14
    checksum sidecars, generates the twenty-ninth asset (`SHA256SUMS`), checks
    GitHub's remote name, size, and SHA-256 digest for every asset against the
@@ -54,6 +57,13 @@ release environment before granting additional write access. Enable immutable
 releases after all required platform-signing replacement is complete. Build and
 packaging jobs remain read-only; only the final publisher receives repository
 write permission.
+
+The qualification CI artifact has no signing credentials and is not a release
+asset. It exists to avoid a second local Rust build while preserving exact
+source/native/extension identity. Its provenance status remains pending until
+the installed-browser observations are recorded, and none of its disabled
+HNSA, HNSR, wallet-provider, value, or marketplace fields may be promoted by
+the packaging job.
 
 ## Wallet service artifact qualification
 
@@ -122,7 +132,7 @@ format, architecture, Rust target, or embedded host bytes.
   libraries and its launcher does not set `LD_LIBRARY_PATH`. This prevents host
   Mesa, NVIDIA, GLVND, or libdecor modules from binding to a mixed-version GUI
   dependency. The workflow rejects either packaging regression, tests every
-  packaged ELF object against the v0.5.5 glibc 2.39 ABI ceiling, and tests the
+  packaged ELF object against the current glibc 2.39 ABI ceiling, and tests the
   layout in a clean environment by creating an NSS database and adding, listing,
   and deleting a temporary certificate. A system `libnss3-tools` installation
   is not required, but Linux Setup requires glibc 2.39 or newer and common
