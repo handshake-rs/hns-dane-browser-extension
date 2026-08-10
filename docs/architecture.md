@@ -199,11 +199,13 @@ explicitly unavailable.
 - `hns-chromium-platform-runtime`: Chromium storage/network adapter, sync,
   dual-root plan construction, canonical authority integration, and status
   observation.
-- `hns-loopback-proxy`: authenticated HTTP/CONNECT endpoint, local DANE TLS
-  termination, raw browser-WebPKI duplex tunneling, response-head publication,
-  and Upgrade tunneling.
-- `hns-gateway` and `hns-transport`: selected-plan HTTP/TLS/QUIC execution and
-  exact-IP split browser-WebPKI sockets.
+- `hns-loopback-proxy`: exact-commit engine-owned Chromium adapter for the
+  authenticated HTTP/CONNECT endpoint, local DANE TLS termination, raw
+  browser-WebPKI duplex tunneling, response-head publication, and Upgrade
+  tunneling.
+- `hns-gateway` and `hns-transport`: exact-commit engine-owned Chromium
+  adapters for selected-plan HTTP/TLS/QUIC execution and exact-IP split
+  browser-WebPKI sockets.
 - `hns-resolver`, `hns-dnssec`, `hns-dane`: exact-commit private adapters from
   `hns-dane-engine` for verified Handshake resolution, delegated DNSSEC, and
   DANE primitives. The resolver retains the browser-only light-proof and
