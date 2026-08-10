@@ -28,26 +28,14 @@ if len(set(versions.values())) != 1:
         + ", ".join(f"{name}={value}" for name, value in versions.items())
     )
 
-expected_packages = {
+expected_product_packages = {
     "rust/Cargo.lock": {
         "hns-browser-setup",
         "hns-chromium-native-host",
         "hns-chromium-platform-runtime",
     },
-    "rust/fuzz/Cargo.lock": {
-        "hns-core",
-        "hns-dane",
-        "hns-p2p",
-        "hns-urkel",
-    },
-    "tools/hns-header-snapshot-exporter/Cargo.lock": {
-        "hns-chain",
-        "hns-core",
-        "hns-p2p",
-        "hns-sync",
-    },
 }
-for relative, names in expected_packages.items():
+for relative, names in expected_product_packages.items():
     with (root / relative).open("rb") as handle:
         packages = tomllib.load(handle)["package"]
     locked = {package["name"]: package["version"] for package in packages}
@@ -58,8 +46,39 @@ for relative, names in expected_packages.items():
                 f"{relative}: {name} is {actual or 'missing'}; expected {rust_version}"
             )
 
+expected_engine_packages = {
+    "rust/fuzz/Cargo.lock": {
+        "hns-browser-dane": "0.2.0",
+        "hns-browser-dnssec": "0.2.0",
+        "hns-browser-p2p": "0.2.0",
+        "hns-browser-primitives": "0.2.0",
+        "hns-browser-urkel": "0.2.0",
+    },
+    "tools/hns-header-snapshot-exporter/Cargo.lock": {
+        "hns-browser-chain": "0.2.0",
+        "hns-browser-p2p": "0.2.0",
+        "hns-browser-primitives": "0.2.0",
+        "hns-browser-sync": "0.2.0",
+        "hns-browser-urkel": "0.2.0",
+    },
+}
+for relative, expected in expected_engine_packages.items():
+    with (root / relative).open("rb") as handle:
+        packages = tomllib.load(handle)["package"]
+    actual = sorted(
+        (package["name"], package["version"])
+        for package in packages
+        if package["name"].startswith("hns-browser-")
+    )
+    wanted = sorted(expected.items())
+    if actual != wanted:
+        raise SystemExit(
+            f"{relative}: consolidated engine packages are {actual}; expected {wanted}"
+        )
+
 print(
     f"Chromium extension, native host, Setup application, and Rust workspace "
-    f"agree on {rust_version}."
+    f"agree on {rust_version}; standalone tools pin the expected consolidated "
+    f"hns-browser packages."
 )
 PY
