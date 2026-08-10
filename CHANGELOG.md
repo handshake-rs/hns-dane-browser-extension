@@ -6,9 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Switched the five canonical `hns-dane-engine` contracts from the reviewed
-  Git revision to exact, checksum-verified crates.io `0.1.0` packages and
-  marked every desktop Rust application package non-publishable.
+- Consolidate the private Chromium adapters and five canonical browser
+  contracts on one exact `hns-dane-engine` `0.2.0` Git revision, removing the
+  temporary split compatibility patch while retaining non-publishable desktop
+  application packages.
 - Activate the authenticated native proxy before a potentially long initial
   header catch-up. ICANN browsing can continue through Rust while HNS requests
   remain fail-closed until current corroborated header evidence is available.
@@ -39,6 +40,10 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+- Keep explicit product-owned opt-outs after adopting the engine revision that
+  contains HNSA and HNSR lifecycles: every HNSR role, provider role, market
+  gossip, wallet transport, wallet authority, and value/settlement capability
+  remains disabled and unavailable.
 - Keep wallet injection fail-closed while the browser engine lacks a consumable
   opaque provider-authority context and no signed canonical wallet service
   executable/transport exists. Caller-supplied authority-shaped fields are not

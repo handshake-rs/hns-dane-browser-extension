@@ -37,7 +37,7 @@ DANE.
 The native host integrates the five canonical browser contracts and the
 consolidated private adapters from
 [`handshake-rs/hns-dane-engine`](https://github.com/handshake-rs/hns-dane-engine)
-through exact reviewed Git revisions recorded in `rust/Cargo.toml` and
+through one exact reviewed Git revision recorded in `rust/Cargo.toml` and
 `rust/Cargo.lock`:
 
 - `hns-browser-runtime`;
@@ -89,22 +89,23 @@ failure codes, bogus DNSSEC, and missing or stale proof/chain evidence remain
 terminal. Returned RFC 8484 bytes are locally DNSSEC- and DANE-validated; the
 resolver's AD bit is not trusted.
 
-The canonical engine now contains an HNSR requester lifecycle and HNSA
-named-route admission, but this native host still pins the earlier consolidated
-engine revisions and exposes neither product path. Requests for an HNSR role
-therefore fail closed, and the extension does not present an HNSR control. P2P
-ODoH, privacy downgrade, and experimental wire-profile controls remain visible
-as typed experimental policy inputs; unsupported selections fail closed.
+The adopted canonical engine contains an HNSR requester lifecycle and HNSA
+named-route admission, but this native host joins neither product path. It
+constructs `HnsrPolicy::disabled()` instead of inheriting the engine default,
+rejects every non-off HNSR input, persists no HNSR state, and presents no HNSR
+control. P2P ODoH, privacy downgrade, and experimental wire-profile controls
+remain visible as typed experimental policy inputs; unsupported selections
+fail closed.
 
 The popup can independently fetch the bounded public feed exposed by a
 MeshMine operator, so viewing pool status does not require pool membership.
 It omits credentials and referrer data, rejects redirects and oversized or
 malformed objects, and labels every decoded value unverified. The feed includes
-the draft HNSA proof objects and endpoint-signed snapshot. HNSA validation now
-exists in `hns-dane-engine` source at `3c12ace6daddd0ba555c242b1d893e047827e679`,
-but the extension has not adopted that revision, supplied the required durable
-platform state, or qualified the complete product chain. The popup must
-continue to label the feed unverified.
+the draft HNSA proof objects and endpoint-signed snapshot. The adopted engine
+revision includes HNSA validation, but the extension has not connected the
+feed to that admission boundary, supplied the required durable platform state,
+or qualified the complete product chain. The popup must continue to label the
+feed unverified.
 
 ## Optional wallet provider
 

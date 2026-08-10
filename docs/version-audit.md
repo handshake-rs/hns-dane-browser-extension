@@ -1,6 +1,6 @@
 # Version Audit
 
-Audit date: 2026-08-09
+Audit date: 2026-08-10
 
 This table records configured versions for the Chromium extension, native
 host, and Setup build. It does not claim that each entry is the newest
@@ -14,8 +14,7 @@ upstream release.
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
-| Consolidated engine adapters | Git `b8bdfbf7e234e64166886ade6f79d698e23056af`, version `0.2.0` |
-| Canonical compatibility patches | Git `1ab4ab626f945712b0f960945986cb52efef7c`, version `0.1.0` |
+| Consolidated engine source | Git `d57eb672030ebbcd0ccd44780720e0efc73a4e87`, version `0.2.0` |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
 | rcgen | `0.14.8` |
@@ -27,9 +26,8 @@ upstream release.
 | ring | `0.17.14` |
 
 Published `v0.5.5` used the five checksum-verified crates.io `0.1.0` packages
-below. Current unreleased source patches those packages from exact engine Git
-revision `1ab4ab626f945712b0f960945986cb52efefef7c` and consumes the consolidated
-private adapters at `b8bdfbf7e234e64166886ade6f79d698e23056af`:
+below. Current unreleased source consumes their `0.2.0` successors and the
+private adapters from the one exact engine Git revision shown above:
 
 - `hns-browser-runtime`;
 - `hns-browser-observability`;
@@ -39,10 +37,12 @@ private adapters at `b8bdfbf7e234e64166886ade6f79d698e23056af`:
 
 The committed Cargo lock, source-policy verifier, notice generator, cargo-deny
 policy, and CI gates must change together for an intentional engine upgrade.
-Current source head `08ba480fcbae4144a329c90e478ccae4bcab5000` passed CI and CodeQL but is
-unreleased. It predates the engine's HNSA admission at `3c12ace`; HNSA/HNSR
-product claims remain unavailable until one final engine revision is adopted
-and installed-browser qualification passes.
+Pre-consolidation source head `bfa089992b427d6b090989b6289dc68ef1e74fee`
+passed CI run 31372012912 and CodeQL run 31372012126 but is unreleased. The
+adopted engine includes HNSA/HNSR source, while this product still joins
+neither lifecycle. HNSA remains unverified in the product until durable state
+and installed-browser qualification land; HNSR transport, discovery, and
+persistence remain explicitly disabled.
 
 ## Moving-source review
 
@@ -62,8 +62,8 @@ regeneration, the complete portable gate, and target-browser qualification.
 - `rustls` uses the stable 0.23 line and the `ring` provider in this workspace.
 - DANE and DNSSEC algorithms not explicitly supported remain fail-closed.
 - HNSR, HNSA, and P2P ODoH are not versioned features of the current product.
-  Engine source exists for HNSR requester/HNSA admission, but this extension
-  has not adopted or qualified it.
+  Their engine source is present, but this extension has not joined or
+  qualified those lifecycles and explicitly disables every HNSR role.
 - The bundled IANA snapshot has no authority version. It may be refreshed as a
   hint without changing the requirement to resolve the full hostname through
   both roots.

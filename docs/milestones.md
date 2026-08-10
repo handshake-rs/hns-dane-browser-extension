@@ -14,10 +14,10 @@
 
 ### Canonical browser contracts
 
-The Chromium adapter now consumes the consolidated engine source through exact
-reviewed Git revisions: private browser adapters at `b8bdfbf7e234e64166886ade6f79d698e23056af`
-and five compatibility patches at `1ab4ab626f945712b0f960945986cb52efefef7c`.
-The split is temporary and must converge before the next feature release:
+The Chromium adapter now consumes the consolidated engine source through one
+exact reviewed Git revision,
+`d57eb672030ebbcd0ccd44780720e0efc73a4e87`, for both private browser adapters
+and the five canonical `0.2.0` contracts:
 
 - runtime request authority;
 - checked browser observability;
@@ -50,7 +50,9 @@ change.
   `false → Disabled`, `true → Auto`.
 - The Chromium product opts out of opaque relay serving and enables no output
   or provider role.
-- HNSR and P2P ODoH remain unimplemented and fail closed.
+- The adopted engine contains HNSR and HNSA lifecycles, but the Chromium
+  product joins neither one yet. It explicitly constructs disabled HNSR policy;
+  P2P ODoH also remains unimplemented and fails closed.
 
 ### Desktop Setup and signed macOS distribution
 
@@ -86,6 +88,13 @@ change.
   and the macOS replacement completed in
   [run 30436887463](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/30436887463).
   Repeat and retain these gates for each future release commit.
+- The latest pre-consolidation main source
+  `bfa089992b427d6b090989b6289dc68ef1e74fee` passed
+  [CI run 31372012912](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31372012912)
+  and
+  [CodeQL run 31372012126](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31372012126).
+  That evidence does not qualify this dependency consolidation; its final
+  commit must repeat both gates.
 - native install, browsing, restart, upgrade, and complete removal on supported
   Windows and macOS versions;
 - current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;
@@ -121,11 +130,12 @@ Passing portable source gates is not a substitute for those release gates.
 
 ## Next engineering milestone
 
-Adopt one current engine revision and join its HNSA admission, HNSR requester,
-and opaque provider-authority lifecycles to the native host. Retain only the
-browser-specific listener, native-messaging, CA/TLS, lifecycle, installer, and
-approval UI here. The first wallet product slice remains non-value status,
-lock, and capability controls; private transport, production wallet trust
-roots, native approval rendering, and installed-browser qualification must land
-before provider installation. Value movement and P2P marketplace controls are
-separate later gates and remain disabled.
+Join the adopted engine's HNSA admission to the public-feed parser with durable
+platform state and installed-browser qualification while keeping HNSR disabled.
+Retain only the browser-specific listener, native-messaging, CA/TLS, lifecycle,
+installer, and approval UI here. The first wallet product slice remains
+non-value status, lock, and capability controls; private transport, production
+wallet trust roots, native approval rendering, and installed-browser
+qualification must land before provider installation. HNSR transport,
+discovery and persistence, value movement, settlement, and P2P marketplace
+controls are separate later gates and remain disabled.

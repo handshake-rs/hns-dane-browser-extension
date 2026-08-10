@@ -1,6 +1,6 @@
 # Build and Supply-Chain Audit
 
-Last audited: 2026-07-29
+Last audited: 2026-08-10
 
 ## Scope
 
@@ -14,15 +14,17 @@ desktop notices. Mobile build and release evidence is maintained in
 - Rust is pinned to toolchain 1.92.0.
 - Cargo metadata, build, test, Clippy, cargo-deny, and notice generation use
   the committed `rust/Cargo.lock` with `--locked`.
-- Cargo Git dependencies are denied; qualified dependencies resolve only from
-  checksum-verified registries.
+- Cargo Git dependencies are denied except for one exact reviewed
+  `handshake-rs/hns-dane-engine` revision; other dependencies resolve only
+  from checksum-verified registries.
 - Exactly five canonical engine packages are required:
   `hns-browser-runtime`, `hns-browser-observability`, `hns-icann-dane`,
   `hns-namespace-resolution`, and `hns-resolution-policy`.
-- Every canonical package is pinned and locked to crates.io `0.1.0`.
-- The source-policy verifier and its negative tests reject Git inputs, moving
-  engine requirements, alternate registries, invalid checksums, or a different
-  locked engine version.
+- Every canonical package and private Chromium adapter is pinned and locked to
+  engine version `0.2.0` at that same revision.
+- The source-policy verifier and its negative tests reject unreviewed Git
+  inputs, moving engine requirements or revisions, canonical registry
+  fallbacks, and different locked engine versions.
 - cargo-deny reviews active licenses, advisories, bans, and sources.
 - Node.js 22 or later is required for extension lint, tests, and the unpacked
   Manifest V3 build.

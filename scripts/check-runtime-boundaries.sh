@@ -100,4 +100,27 @@ if ! grep -Fq 'p2pDnsRelay: false' extension/src/policy.js ||
   exit 1
 fi
 
-echo "Chromium-only runtime, PAC, requester-consent, and proxy boundaries passed."
+wallet_source="rust/crates/hns-chromium-native-host/src/wallet_abi.rs"
+required_disabled_boundaries=(
+  "$runtime_source|hnsr: CanonicalHnsrPolicy::disabled(),"
+  "$runtime_source|market_gossip: false,"
+  "$native_host_source|hnsr: HnsrPolicy::disabled(),"
+  "$native_host_source|market_gossip: false,"
+  "$native_host_source|\"handshakeWalletProvider\": false"
+  "$wallet_source|const PRODUCTION_WALLET_TRUST_ROOTS: &[ProductionWalletTrustRoot] = &[];"
+  "$wallet_source|const PRODUCTION_QUALIFIED_WALLET_RELEASES: &[ProductionQualifiedWalletRelease] = &[];"
+  "$wallet_source|const PRODUCTION_WALLET_RELEASE_FLOORS: &[ProductionWalletReleaseFloor] = &[];"
+  "$wallet_source|\"serviceTransportAvailable\": false"
+  "$wallet_source|\"providerAuthorityContextAvailable\": false"
+  "$wallet_source|\"available\": false"
+)
+for boundary in "${required_disabled_boundaries[@]}"; do
+  source_path="${boundary%%|*}"
+  literal="${boundary#*|}"
+  if ! grep -Fq "$literal" "$source_path"; then
+    echo "ERROR: a required wallet/provider/marketplace/HNSR fail-closed boundary is missing: $literal" >&2
+    exit 1
+  fi
+done
+
+echo "Chromium-only runtime, PAC, requester-consent, disabled wallet/provider/marketplace/HNSR, and proxy boundaries passed."

@@ -9,7 +9,7 @@ security claims belong to
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
 Five canonical contracts and the consolidated private adapters are pinned to
-the exact reviewed `handshake-rs/hns-dane-engine` Git revisions recorded in
+one exact reviewed `handshake-rs/hns-dane-engine` Git revision recorded in
 the manifest, lockfile, source-policy verifier, and notices:
 
 - session-bound browser request authority;

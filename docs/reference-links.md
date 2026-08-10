@@ -11,8 +11,8 @@ or release gate has passed.
   https://github.com/handshake-rs/hns-dane-browser-mobile
 - Canonical DANE/browser contracts:
   https://github.com/handshake-rs/hns-dane-engine
-- Engine release used here:
-  crates.io `0.1.0`
+- Engine source used here:
+  exact Git revision recorded in `rust/Cargo.toml`
 - Handshake full node:
   https://github.com/handshake-org/hsd
 - Handshake documentation:

@@ -25,9 +25,9 @@ malformed data, and resolver failure fail closed. TCP applications use
 `_<port>._udp.<host>`. The UI describes this as `DANE via ICANN DoH`.
 
 The five canonical browser contracts and consolidated private adapters are
-pinned to exact reviewed `handshake-rs/hns-dane-engine` Git revisions. The
-manifest, lockfile, source policy, and notices record the same split revisions;
-they must converge before the next feature release.
+pinned to one exact reviewed `handshake-rs/hns-dane-engine` Git revision. The
+manifest, lockfile, source policy, and notices reject a split revision or
+registry fallback.
 
 ## Header currentness and UI
 

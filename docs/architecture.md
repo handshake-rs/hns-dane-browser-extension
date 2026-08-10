@@ -4,9 +4,9 @@ This repository is the Chromium extension, native-host, and desktop setup
 product. Current Android and iOS work lives in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-The Chromium adapter consumes five canonical browser contracts from
-the checksum-verified `handshake-rs/hns-dane-engine` crates.io `0.1.0`
-release. The canonical
+The Chromium adapter consumes five canonical browser contracts and the private
+Chromium adapters from one exact reviewed `handshake-rs/hns-dane-engine`
+`0.2.0` Git revision. The canonical
 `hns-browser-runtime` owns session-bound request authority;
 `hns-browser-observability` checks typed status;
 `hns-icann-dane` owns ICANN TLSA policy;

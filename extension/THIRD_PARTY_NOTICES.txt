@@ -31,11 +31,11 @@ Inclusion here does not imply endorsement by the component authors.
 Generator schema: 6
 Generated input SHA-256:
   scripts/generate-third-party-notices.py = 2d1b386e79b61d3346952d0049de48ca6bd982d059857d45a099e49a3f9d170f
-  scripts/verify_cargo_git_policy.py = 8d84bf0a2fd073f358dcf06425ecca6af1bc266ade5032fadd00825e211c4daf
+  scripts/verify_cargo_git_policy.py = 20b1c807a84d0fe186dd782bde1ee62de7e31da14740054f55e7cf5ff915879a
   release/license-texts/BSL-1.0.txt = c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566
   release/license-texts/CC0-1.0.txt = 8c5bfd05728b98356d25742d60344c8f39a82faacf5758451c2628b0f9f9773f
-  rust/Cargo.toml = 42ba2e375e0e0d3ba2a2595c9a826380d65972d8578b4232bd9cce550dad0866
-  rust/Cargo.lock = 775a03fe3f49fc75d7e50be0c7d35538012834dacf5064ed47a524c5399340f6
+  rust/Cargo.toml = b49f36ff1d470e4a80bbfce84fed3e84fe93c8c6b55fceba73fce395b18c694f
+  rust/Cargo.lock = cf32d872fdc0770a12005469c070fdfcf81409533ad5ce63788f4e2a6a9ffdf8
   extension/manifest.json = 1fb088c2cf45591c15df625f2bd92ec1baefd012d051cb9162322aa6ebd37020
   package.json = defe258f6bfff1936bc04dc0fed58840b90e3212d8426abc150e65efb7b01686
   rust/crates/hns-browser-setup/Cargo.toml = 5a610d1b9c4f000fa1beca13dcb715c2cba23f8f29222c40b66a691bf0d2b9d1
@@ -215,19 +215,19 @@ RUST COMPONENTS (438)
   hns-browser-dnssec 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-browser-gateway 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-browser-loopback-proxy 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
-  hns-browser-observability 0.1.2 | MIT OR Apache-2.0
+  hns-browser-observability 0.2.0 | MIT OR Apache-2.0
   hns-browser-p2p 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-browser-primitives 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-browser-resolver 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
-  hns-browser-runtime 0.1.0 | MIT OR Apache-2.0
+  hns-browser-runtime 0.2.0 | MIT OR Apache-2.0
   hns-browser-sync 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-browser-transport 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-browser-urkel 0.2.0 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-cache 0.2.0 | MIT OR Apache-2.0
   hns-dns-wire 0.2.0 | MIT OR Apache-2.0
-  hns-icann-dane 0.1.0 | MIT OR Apache-2.0
-  hns-namespace-resolution 0.1.0 | MIT OR Apache-2.0
-  hns-resolution-policy 0.1.0 | MIT OR Apache-2.0
+  hns-icann-dane 0.2.0 | MIT OR Apache-2.0
+  hns-namespace-resolution 0.2.0 | MIT OR Apache-2.0
+  hns-resolution-policy 0.2.0 | MIT OR Apache-2.0
   http 1.4.2 | MIT OR Apache-2.0
   httparse 1.10.1 | MIT OR Apache-2.0
   icu_collections 2.2.0 | Unicode-3.0
@@ -652,13 +652,13 @@ Applies to:
   - Rust crate emath 0.35.0
   - Rust crate epaint 0.35.0
   - Rust crate epaint_default_fonts 0.35.0
-  - Rust crate hns-browser-observability 0.1.2
-  - Rust crate hns-browser-runtime 0.1.0
+  - Rust crate hns-browser-observability 0.2.0
+  - Rust crate hns-browser-runtime 0.2.0
   - Rust crate hns-cache 0.2.0
   - Rust crate hns-dns-wire 0.2.0
-  - Rust crate hns-icann-dane 0.1.0
-  - Rust crate hns-namespace-resolution 0.1.0
-  - Rust crate hns-resolution-policy 0.1.0
+  - Rust crate hns-icann-dane 0.2.0
+  - Rust crate hns-namespace-resolution 0.2.0
+  - Rust crate hns-resolution-policy 0.2.0
   - Rust crate objc-sys 0.3.5
   - Rust crate objc2 0.5.2
   - Rust crate objc2 0.6.4
@@ -753,7 +753,7 @@ Applies to:
   - Rust crate hns-browser-transport 0.2.0
   - Rust crate hns-browser-urkel 0.2.0
 Source file names:
-  - reviewed Git b8bdfbf7e234e64166886ade6f79d698e23056af/LICENSE-POLYFORM-NONCOMMERCIAL
+  - reviewed Git d57eb672030ebbcd0ccd44780720e0efc73a4e87/LICENSE-POLYFORM-NONCOMMERCIAL
 --------------------------------------------------------------------------------
 Required Notice: Copyright 2026 Denuo Web, LLC.
 
@@ -3302,13 +3302,13 @@ Applies to:
   - Rust crate epaint 0.35.0
   - Rust crate epaint_default_fonts 0.35.0
   - Rust crate gl_generator 0.14.0
-  - Rust crate hns-browser-observability 0.1.2
-  - Rust crate hns-browser-runtime 0.1.0
+  - Rust crate hns-browser-observability 0.2.0
+  - Rust crate hns-browser-runtime 0.2.0
   - Rust crate hns-cache 0.2.0
   - Rust crate hns-dns-wire 0.2.0
-  - Rust crate hns-icann-dane 0.1.0
-  - Rust crate hns-namespace-resolution 0.1.0
-  - Rust crate hns-resolution-policy 0.1.0
+  - Rust crate hns-icann-dane 0.2.0
+  - Rust crate hns-namespace-resolution 0.2.0
+  - Rust crate hns-resolution-policy 0.2.0
   - Rust crate khronos_api 3.1.0
   - Rust crate kurbo 0.13.1
   - Rust crate lru-slab 0.1.2
