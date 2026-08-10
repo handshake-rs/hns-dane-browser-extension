@@ -204,8 +204,10 @@ explicitly unavailable.
   and Upgrade tunneling.
 - `hns-gateway` and `hns-transport`: selected-plan HTTP/TLS/QUIC execution and
   exact-IP split browser-WebPKI sockets.
-- `hns-resolver`, `hns-dnssec`, `hns-dane`: verified Handshake resolution,
-  delegated DNSSEC, and DANE primitives.
+- `hns-resolver`, `hns-dnssec`, `hns-dane`: exact-commit private adapters from
+  `hns-dane-engine` for verified Handshake resolution, delegated DNSSEC, and
+  DANE primitives. The resolver retains the browser-only light-proof and
+  dual-root boundary; full-node recursion remains in `hns-resolverd`.
 - `hns-chain`, `hns-sync`, `hns-p2p`, and `hns-urkel`: exact-commit private
   adapters from `hns-dane-engine` for the Handshake header and proof trust path.
   The source-policy gate forbids restoring product-local copies.
