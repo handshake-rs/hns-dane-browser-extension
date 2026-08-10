@@ -48,7 +48,6 @@ pub struct GatewayConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HnsHttpsMode {
     Strict,
-    Compatibility,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -804,7 +803,6 @@ impl HnsHttpsMode {
     fn domain_trust_mode(self) -> DomainTrustMode {
         match self {
             HnsHttpsMode::Strict => DomainTrustMode::HnsStrict,
-            HnsHttpsMode::Compatibility => DomainTrustMode::HnsCompatibility,
         }
     }
 }
@@ -3586,43 +3584,10 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_mode_allows_https_transport_webpki_fallback() {
-        let gateway = Gateway::new(
-            GatewayConfig {
-                hns_https_mode: HnsHttpsMode::Compatibility,
-                ..GatewayConfig::default()
-            },
-            ScriptedResolver::new(
-                vec![
-                    response("name", RecordType::A.code(), true, vec![address_record()]),
-                    response("name", RecordType::Https.code(), true, vec![]),
-                    response("_443._tcp.name", RecordType::Tlsa.code(), true, vec![]),
-                ],
-                Arc::new(Mutex::new(Vec::new())),
-            ),
-            CapturingTransport::default(),
-        )
-        .unwrap();
-
-        gateway.handle(&request("name", "name")).unwrap();
-
-        let captured = gateway
-            .transport()
-            .last_request
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap();
-        assert_eq!(captured.tls.mode, DomainTrustMode::HnsCompatibility);
-        assert!(captured.tls.dnssec_secure);
-        assert!(captured.tls.tlsa_records.is_empty());
-    }
-
-    #[test]
     fn rejects_unsigned_hns_https_origin() {
         let gateway = Gateway::new(
             GatewayConfig {
-                hns_https_mode: HnsHttpsMode::Compatibility,
+                hns_https_mode: HnsHttpsMode::Strict,
                 supported_origin_protocols: vec![OriginProtocol::Http11, OriginProtocol::Http2],
                 ..GatewayConfig::default()
             },
@@ -3645,7 +3610,7 @@ mod tests {
     fn rejects_unsigned_https_service_policy() {
         let gateway = Gateway::new(
             GatewayConfig {
-                hns_https_mode: HnsHttpsMode::Compatibility,
+                hns_https_mode: HnsHttpsMode::Strict,
                 ..GatewayConfig::default()
             },
             ScriptedResolver::new(
@@ -3669,7 +3634,7 @@ mod tests {
     fn rejects_unsigned_https_service_policy_by_default() {
         let gateway = Gateway::new(
             GatewayConfig {
-                hns_https_mode: HnsHttpsMode::Compatibility,
+                hns_https_mode: HnsHttpsMode::Strict,
                 ..GatewayConfig::default()
             },
             ScriptedResolver::new(

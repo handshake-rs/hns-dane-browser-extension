@@ -533,19 +533,6 @@ impl TlsValidation {
         }
     }
 
-    pub fn hns_compatibility(dnssec_secure: bool, tlsa_records: Vec<TlsaRecord>) -> Self {
-        Self {
-            mode: DomainTrustMode::HnsCompatibility,
-            dnssec_secure,
-            tlsa_records,
-            tlsa_source: None,
-            namespace_fingerprint: None,
-            service_port: 443,
-            service_transport: TlsaTransport::Tcp,
-            browser_tls_decision: None,
-            stateless_dane: StatelessDaneConfig::default(),
-        }
-    }
 }
 
 impl OriginResponse {
@@ -4384,7 +4371,7 @@ mod tests {
     }
 
     #[test]
-    fn enabled_stateless_dane_without_certificate_evidence_is_not_labeled_stateless() {
+    fn enabled_stateless_dane_without_certificate_evidence_fails_closed() {
         let server = TlsTestServer::start();
         let mut roots = RootCertStore::empty();
         roots
@@ -4398,18 +4385,18 @@ mod tests {
         );
         let mut request = request(server.address);
         request.scheme = "https".to_owned();
-        request.tls = TlsValidation::hns_compatibility(false, Vec::new());
+        request.tls = TlsValidation::hns_strict(false, Vec::new());
         request.tls.stateless_dane = StatelessDaneConfig {
             enabled: true,
             accepted_tree_roots: vec![[0x42; 32]],
         };
 
-        let response = transport.fetch(&request).unwrap();
+        let error = transport.fetch(&request).unwrap_err();
 
-        assert_eq!(response.dane_decision, DaneDecision::WebPkiFallback);
-        assert!(!matches!(
-            response.dane_decision,
-            DaneDecision::StatelessMatched(_)
+        assert!(matches!(
+            error,
+            TransportError::Io(message)
+                if message.contains("strict HNS mode requires DNSSEC-secure TLSA")
         ));
     }
 

@@ -10029,7 +10029,7 @@ fn gateway_request(
             tls: if input.scheme.eq_ignore_ascii_case("https")
                 || input.scheme.eq_ignore_ascii_case("wss")
             {
-                TlsValidation::hns_compatibility(false, Vec::new())
+                TlsValidation::hns_strict(false, Vec::new())
             } else {
                 TlsValidation::default()
             },
@@ -11063,7 +11063,6 @@ fn transport_certificate_message_is_expired(message: &str) -> bool {
 fn tls_mode_name(tls: &TlsValidation) -> &'static str {
     match tls.mode {
         hns_dane::DomainTrustMode::HnsStrict => "hns_strict",
-        hns_dane::DomainTrustMode::HnsCompatibility => "hns_compatibility",
         hns_dane::DomainTrustMode::IcannWebPki => "icann_webpki",
     }
 }
@@ -19791,7 +19790,7 @@ mod tests {
             matching: TlsaMatching::Sha256,
             association_data: vec![0xaa, 0xbb],
         };
-        let mut tls = TlsValidation::hns_compatibility(true, vec![tlsa]);
+        let mut tls = TlsValidation::hns_strict(true, vec![tlsa]);
         tls.service_port = 8443;
         let inspection = TlsCertificateInspection {
             end_entity_der: b"cert".to_vec(),
