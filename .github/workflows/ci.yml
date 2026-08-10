@@ -80,7 +80,9 @@ jobs:
             echo "::error::Required dependency lock is missing: rust/Cargo.lock"
             exit 1
           fi
-          python3 -m unittest -v tests/test_cargo_git_policy.py
+          python3 -m unittest -v \
+            tests/test_cargo_git_policy.py \
+            tests/test_browser_qualification_provenance.py
           python3 scripts/verify_cargo_git_policy.py
           python3 scripts/generate-third-party-notices.py --check
           cargo +1.92.0 metadata \
@@ -174,9 +176,126 @@ jobs:
             tests/test_release_workflow.py \
             tests/test_resign_windows_workflow.py
 
+  qualification:
+    name: Installed-browser qualification artifact
+    needs: policy
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Install the static Linux build target
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            file \
+            musl-tools
+          if ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+            sudo ln -s "$(command -v musl-gcc)" /usr/local/bin/aarch64-linux-musl-gcc
+          fi
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup target add --toolchain 1.92.0 aarch64-unknown-linux-musl
+
+      - name: Build the exact native host and canonical extension
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
+          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
+        run: |
+          set -euo pipefail
+          bash scripts/check-runtime-boundaries.sh
+          npm run lint:extension
+          npm run build:extension
+          cargo +1.92.0 build \
+            --locked \
+            --release \
+            --manifest-path rust/Cargo.toml \
+            -p hns-chromium-native-host \
+            --target aarch64-unknown-linux-musl
+
+      - name: Verify and package qualification inputs
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          native_host="rust/target/aarch64-unknown-linux-musl/release/hns-chromium-native-host"
+          if readelf --program-headers "$native_host" | grep -q 'INTERP'; then
+            echo "::error::The qualification native host is not statically linked."
+            exit 1
+          fi
+          if readelf --dynamic "$native_host" | grep -q '(NEEDED)'; then
+            echo "::error::The qualification native host has a dynamic dependency."
+            exit 1
+          fi
+          canonical_id="$(jq -er '.canonicalId' release/extension-identity.json)"
+          version="$(jq -er '.version' extension/manifest.json)"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          "$native_host" \
+            --print-host-manifest \
+            --extension-id "$canonical_id" >/dev/null
+          mkdir -p dist/qualification
+          python3 scripts/package-release.py extension \
+            --output-dir dist/qualification \
+            --source-date-epoch "$source_date_epoch" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-tag "v$version" \
+            --extension-id "$canonical_id"
+          python3 scripts/package-release.py native \
+            --output-dir dist/qualification \
+            --source-date-epoch "$source_date_epoch" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-tag "v$version" \
+            --extension-id "$canonical_id" \
+            --platform linux \
+            --architecture arm64 \
+            --rust-target aarch64-unknown-linux-musl \
+            --native-host "$native_host"
+          canonical_extension="dist/qualification/hns-dane-browser-extension-v${version}-mv3.zip"
+          native_archive="dist/qualification/hns-dane-browser-native-host-v${version}-linux-arm64.tar.gz"
+          cp "$native_host" dist/qualification/hns-chromium-native-host
+          find dist/qualification -maxdepth 1 -type f \
+            ! -name "${canonical_extension##*/}" \
+            ! -name "${canonical_extension##*/}.sha256" \
+            ! -name "${native_archive##*/}" \
+            ! -name "${native_archive##*/}.sha256" \
+            ! -name hns-chromium-native-host \
+            -delete
+          python3 scripts/create_browser_qualification_provenance.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --platform linux \
+            --architecture arm64 \
+            --rust-target aarch64-unknown-linux-musl \
+            --runner-image ubuntu-24.04-arm \
+            --file "nativeHostExecutable=dist/qualification/hns-chromium-native-host" \
+            --file "nativeHostArchive=$native_archive" \
+            --file "nativeHostArchiveChecksum=${native_archive}.sha256" \
+            --file "canonicalExtension=$canonical_extension" \
+            --file "canonicalExtensionChecksum=${canonical_extension}.sha256" \
+            --output dist/qualification/QUALIFICATION-PROVENANCE.json
+
+      - name: Retain exact-SHA installed-browser inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installed-browser-qualification-${{ github.sha }}-linux-arm64
+          path: dist/qualification/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
   required:
     name: Required CI
-    needs: [policy, rust, extension]
+    needs: [policy, rust, extension, qualification]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -186,6 +305,7 @@ jobs:
           POLICY_RESULT: ${{ needs.policy.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           EXTENSION_RESULT: ${{ needs.extension.result }}
+          QUALIFICATION_RESULT: ${{ needs.qualification.result }}
         run: |
           set -euo pipefail
           failed=0
@@ -202,4 +322,5 @@ jobs:
           check_gate "Repository and supply-chain policy" "$POLICY_RESULT"
           check_gate "Rust workspace and native host" "$RUST_RESULT"
           check_gate "Chromium extension" "$EXTENSION_RESULT"
+          check_gate "Installed-browser qualification artifact" "$QUALIFICATION_RESULT"
           exit "$failed"

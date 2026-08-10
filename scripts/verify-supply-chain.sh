@@ -64,7 +64,9 @@ for script in scripts/*.sh; do
   bash -n "$script"
 done
 
-python3 -m unittest -v tests/test_cargo_git_policy.py
+python3 -m unittest -v \
+  tests/test_cargo_git_policy.py \
+  tests/test_browser_qualification_provenance.py
 python3 scripts/verify_cargo_git_policy.py
 
 "${CARGO[@]}" metadata --locked --manifest-path rust/Cargo.toml --no-deps --format-version 1 >/dev/null
