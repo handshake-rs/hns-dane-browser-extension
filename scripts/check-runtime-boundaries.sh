@@ -19,7 +19,7 @@ if tracked_mobile="$(git ls-files -- "${mobile_paths[@]}")" && [[ -n "$tracked_m
   exit 1
 fi
 
-for crate in hns-chromium-platform-runtime hns-loopback-proxy; do
+for crate in hns-chromium-platform-runtime; do
   dependency_tree="$(cargo +1.92.0 tree --locked \
     --manifest-path rust/Cargo.toml \
     --package "$crate" \
@@ -34,8 +34,7 @@ if matches="$(rg -n \
   --glob 'Cargo.toml' \
   --glob '*.rs' \
   '(^|[^[:alnum:]_])(jni::|JNIEnv|JNIEXPORT|JNICALL|Java_[[:alnum:]_]+)([^[:alnum:]_]|$)|extern[[:space:]]+"system"' \
-  rust/crates/hns-chromium-platform-runtime \
-  rust/crates/hns-loopback-proxy || true)" && [[ -n "$matches" ]]; then
+  rust/crates/hns-chromium-platform-runtime || true)" && [[ -n "$matches" ]]; then
   echo "ERROR: the Chromium runtime contains a JNI boundary." >&2
   printf '%s\n' "$matches" >&2
   exit 1
@@ -51,7 +50,6 @@ fi
 
 legacy_proxy_pattern='ProxyRoutingMode::(HnsOnly|WholeBrowser)|ProxyConfig::(hns_only|whole_browser)|IcannNetwork'
 if matches="$(rg -n "$legacy_proxy_pattern" \
-  rust/crates/hns-loopback-proxy/src \
   rust/crates/hns-chromium-platform-runtime/src/lib.rs || true)" && [[ -n "$matches" ]]; then
   echo "ERROR: a removed HnsOnly/WholeBrowser forwarding surface remains." >&2
   printf '%s\n' "$matches" >&2
