@@ -1802,7 +1802,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-chain"
 version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=09ba06771d2f36cb38fff1e5e5a0b41d2472fc87#09ba06771d2f36cb38fff1e5e5a0b41d2472fc87"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=85f7dc406828786cecf9f1a8f651261dcc41138f#85f7dc406828786cecf9f1a8f651261dcc41138f"
 dependencies = [
  "hns-browser-primitives",
  "rusqlite",
@@ -1822,9 +1822,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hns-browser-p2p"
+version = "0.2.0"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=85f7dc406828786cecf9f1a8f651261dcc41138f#85f7dc406828786cecf9f1a8f651261dcc41138f"
+dependencies = [
+ "getrandom 0.3.4",
+ "hns-browser-primitives",
+ "hns-browser-urkel",
+ "rusqlite",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "hns-browser-primitives"
 version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=09ba06771d2f36cb38fff1e5e5a0b41d2472fc87#09ba06771d2f36cb38fff1e5e5a0b41d2472fc87"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=85f7dc406828786cecf9f1a8f651261dcc41138f#85f7dc406828786cecf9f1a8f651261dcc41138f"
 dependencies = [
  "blake2",
  "hex",
@@ -1857,7 +1869,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-urkel"
 version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=09ba06771d2f36cb38fff1e5e5a0b41d2472fc87#09ba06771d2f36cb38fff1e5e5a0b41d2472fc87"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=85f7dc406828786cecf9f1a8f651261dcc41138f#85f7dc406828786cecf9f1a8f651261dcc41138f"
 dependencies = [
  "hns-browser-primitives",
  "thiserror 2.0.19",
@@ -1902,6 +1914,7 @@ version = "0.5.5"
 dependencies = [
  "hns-browser-chain",
  "hns-browser-observability",
+ "hns-browser-p2p",
  "hns-browser-primitives",
  "hns-browser-runtime",
  "hns-browser-urkel",
@@ -1909,7 +1922,6 @@ dependencies = [
  "hns-gateway",
  "hns-loopback-proxy",
  "hns-namespace-resolution",
- "hns-p2p",
  "hns-resolution-policy",
  "hns-resolver",
  "hns-sync",
@@ -1995,18 +2007,6 @@ version = "0.1.0"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=1ab4ab626f945712b0f960945986cb52efefef7c#1ab4ab626f945712b0f960945986cb52efefef7c"
 
 [[package]]
-name = "hns-p2p"
-version = "0.5.5"
-dependencies = [
- "getrandom 0.3.4",
- "hex",
- "hns-browser-primitives",
- "hns-browser-urkel",
- "rusqlite",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "hns-resolution-policy"
 version = "0.1.0"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=1ab4ab626f945712b0f960945986cb52efefef7c#1ab4ab626f945712b0f960945986cb52efefef7c"
@@ -2029,9 +2029,9 @@ name = "hns-sync"
 version = "0.5.5"
 dependencies = [
  "hns-browser-chain",
+ "hns-browser-p2p",
  "hns-browser-primitives",
  "hns-browser-urkel",
- "hns-p2p",
  "hns-resolver",
  "thiserror 2.0.19",
 ]
