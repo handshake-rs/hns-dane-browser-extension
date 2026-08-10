@@ -82,5 +82,5 @@ test("header maintenance invalidates wallet authority before native synchronizat
     router,
     /await this\.nativeRequest\("walletProviderRequest"[\s\S]*await this\.revalidateOperation/
   );
-  assert.match(worker, /completeApproval\(dispatch, result\)/);
+  assert.match(worker, /completeApproval\(\s*dispatch,\s*result\s*\)/);
 });

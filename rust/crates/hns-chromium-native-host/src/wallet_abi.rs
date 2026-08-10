@@ -89,8 +89,7 @@ const SIGNATURE_ALGORITHM: &str = "ed25519";
 #[cfg(unix)]
 const SIGNATURE_CANONICALIZATION: &str = "JCS-RFC8785";
 #[cfg(unix)]
-const ANTI_ROLLBACK_CHECKSUM_CONTEXT: &[u8] =
-    b"hns-dane-browser-wallet-anti-rollback-state-v1\0";
+const ANTI_ROLLBACK_CHECKSUM_CONTEXT: &[u8] = b"hns-dane-browser-wallet-anti-rollback-state-v1\0";
 
 /// No developer or fixture key is compiled into this production table.
 #[cfg(unix)]
@@ -363,9 +362,7 @@ impl WalletAbiDiscovery {
             WalletArtifactState::Missing => "walletArtifactMissing",
             WalletArtifactState::Rejected(reason) => reason.code(),
             #[cfg(unix)]
-            WalletArtifactState::IntegrityChecked(_) => {
-                "walletArtifactAuthenticityUnavailable"
-            }
+            WalletArtifactState::IntegrityChecked(_) => "walletArtifactAuthenticityUnavailable",
             #[cfg(unix)]
             WalletArtifactState::AuthenticityVerified(_) => {
                 "walletArtifactQualificationUnavailable"
@@ -577,9 +574,8 @@ impl LaunchAdmittedWalletArtifact {
                     WalletArtifactRejection::LaunchFailed.code(),
                 )
             })?;
-            self.revalidate_for_launch_while_locked(&anti_rollback_lock).map_err(|reason| {
-                io::Error::new(io::ErrorKind::PermissionDenied, reason.code())
-            })?;
+            self.revalidate_for_launch_while_locked(&anti_rollback_lock)
+                .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
             spawn_sealed_linux_executable(sealed)
         }
         #[cfg(not(target_os = "linux"))]
@@ -598,8 +594,7 @@ impl LaunchAdmittedWalletArtifact {
         let initial_unix_ms =
             current_unix_ms().ok_or(WalletArtifactRejection::ReleaseTimeWindow)?;
         self.revalidate_for_launch_while_locked_at(initial_unix_ms, anti_rollback_lock)?;
-        let final_unix_ms =
-            current_unix_ms().ok_or(WalletArtifactRejection::ReleaseTimeWindow)?;
+        let final_unix_ms = current_unix_ms().ok_or(WalletArtifactRejection::ReleaseTimeWindow)?;
         self.require_signed_time_window_at(final_unix_ms)
     }
 
@@ -664,8 +659,8 @@ impl LaunchAdmittedWalletArtifact {
         self.manifest_file
             .seek(SeekFrom::Start(0))
             .map_err(|_| WalletArtifactRejection::PathBinding)?;
-        let manifest_bytes =
-            read_manifest(&mut self.manifest_file).map_err(|_| WalletArtifactRejection::PathBinding)?;
+        let manifest_bytes = read_manifest(&mut self.manifest_file)
+            .map_err(|_| WalletArtifactRejection::PathBinding)?;
         let final_manifest_metadata = self
             .manifest_file
             .metadata()
@@ -925,14 +920,14 @@ fn inspect_manifest(
     {
         return rejected(WalletArtifactRejection::ArtifactSize);
     }
-    let (artifact_sha256, bytes_read) =
-        match sha256_reader(&mut artifact_file, MAX_ARTIFACT_BYTES) {
-            Ok(result) => result,
-            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-                return rejected(WalletArtifactRejection::ArtifactSize);
-            }
-            Err(_) => return rejected(WalletArtifactRejection::ArtifactRead),
-        };
+    let (artifact_sha256, bytes_read) = match sha256_reader(&mut artifact_file, MAX_ARTIFACT_BYTES)
+    {
+        Ok(result) => result,
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+            return rejected(WalletArtifactRejection::ArtifactSize);
+        }
+        Err(_) => return rejected(WalletArtifactRejection::ArtifactRead),
+    };
     let final_artifact_metadata = match artifact_file.metadata() {
         Ok(metadata) => metadata,
         Err(_) => return rejected(WalletArtifactRejection::ArtifactRead),
@@ -977,8 +972,7 @@ fn inspect_manifest(
     {
         return rejected(WalletArtifactRejection::ReleaseFloor);
     }
-    let Some(qualified_release) =
-        configuration.qualified_release(&manifest, &manifest_sha256)
+    let Some(qualified_release) = configuration.qualified_release(&manifest, &manifest_sha256)
     else {
         return WalletArtifactState::AuthenticityVerified(summary);
     };
@@ -1060,11 +1054,9 @@ fn valid_verifier_configuration(configuration: &WalletAbiVerifierConfiguration) 
         && releases_valid
         && unique_configuration(configuration)
         && configuration.qualified_releases.iter().all(|release| {
-            configuration.trust_root(
-                &release.key_id,
-                &release.release_line,
-                release.sequence,
-            ).is_some()
+            configuration
+                .trust_root(&release.key_id, &release.release_line, release.sequence)
+                .is_some()
         })
 }
 
@@ -1086,9 +1078,9 @@ fn unique_configuration(configuration: &WalletAbiVerifierConfiguration) -> bool 
         });
     roots_unambiguous
         && configuration
-        .release_floors
-        .iter()
-        .all(|floor| floor_lines.insert(floor.release_line.as_str()))
+            .release_floors
+            .iter()
+            .all(|floor| floor_lines.insert(floor.release_line.as_str()))
         && configuration.qualified_releases.iter().all(|release| {
             release_ids.insert((
                 release.release_line.as_str(),
@@ -1166,8 +1158,7 @@ fn exact_capabilities(capabilities: &[String]) -> bool {
     }
     let mut unique = BTreeSet::new();
     capabilities.iter().all(|capability| {
-        SERVICE_CAPABILITIES.contains(&capability.as_str())
-            && unique.insert(capability.as_str())
+        SERVICE_CAPABILITIES.contains(&capability.as_str()) && unique.insert(capability.as_str())
     }) && REQUIRED_BASE_CAPABILITIES
         .iter()
         .all(|required| unique.contains(required))
@@ -1263,9 +1254,9 @@ fn valid_base64url_signature(value: &str) -> bool {
             .as_bytes()
             .last()
             .is_some_and(|byte| matches!(byte, b'A' | b'Q' | b'g' | b'w'))
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
         && URL_SAFE_NO_PAD
             .decode(value.as_bytes())
             .is_ok_and(|decoded| decoded.len() == 64)
@@ -1480,13 +1471,12 @@ fn commit_anti_rollback(
     trusted_genesis: bool,
 ) -> Result<WalletAntiRollbackEntry, WalletArtifactRejection> {
     let anti_rollback_lock = acquire_anti_rollback_lock(data_directory)?;
-    let mut state = read_anti_rollback_state_locked(data_directory, &anti_rollback_lock)?.unwrap_or(
-        WalletAntiRollbackState {
+    let mut state = read_anti_rollback_state_locked(data_directory, &anti_rollback_lock)?
+        .unwrap_or(WalletAntiRollbackState {
             state_schema_version: WALLET_ANTI_ROLLBACK_STATE_SCHEMA_VERSION,
             entries: Vec::new(),
             checksum_sha256: String::new(),
-        },
-    );
+        });
     let current = WalletAntiRollbackEntry {
         release_line: manifest.anti_rollback.release_line.clone(),
         highest_sequence: manifest.anti_rollback.sequence,
@@ -1527,8 +1517,8 @@ fn commit_anti_rollback(
     if state.entries.len() > MAX_ANTI_ROLLBACK_RELEASE_LINES {
         return Err(WalletArtifactRejection::AntiRollback);
     }
-    state.checksum_sha256 = anti_rollback_checksum(&state)
-        .ok_or(WalletArtifactRejection::AntiRollback)?;
+    state.checksum_sha256 =
+        anti_rollback_checksum(&state).ok_or(WalletArtifactRejection::AntiRollback)?;
     write_anti_rollback_state_locked(data_directory, &state, &anti_rollback_lock)?;
     require_anti_rollback_entry_locked(data_directory, &current, &anti_rollback_lock)?;
     Ok(current)
@@ -1655,11 +1645,7 @@ fn write_anti_rollback_state_locked(
             ));
         }
         temporary.sync_all()?;
-        rename_at(
-            data_directory,
-            &temporary_name,
-            WALLET_ANTI_ROLLBACK_STATE,
-        )?;
+        rename_at(data_directory, &temporary_name, WALLET_ANTI_ROLLBACK_STATE)?;
         data_directory.sync_all()
     })();
     if write_result.is_err() {
@@ -1745,11 +1731,7 @@ fn create_file_at_exclusive(directory: &File, name: &str) -> io::Result<File> {
         libc::openat(
             directory.as_raw_fd(),
             name.as_ptr(),
-            libc::O_WRONLY
-                | libc::O_CREAT
-                | libc::O_EXCL
-                | libc::O_NOFOLLOW
-                | libc::O_CLOEXEC,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
             0o600,
         )
     };
@@ -1819,9 +1801,7 @@ fn private_directory(directory: &File) -> bool {
 fn private_regular_file(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
 
-    metadata.is_file()
-        && metadata.nlink() == 1
-        && source_is_owned_and_not_shared_writable(metadata)
+    metadata.is_file() && metadata.nlink() == 1 && source_is_owned_and_not_shared_writable(metadata)
 }
 
 #[cfg(unix)]
@@ -1926,16 +1906,12 @@ fn sealed_executable_copy(
 ) -> io::Result<File> {
     use std::os::fd::AsRawFd;
 
-    let name = CString::new("hns-wallet-service")
-        .expect("static sealed executable name contains no NUL");
+    let name =
+        CString::new("hns-wallet-service").expect("static sealed executable name contains no NUL");
     // SAFETY: name is a valid C string and a successful descriptor is
     // transferred immediately to File.
-    let descriptor = unsafe {
-        libc::memfd_create(
-            name.as_ptr(),
-            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
-        )
-    };
+    let descriptor =
+        unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
     let mut sealed = file_from_descriptor(descriptor)?;
     source.seek(SeekFrom::Start(0))?;
     let before = source.metadata()?;
@@ -1979,8 +1955,7 @@ fn sealed_executable_copy(
     if unsafe { libc::fchmod(sealed.as_raw_fd(), 0o500) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    let seals =
-        libc::F_SEAL_WRITE | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_SEAL;
+    let seals = libc::F_SEAL_WRITE | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_SEAL;
     // SAFETY: F_ADD_SEALS is applied to the valid memfd owned by sealed.
     if unsafe { libc::fcntl(sealed.as_raw_fd(), libc::F_ADD_SEALS, seals) } != 0 {
         return Err(io::Error::last_os_error());
@@ -2030,9 +2005,9 @@ mod tests {
     use super::*;
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
+    use std::sync::atomic::{AtomicU64, Ordering};
     #[cfg(target_os = "linux")]
     use std::sync::{Arc, Barrier};
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     const TEST_KEY_ID: &str = "wallet-release-test";
@@ -2060,7 +2035,10 @@ mod tests {
             discovery.unavailable_code(),
             "walletArtifactAuthenticityUnavailable"
         );
-        assert_eq!(discovery.status_json()["artifactAuthenticityVerified"], false);
+        assert_eq!(
+            discovery.status_json()["artifactAuthenticityVerified"],
+            false
+        );
         cleanup(&root);
         drop(release);
     }
@@ -2139,10 +2117,8 @@ mod tests {
         let signer = test_signer();
         let wrong_signer = test_signer();
         let release = install_signed_release(&root, &signer, 1, None, true, None);
-        let configuration =
-            verifier_configuration(&wrong_signer, &release, 1, true, true);
-        let discovery =
-            WalletAbiDiscovery::discover_with_configuration(&root, configuration);
+        let configuration = verifier_configuration(&wrong_signer, &release, 1, true, true);
+        let discovery = WalletAbiDiscovery::discover_with_configuration(&root, configuration);
         assert_eq!(
             discovery.unavailable_code(),
             "walletArtifactSignatureInvalid"
@@ -2163,8 +2139,7 @@ mod tests {
         release.manifest.signature.value = URL_SAFE_NO_PAD.encode(signature);
         rewrite_manifest(&root, &release.manifest);
 
-        let discovery =
-            WalletAbiDiscovery::discover_with_configuration(&root, configuration);
+        let discovery = WalletAbiDiscovery::discover_with_configuration(&root, configuration);
         assert_eq!(
             discovery.unavailable_code(),
             "walletArtifactSignatureInvalid"
@@ -2185,7 +2160,10 @@ mod tests {
             discovery.status_json()["artifactState"],
             "authenticityVerified"
         );
-        assert_eq!(discovery.status_json()["artifactAuthenticityVerified"], true);
+        assert_eq!(
+            discovery.status_json()["artifactAuthenticityVerified"],
+            true
+        );
         assert_eq!(discovery.status_json()["artifactReleaseQualified"], false);
         assert_eq!(discovery.status_json()["available"], false);
         cleanup(&root);
@@ -2198,8 +2176,7 @@ mod tests {
         let signer = test_signer();
         let release = install_signed_release(&root, &signer, 1, None, false, None);
         let configuration = verifier_configuration(&signer, &release, 1, true, true);
-        let discovery =
-            WalletAbiDiscovery::discover_with_configuration(&root, configuration);
+        let discovery = WalletAbiDiscovery::discover_with_configuration(&root, configuration);
         assert_eq!(discovery.unavailable_code(), "walletArtifactMutable");
         cleanup(&root);
     }
@@ -2211,8 +2188,7 @@ mod tests {
         let signer = test_signer();
         let mut artifact = native_fixture_bytes();
         artifact[16..18].copy_from_slice(&1_u16.to_le_bytes());
-        let release =
-            install_signed_release(&root, &signer, 1, None, true, Some(artifact));
+        let release = install_signed_release(&root, &signer, 1, None, true, Some(artifact));
         let discovery = WalletAbiDiscovery::discover_with_configuration(
             &root,
             verifier_configuration(&signer, &release, 1, true, true),
@@ -2258,18 +2234,15 @@ mod tests {
             &root,
             verifier_configuration(&signer, &first, 1, true, true),
         );
-        assert_eq!(admitted_first.status_json()["artifactState"], "launchAdmitted");
+        assert_eq!(
+            admitted_first.status_json()["artifactState"],
+            "launchAdmitted"
+        );
         drop(admitted_first);
 
         let first_manifest_sha256 = sha256_bytes(&first.manifest_bytes);
-        let second = install_signed_release(
-            &root,
-            &signer,
-            2,
-            Some(first_manifest_sha256),
-            true,
-            None,
-        );
+        let second =
+            install_signed_release(&root, &signer, 2, Some(first_manifest_sha256), true, None);
         let admitted_second = WalletAbiDiscovery::discover_with_configuration(
             &root,
             verifier_configuration(&signer, &second, 1, false, true),
@@ -2336,8 +2309,7 @@ mod tests {
         drop(admitted);
 
         let predecessor = sha256_bytes(&first.manifest_bytes);
-        let mut second =
-            fixture_manifest(&first.artifact_bytes, 2, Some(predecessor.clone()));
+        let mut second = fixture_manifest(&first.artifact_bytes, 2, Some(predecessor.clone()));
         sign_manifest(&mut second, &signer);
         let second_sha256 = sha256_bytes(&jcs_bytes(&second).unwrap());
         let mut third = fixture_manifest(&first.artifact_bytes, 3, Some(predecessor));
@@ -2350,13 +2322,7 @@ mod tests {
         let second_commit = std::thread::spawn(move || {
             let data_directory = open_directory_nofollow(&second_root).unwrap();
             second_barrier.wait();
-            commit_anti_rollback(
-                &data_directory,
-                &second,
-                &second_sha256,
-                false,
-            )
-            .is_ok()
+            commit_anti_rollback(&data_directory, &second, &second_sha256, false).is_ok()
         });
         let third_root = root.clone();
         let third_barrier = Arc::clone(&barrier);
@@ -2386,10 +2352,7 @@ mod tests {
             .iter()
             .find(|entry| entry.release_line == TEST_RELEASE_LINE)
             .unwrap();
-        assert_eq!(
-            entry.highest_sequence,
-            if second_committed { 2 } else { 3 }
-        );
+        assert_eq!(entry.highest_sequence, if second_committed { 2 } else { 3 });
         cleanup(&root);
     }
 
@@ -2468,8 +2431,7 @@ mod tests {
         let root = test_root("sealed-launch");
         let signer = test_signer();
         let artifact_bytes = fs::read("/bin/true").unwrap();
-        let release =
-            install_signed_release(&root, &signer, 1, None, true, Some(artifact_bytes));
+        let release = install_signed_release(&root, &signer, 1, None, true, Some(artifact_bytes));
         let mut admitted = WalletAbiDiscovery::discover_with_configuration(
             &root,
             verifier_configuration(&signer, &release, 1, true, true),
@@ -2496,11 +2458,7 @@ mod tests {
         artifact_override: Option<Vec<u8>>,
     ) -> InstalledRelease {
         let artifact_bytes = artifact_override.unwrap_or_else(native_fixture_bytes);
-        let mut manifest = fixture_manifest(
-            &artifact_bytes,
-            sequence,
-            previous_manifest_sha256,
-        );
+        let mut manifest = fixture_manifest(&artifact_bytes, sequence, previous_manifest_sha256);
         sign_manifest(&mut manifest, signer);
         let manifest_bytes = jcs_bytes(&manifest).unwrap();
         let release = InstalledRelease {
