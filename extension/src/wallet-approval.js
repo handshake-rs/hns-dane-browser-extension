@@ -15,7 +15,6 @@ const MAX_U128 = 340282366920938463463374607431768211455n;
 const PROVIDER_APPROVAL_ID = /^[A-Za-z0-9_-]{21}[AQgw]$/;
 const HNS_NAME = /^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?$/;
 const HNS_NAME_HASH = /^[0-9a-f]{64}$/;
-const RESERVED_HNS_NAMES = new Set(["example", "invalid", "local", "localhost", "test"]);
 const ASSETS = new Set(["HNS", "BTC", "ETH"]);
 const MODULE_ASSET = Object.freeze({ handshake: "HNS", bitcoin: "BTC", ethereum: "ETH" });
 const FINALITY_BY_MODULE = Object.freeze({
@@ -544,8 +543,6 @@ function validateHnsNameDisclosures(candidate, capabilities, method) {
     throw invalidApproval();
   }
 
-  const names = new Set();
-  const hashes = new Set();
   const validated = [];
   let previous = null;
   for (const disclosure of candidate) {
@@ -554,20 +551,15 @@ function validateHnsNameDisclosures(candidate, capabilities, method) {
     if (
       typeof name !== "string" ||
       !HNS_NAME.test(name) ||
-      RESERVED_HNS_NAMES.has(name) ||
       typeof nameHash !== "string" ||
       !HNS_NAME_HASH.test(nameHash) ||
       hnsNameHash(name) !== nameHash ||
-      names.has(name) ||
-      hashes.has(nameHash) ||
       (previous !== null &&
         (previous.name > name ||
           (previous.name === name && previous.nameHash >= nameHash)))
     ) {
       throw invalidApproval();
     }
-    names.add(name);
-    hashes.add(nameHash);
     previous = { name, nameHash };
     validated.push(frozenRecord(previous));
   }
