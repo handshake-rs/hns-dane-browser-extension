@@ -104,21 +104,25 @@ must not show a verified state until its Rust native host pins the new
 
 The repository contains a Handshake-specific website provider schema v1 and a
 strict private wallet ABI-v2 signed-artifact admission boundary. It consumes
-the wallet-owned manifest schema v2, verifies deterministic JCS bytes and
-Ed25519 signatures against verifier-owned roots, requires an exact qualified
-release pin and durable anti-rollback high-water state, and on Linux can launch
-only a freshly rehashed sealed executable image. No test key is production
-trust. The production trust-root, release-pin, and release-floor tables are
-intentionally empty until an independently released wallet service is
-qualified, and the controller does not join the launcher to a transport.
+the wallet-owned manifest schema v2 with provider schema 1 and approval schema
+3, verifies deterministic JCS bytes and Ed25519 signatures against
+verifier-owned roots, requires an exact qualified release pin and durable
+anti-rollback high-water state, and on Linux can launch only a freshly rehashed
+sealed executable image. No test key is production trust. The production
+trust-root, release-pin, and release-floor tables are intentionally empty until
+an independently released wallet service is qualified, and the controller does
+not join the launcher to a transport.
 
-The provider code validates the closed 12-variant typed approval union, accepts
-events only from the service event channel, and binds approval-window decisions
-to exact in-memory context. The released Chromium product keeps it unavailable:
-no qualified standalone service, private process transport, or released
-engine-authority adapter is joined. Artifact authenticity, transport, runtime,
-engine authority, provider, and value gates therefore remain false in
-production, and no staged artifact is launched.
+The provider code validates the approval-schema-v3 closed 12-variant typed
+approval union. Permissions summaries require the minimized `hnsNames` list;
+each disclosed name and its exact SHA3-256 hash is validated and rendered in the
+trusted approval window. Events enter only through the service event channel,
+and decisions stay bound to exact in-memory context. The released Chromium
+product keeps the provider unavailable: no qualified standalone service,
+private process transport, or released engine-authority adapter is joined.
+Artifact authenticity, transport, runtime, engine authority, provider, and
+value gates therefore remain false in production, and no staged artifact is
+launched.
 
 Focused offline verifier evidence at exact source
 `a39f8759c0161b5e49cb93c0c5aea1f0298e3108` is 17 passed, 0 failed, and

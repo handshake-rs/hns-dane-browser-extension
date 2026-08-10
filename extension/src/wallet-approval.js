@@ -3,14 +3,19 @@ import {
   protocolError,
   validateNativeResult
 } from "./wallet-provider-protocol.js";
+import { hnsNameHash } from "./hns-name-hash.js";
 
-export const WALLET_APPROVAL_SCHEMA_VERSION = 2;
+export const WALLET_APPROVAL_SCHEMA_VERSION = 3;
 
 const METHOD_SET = new Set(WALLET_PROVIDER_METHODS);
 const MAX_APPROVAL_LIFETIME_MS = 90 * 1000;
 const MAX_PUBLIC_STRING_BYTES = 4096;
+const MAX_HNS_NAME_DISCLOSURES = 64;
 const MAX_U128 = 340282366920938463463374607431768211455n;
 const PROVIDER_APPROVAL_ID = /^[A-Za-z0-9_-]{21}[AQgw]$/;
+const HNS_NAME = /^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?$/;
+const HNS_NAME_HASH = /^[0-9a-f]{64}$/;
+const RESERVED_HNS_NAMES = new Set(["example", "invalid", "local", "localhost", "test"]);
 const ASSETS = new Set(["HNS", "BTC", "ETH"]);
 const MODULE_ASSET = Object.freeze({ handshake: "HNS", bitcoin: "BTC", ethereum: "ETH" });
 const FINALITY_BY_MODULE = Object.freeze({
@@ -129,6 +134,13 @@ export function approvalPromptDisplay(prompt) {
     case "permissions":
       title = "Approve wallet permissions";
       add("Capabilities", summary.capabilities.join(", "));
+      if (summary.hnsNames.length === 0 && summary.capabilities.includes("names")) {
+        add("HNS names", "No names are currently disclosed");
+      }
+      for (const [index, disclosure] of summary.hnsNames.entries()) {
+        add(`HNS name ${index + 1}`, disclosure.name);
+        add(`HNS name hash ${index + 1}`, disclosure.nameHash);
+      }
       break;
     case "moduleEnablement":
       title = summary.action === "enable" ? "Enable wallet module" : "Disable wallet module";
@@ -251,16 +263,18 @@ function validateApprovalSummary(candidate, method, expectedRequest) {
   if (!APPROVAL_METHODS[candidate.kind]?.has(method)) throw invalidApproval();
   switch (candidate.kind) {
     case "permissions": {
-      requireExactFields(candidate, ["kind", "capabilities"]);
+      requireExactFields(candidate, ["kind", "capabilities", "hnsNames"]);
       const capabilities = validateCanonicalEnumList(
         candidate.capabilities,
         PERMISSION_CAPABILITIES,
         false
       );
       requireRequestedCapabilities(capabilities, method, expectedRequest);
+      const hnsNames = validateHnsNameDisclosures(candidate.hnsNames, capabilities, method);
       return frozenRecord({
         kind: candidate.kind,
-        capabilities
+        capabilities,
+        hnsNames
       });
     }
     case "moduleEnablement": {
@@ -494,6 +508,7 @@ function requireRequestedCapabilities(capabilities, method, expectedRequest) {
     }
     return;
   }
+  if (capabilities.includes("accounts")) throw invalidApproval();
   const params = expectedRequest?.params;
   if (!isRecord(params)) throw invalidApproval();
   const hasCapabilities = Object.hasOwn(params, "capabilities");
@@ -516,6 +531,47 @@ function requireRequestedCapabilities(capabilities, method, expectedRequest) {
   ) {
     throw invalidApproval();
   }
+}
+
+function validateHnsNameDisclosures(candidate, capabilities, method) {
+  if (!Array.isArray(candidate) || candidate.length > MAX_HNS_NAME_DISCLOSURES) {
+    throw invalidApproval();
+  }
+  if (
+    candidate.length > 0 &&
+    (method === "hns_requestAccounts" || !capabilities.includes("names"))
+  ) {
+    throw invalidApproval();
+  }
+
+  const names = new Set();
+  const hashes = new Set();
+  const validated = [];
+  let previous = null;
+  for (const disclosure of candidate) {
+    requireExactFields(disclosure, ["name", "nameHash"]);
+    const { name, nameHash } = disclosure;
+    if (
+      typeof name !== "string" ||
+      !HNS_NAME.test(name) ||
+      RESERVED_HNS_NAMES.has(name) ||
+      typeof nameHash !== "string" ||
+      !HNS_NAME_HASH.test(nameHash) ||
+      hnsNameHash(name) !== nameHash ||
+      names.has(name) ||
+      hashes.has(nameHash) ||
+      (previous !== null &&
+        (previous.name > name ||
+          (previous.name === name && previous.nameHash >= nameHash)))
+    ) {
+      throw invalidApproval();
+    }
+    names.add(name);
+    hashes.add(nameHash);
+    previous = { name, nameHash };
+    validated.push(frozenRecord(previous));
+  }
+  return Object.freeze(validated);
 }
 
 function validateEnum(candidate, allowed) {

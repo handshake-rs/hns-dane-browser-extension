@@ -13,12 +13,15 @@ storage, approval URLs, or native-messaging diagnostics.
 
 The isolated bridge retains only a bounded public authority binding in memory.
 Approval storage contains one short-lived public review descriptor from the
-ABI-v2 closed union: permissions, module enablement, send, name transfer,
-name finalize, typed signature, name offer, name purchase, market intent, fill
-acceptance, swap redeem, or swap refund. Its exact origin, method, expiry,
-nested asset and base-unit amounts, recipient, maximum fee and fee asset,
-chain/finality, price round, refund timing, warnings, and identifiers are typed
-per variant. Warnings are enumerated codes rather than free-form native text.
+private-ABI-v2/public-approval-v3 closed union: permissions, module enablement,
+send, name transfer, name finalize, typed signature, name offer, name purchase,
+market intent, fill acceptance, swap redeem, or swap refund. Its exact origin,
+method, expiry, nested asset and base-unit amounts, recipient, maximum fee and
+fee asset, chain/finality, price round, refund timing, warnings, and identifiers
+are typed per variant. A permission descriptor also carries the explicit
+minimized `hnsNames` list; every disclosed canonical name and SHA3-256 hash is
+rendered for review. Warnings are enumerated codes rather than free-form native
+text.
 The full tab/document/generation/provider-request decision context exists only
 in service-worker memory. Approval, explicit rejection, and window closure use
 that exact stored context and then remove it; navigation invalidation and

@@ -34,6 +34,7 @@ async function load() {
       term.textContent = label;
       const detail = document.createElement("dd");
       detail.textContent = value;
+      if (label.startsWith("HNS name hash ")) detail.classList.add("name-hash");
       return [term, detail];
     })
   );

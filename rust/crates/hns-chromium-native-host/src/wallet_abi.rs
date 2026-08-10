@@ -39,7 +39,7 @@ pub(crate) const WALLET_ABI_VERSION: u16 = 2;
 pub(crate) const WALLET_SERVICE_PROTOCOL_VERSION: u16 = 2;
 pub(crate) const WALLET_PROVIDER_SCHEMA_VERSION: u16 = 1;
 pub(crate) const WALLET_ABI_MAX_FRAME_BYTES: u32 = 1_048_576;
-const WALLET_APPROVAL_SCHEMA_VERSION: u16 = 2;
+const WALLET_APPROVAL_SCHEMA_VERSION: u16 = 3;
 const WALLET_ARTIFACT_MANIFEST_SCHEMA_VERSION: u16 = 2;
 #[cfg(unix)]
 const WALLET_ARTIFACT_DIRECTORY: &str = "wallet-abi-v2";
@@ -2095,6 +2095,22 @@ mod tests {
         );
         assert_eq!(permissive.decode(&noncanonical).unwrap().len(), 64);
         assert!(!valid_base64url_signature(&noncanonical));
+    }
+
+    #[test]
+    fn artifact_manifest_fixture_requires_approval_schema_v3() {
+        let mut manifest = fixture_manifest(b"wallet-service-fixture", 1, None);
+        assert_eq!(manifest.target.approval_schema_version, 3);
+        assert!(valid_manifest_contract(
+            &manifest,
+            current_unix_ms().unwrap()
+        ));
+
+        manifest.target.approval_schema_version = 2;
+        assert!(!valid_manifest_contract(
+            &manifest,
+            current_unix_ms().unwrap()
+        ));
     }
 
     #[test]

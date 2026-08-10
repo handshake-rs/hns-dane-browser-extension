@@ -14,8 +14,9 @@ Bitcoin signer.
    with its mandatory proxy installed.
 4. The native host must independently obtain the browser engine's opaque
    provider-authority context and negotiate the exact private wallet ABI v2
-   contract. The website-facing provider schema remains version 1; it is not
-   the private host/service ABI version.
+   contract. The website-facing provider schema remains version 1 and the
+   public approval projection is exactly schema 3; neither is the private
+   host/service ABI version.
    Extension-supplied origin and generation fields are lookup candidates, not
    native authentication. Until both joins exist, the capability probe fails
    and no MAIN-world provider is installed.
@@ -85,8 +86,16 @@ maximum-fee asset, chain/finality, enumerated warnings, and applicable public
 identifiers. Missing, extra, kind-mismatched, or free-form display data fails
 closed.
 
-That descriptor is a browser-owned public projection with approval schema 2,
-not the raw private `ApprovalPrompt` frame. Private `authorityHandle` and
+That descriptor is a browser-owned public projection with approval schema 3,
+not the raw private `ApprovalPrompt` frame. Every `permissions` summary requires
+an `hnsNames` list. It is empty without Names authority and for
+`hns_requestAccounts`; otherwise it contains at most 64 strictly ordered,
+unique canonical names and lowercase hashes that exactly equal
+`hns-covenants::hash_name` (SHA3-256 over the raw name bytes). Canonical names
+are 1–63 lowercase ASCII letters or digits with `-` and `_` allowed only
+internally, subject to the pinned reserved-name exclusions. The trusted window
+renders every disclosed name/hash pair and rejects missing, malformed,
+mismatched, duplicated, or reordered disclosures. Private `authorityHandle` and
 `authorityRevision` fields remain native-only and are forbidden in page results
 and event payloads. A future native adapter must decode ABI-v2 frames, retain
 those fields behind the native boundary, and construct the exact public
@@ -121,7 +130,7 @@ The native host looks only at this versioned, installation-owned location:
 The manifest is bounded to 16 KiB, denies unknown fields, and consumes the
 wallet repository's exact signed-artifact schema v2. Its nested target declares
 private wallet ABI 2, service protocol 2, website provider schema 1, approval
-schema 2, the 1,048,576-byte frame maximum, current target triple and executable
+schema 3, the 1,048,576-byte frame maximum, current target triple and executable
 format, and a closed unique service-capability set containing at least
 `canonicalFraming`, `restartIsolation`, `opaqueAuthorityRegistry`,
 `structuredApprovals`, and `typedEvents`. Additional schema-defined

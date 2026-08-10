@@ -43,6 +43,11 @@ dd {
   overflow-wrap: anywhere;
 }
 
+dd.name-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
 .warning {
   color: #fbbf24;
 }

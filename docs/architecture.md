@@ -252,7 +252,7 @@ The native host has a signed-release admission boundary for a future
 independently released wallet service under `data/wallet-abi-v2`. It consumes
 the wallet repository's exact signed-artifact manifest schema v2: target,
 source, release, anti-rollback, and signature objects; private wallet ABI 2;
-framed-service protocol 2; website provider schema 1; approval schema 2; the
+framed-service protocol 2; website provider schema 1; approval schema 3; the
 bounded frame maximum; and the wallet contract's closed service-capability
 vocabulary with the five foundation capabilities required. The complete
 stored manifest must itself be RFC 8785 JCS even though the upstream schema

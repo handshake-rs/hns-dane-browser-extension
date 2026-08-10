@@ -221,7 +221,8 @@ publication, not-before, and expiry checks also depend on a sane local wall
 clock, which remains an installation/operations qualification input.
 
 The private wallet ABI is version 2 while the website-facing provider schema
-remains version 1. Approval prompts form a closed union of 12 typed variants:
+remains version 1 and the public approval projection is version 3. Approval
+prompts form a closed union of 12 typed variants:
 permissions, module enablement, send, name transfer, name finalize, typed
 signature, name offer, name purchase, market intent, fill acceptance, swap
 redeem, and swap refund. The extension rejects mismatched method/kind, asset,
@@ -229,10 +230,12 @@ base-unit, maximum-fee asset, chain/finality, warning, identifier, or expiry
 bindings. Approval, rejection, and window closure consume the exact dispatch
 context retained in service-worker memory. Provider results cannot contain
 inline events; only authority-bound service event frames enter event routing.
-The browser validates an approval-schema-v2 public projection, not a raw private
-ABI frame: canonical approval IDs are nonzero 16-byte wire IDs, and private
-authority handles and revisions are forbidden in public results and events. No
-adapter that constructs this projection is joined or enabled yet.
+The browser validates an approval-schema-v3 public projection, not a raw private
+ABI frame: canonical approval IDs are nonzero 16-byte wire IDs, every permission
+summary has an explicit minimized `hnsNames` list, and the trusted window renders
+each validated canonical name with its exact SHA3-256 hash. Private authority
+handles and revisions are forbidden in public results and events. No adapter
+that constructs this projection is joined or enabled yet.
 
 Replay and rate state survives repeated initialization under identical
 generations. Runtime replacement, navigation invalidation, and header

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   WALLET_APPROVAL_SCHEMA_VERSION,
   approvalPromptDisplay,
@@ -15,8 +16,8 @@ const APPROVAL_ID = "AQIDBAUGBwgJCgsMDQ4PEA";
 const APPROVAL_CASES = Object.freeze([
   {
     method: "wallet_requestPermissions",
-    params: { capabilities: ["accounts", "send"] },
-    summary: { kind: "permissions", capabilities: ["accounts", "send"] }
+    params: { capabilities: ["balance", "send"] },
+    summary: { kind: "permissions", capabilities: ["balance", "send"], hnsNames: [] }
   },
   {
     method: "wallet_enableModule",
@@ -141,8 +142,9 @@ const APPROVAL_CASES = Object.freeze([
   }
 ]);
 
-test("all twelve ABI-v2 approval variants validate and render through trusted rows", () => {
+test("all twelve ABI-v2 approval variants use approval schema v3 trusted rows", () => {
   assert.equal(APPROVAL_CASES.length, 12);
+  assert.equal(WALLET_APPROVAL_SCHEMA_VERSION, 3);
   for (const scenario of APPROVAL_CASES) {
     const prompt = approve(scenario.method, scenario.params, scenario.summary);
     const display = approvalPromptDisplay(prompt);
@@ -166,6 +168,7 @@ test("approval envelopes reject origin, method, version, expiry, and unknown-fie
   rejects({ ...base, origin: "https://attacker.example" }, scenario.method, scenario.params);
   rejects({ ...base, method: "hns_send" }, scenario.method, scenario.params);
   rejects({ ...base, schemaVersion: 1 }, scenario.method, scenario.params);
+  rejects({ ...base, schemaVersion: 2 }, scenario.method, scenario.params);
   rejects({ ...base, expiresAtUnixMs: NOW + 90_001 }, scenario.method, scenario.params);
   rejects({ ...base, approvalId: "approval_1234567890" }, scenario.method, scenario.params);
   rejects(
@@ -230,45 +233,186 @@ test("amounts, assets, send chains, finality, and public strings fail closed", (
 test("permission summaries exactly bind canonical requested capabilities and scopes", () => {
   approve(
     "wallet_requestPermissions",
-    { scopes: ["send", "accounts"] },
-    { kind: "permissions", capabilities: ["accounts", "send"] }
+    { scopes: ["send", "balance"] },
+    { kind: "permissions", capabilities: ["balance", "send"], hnsNames: [] }
   );
-  const summary = { kind: "permissions", capabilities: ["accounts", "send"] };
+  const summary = { kind: "permissions", capabilities: ["balance", "send"], hnsNames: [] };
   rejects(
     approvalCandidate("wallet_requestPermissions", summary),
     "wallet_requestPermissions",
-    { capabilities: ["accounts"] }
+    { capabilities: ["balance"] }
   );
   rejects(
     approvalCandidate("wallet_requestPermissions", summary),
     "wallet_requestPermissions",
-    { capabilities: ["accounts", "accounts"] }
+    { capabilities: ["balance", "balance"] }
   );
   rejects(
     approvalCandidate("wallet_requestPermissions", {
       kind: "permissions",
-      capabilities: ["send", "accounts"]
+      capabilities: ["send", "balance"],
+      hnsNames: []
     }),
     "wallet_requestPermissions",
-    { capabilities: ["send", "accounts"] }
+    { capabilities: ["send", "balance"] }
   );
   rejects(
     approvalCandidate("wallet_requestPermissions", summary),
     "wallet_requestPermissions",
-    { capabilities: ["accounts", "send"], scopes: ["accounts", "send"] }
+    { capabilities: ["balance", "send"], scopes: ["balance", "send"] }
   );
   approve(
     "hns_requestAccounts",
     null,
-    { kind: "permissions", capabilities: ["accounts"] }
+    { kind: "permissions", capabilities: ["accounts"], hnsNames: [] }
   );
   rejects(
     approvalCandidate("hns_requestAccounts", {
       kind: "permissions",
-      capabilities: ["send"]
+      capabilities: ["send"],
+      hnsNames: []
     }),
     "hns_requestAccounts",
     null
+  );
+  rejects(
+    approvalCandidate("wallet_requestPermissions", {
+      kind: "permissions",
+      capabilities: ["accounts"],
+      hnsNames: []
+    }),
+    "wallet_requestPermissions",
+    { capabilities: ["accounts"] }
+  );
+});
+
+test("approval schema v3 validates and renders exact HNS name disclosures", () => {
+  const alpha = hnsDisclosure("alpha");
+  const beta = hnsDisclosure("beta");
+  assert.equal(
+    alpha.nameHash,
+    "271878f8a927b4566ac951fc815b18dfad8d0302d61d11d80cbe15b7a3a056af"
+  );
+  assert.equal(
+    beta.nameHash,
+    "f0277d92062bd9a41dd26cddbaf2c41d576cf7b0173cbe96c23d5f5a4f92cc8f"
+  );
+
+  const prompt = approve(
+    "wallet_requestPermissions",
+    { capabilities: ["names"] },
+    { kind: "permissions", capabilities: ["names"], hnsNames: [alpha, beta] }
+  );
+  assert.equal(Object.isFrozen(prompt.summary.hnsNames), true);
+  assert.ok(prompt.summary.hnsNames.every((disclosure) => Object.isFrozen(disclosure)));
+  assert.deepEqual(approvalPromptDisplay(prompt).rows, [
+    ["Capabilities", "names"],
+    ["HNS name 1", "alpha"],
+    ["HNS name hash 1", alpha.nameHash],
+    ["HNS name 2", "beta"],
+    ["HNS name hash 2", beta.nameHash]
+  ]);
+
+  const empty = approve(
+    "wallet_requestPermissions",
+    { capabilities: ["names"] },
+    { kind: "permissions", capabilities: ["names"], hnsNames: [] }
+  );
+  assert.deepEqual(approvalPromptDisplay(empty).rows, [
+    ["Capabilities", "names"],
+    ["HNS names", "No names are currently disclosed"]
+  ]);
+
+  approve(
+    "wallet_requestPermissions",
+    { capabilities: ["names"] },
+    {
+      kind: "permissions",
+      capabilities: ["names"],
+      hnsNames: [hnsDisclosure("a-1_name")]
+    }
+  );
+  approve(
+    "wallet_requestPermissions",
+    { capabilities: ["names"] },
+    {
+      kind: "permissions",
+      capabilities: ["names"],
+      hnsNames: [hnsDisclosure("a".repeat(63))]
+    }
+  );
+});
+
+test("approval schema v3 HNS disclosure constraints fail closed", () => {
+  const alpha = hnsDisclosure("alpha");
+  const beta = hnsDisclosure("beta");
+  const candidate = (hnsNames, capabilities = ["names"], method = "wallet_requestPermissions") =>
+    approvalCandidate(method, { kind: "permissions", capabilities, hnsNames });
+  const params = { capabilities: ["names"] };
+
+  rejects(
+    approvalCandidate("wallet_requestPermissions", {
+      kind: "permissions",
+      capabilities: ["names"]
+    }),
+    "wallet_requestPermissions",
+    params
+  );
+  rejects(candidate([beta, alpha]), "wallet_requestPermissions", params);
+  rejects(candidate([alpha, alpha]), "wallet_requestPermissions", params);
+  rejects(
+    candidate([{ ...alpha, nameHash: beta.nameHash }]),
+    "wallet_requestPermissions",
+    params
+  );
+  rejects(
+    candidate([{ ...alpha, nameHash: alpha.nameHash.toUpperCase() }]),
+    "wallet_requestPermissions",
+    params
+  );
+  rejects(
+    candidate([{ ...alpha, privateField: true }]),
+    "wallet_requestPermissions",
+    params
+  );
+  for (const name of [
+    "",
+    "Alpha",
+    "-alpha",
+    "alpha-",
+    "_alpha",
+    "alpha_",
+    "alpha.name",
+    "example",
+    "a".repeat(64)
+  ]) {
+    rejects(candidate([hnsDisclosure(name)]), "wallet_requestPermissions", params);
+  }
+
+  rejects(
+    candidate([alpha], ["balance"]),
+    "wallet_requestPermissions",
+    { capabilities: ["balance"] }
+  );
+  rejects(
+    candidate([alpha], ["accounts"], "hns_requestAccounts"),
+    "hns_requestAccounts",
+    null
+  );
+
+  const maximum = Array.from(
+    { length: 64 },
+    (_, index) => hnsDisclosure(`name${String(index).padStart(2, "0")}`)
+  );
+  approve(
+    "wallet_requestPermissions",
+    { capabilities: ["names"] },
+    { kind: "permissions", capabilities: ["names"], hnsNames: maximum }
+  );
+  rejects(
+    candidate([...maximum, hnsDisclosure("name64")]),
+    "wallet_requestPermissions",
+    params
   );
 });
 
@@ -324,6 +468,13 @@ test("actions, typed digests, warnings, and swap finality remain structurally bo
 
 function amount(asset, baseUnits) {
   return { asset, baseUnits };
+}
+
+function hnsDisclosure(name) {
+  return {
+    name,
+    nameHash: createHash("sha3-256").update(name, "ascii").digest("hex")
+  };
 }
 
 function approvalCandidate(method, summary, overrides = {}) {
