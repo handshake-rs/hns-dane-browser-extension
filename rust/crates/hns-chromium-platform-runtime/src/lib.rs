@@ -78,12 +78,35 @@ use hns_resolver::{
     HnsDelegation, HnsProofProvider, HnsResourceValueProvider, PreparedNamespaceResolution,
     ProvenNameRecords, ResolutionAnswer, ResolutionRequest, Resolver, ResolverError,
     ResourceValueAnchor, SqliteResourceValueProvider, SystemDnssecVerifier, UdpTcpDnsTransport,
-    hns_root_label,
+    VerifiedResourceValue as ResolverVerifiedResourceValue, hns_root_label,
 };
 use hns_sync::{
     HeaderSyncCoordinator, HeaderSyncRunner, HeaderSyncRunnerConfig, ProofScheduler, SyncError,
-    TcpHeaderPeerConnector,
+    TcpHeaderPeerConnector, VerifiedResourceValue as SyncVerifiedResourceValue,
+    VerifiedResourceValueSink,
 };
+
+struct ResolverResourceSink<'a>(&'a SqliteResourceValueProvider);
+
+impl VerifiedResourceValueSink for ResolverResourceSink<'_> {
+    type Error = ResolverError;
+
+    fn insert_verified_resource_value(
+        &self,
+        value: SyncVerifiedResourceValue,
+    ) -> Result<(), Self::Error> {
+        self.0.insert(ResolverVerifiedResourceValue {
+            root_name: value.root_name,
+            name_hash: value.name_hash,
+            value: value.value,
+            secure: value.secure,
+            anchor: value.anchor.map(|anchor| ResourceValueAnchor {
+                tree_root: anchor.tree_root,
+                height: anchor.height,
+            }),
+        })
+    }
+}
 pub use hns_transport::DEFAULT_MAX_REQUEST_BODY_BYTES;
 use hns_transport::{
     BrowserTlsDecision, OriginPassthroughShutdown, OriginProtocol, OriginRequest, OriginResponse,
@@ -5982,7 +6005,8 @@ impl GatewayProofProvider {
         if remote.height < proof_height {
             return Err(SyncError::UnexpectedAction);
         }
-        let mut scheduler = ProofScheduler::new(UrkelProofVerifier, &self.values);
+        let mut scheduler =
+            ProofScheduler::new(UrkelProofVerifier, ResolverResourceSink(&self.values));
         scheduler.request_hash_and_store_at_height(
             &mut peer,
             &mut session,

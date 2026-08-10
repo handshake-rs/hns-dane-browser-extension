@@ -206,8 +206,9 @@ explicitly unavailable.
   exact-IP split browser-WebPKI sockets.
 - `hns-resolver`, `hns-dnssec`, `hns-dane`: verified Handshake resolution,
   delegated DNSSEC, and DANE primitives.
-- `hns-chain`, `hns-sync`, `hns-p2p`, and `hns-urkel`: local Handshake header
-  and proof trust path.
+- `hns-chain`, `hns-sync`, `hns-p2p`, and `hns-urkel`: exact-commit private
+  adapters from `hns-dane-engine` for the Handshake header and proof trust path.
+  The source-policy gate forbids restoring product-local copies.
 
 The product-specific adapter remains in this repository. The canonical engine
 contracts constrain authority and policy without claiming that every product
