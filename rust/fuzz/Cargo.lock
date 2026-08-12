@@ -283,8 +283,8 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-dane"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
 dependencies = [
  "hns-browser-dnssec",
  "hns-browser-primitives",
@@ -295,8 +295,8 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-dnssec"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
 dependencies = [
  "hns-browser-primitives",
  "num-bigint",
@@ -310,8 +310,8 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-p2p"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
 dependencies = [
  "getrandom 0.3.4",
  "hns-browser-primitives",
@@ -322,8 +322,8 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-primitives"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
 dependencies = [
  "blake2",
  "hex",
@@ -336,8 +336,8 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-urkel"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=2b23bd55d14d36fe60073606869d75b4796c54f7#2b23bd55d14d36fe60073606869d75b4796c54f7"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
 dependencies = [
  "hns-browser-primitives",
  "thiserror",

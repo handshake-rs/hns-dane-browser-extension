@@ -13,21 +13,21 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE_VERSIONS = {
-    "hns-browser-observability": "0.2.0",
-    "hns-browser-runtime": "0.2.0",
-    "hns-icann-dane": "0.2.0",
-    "hns-namespace-resolution": "0.2.0",
-    "hns-resolution-policy": "0.2.0",
+    "hns-browser-observability": "0.2.1",
+    "hns-browser-runtime": "0.2.1",
+    "hns-icann-dane": "0.2.1",
+    "hns-namespace-resolution": "0.2.1",
+    "hns-resolution-policy": "0.2.1",
 }
 ENGINE_REQUIREMENTS = {
     package: f"={version}" for package, version in ENGINE_VERSIONS.items()
 }
 ENGINE_GIT_URL = "https://github.com/handshake-rs/hns-dane-engine.git"
-ENGINE_REVISION = "2b23bd55d14d36fe60073606869d75b4796c54f7"
+ENGINE_REVISION = "65c397e8347f37085ea67d2c9c745ce896328e64"
 HNS_RS_GIT_URL = "https://github.com/handshake-rs/hns-rs.git"
 HNS_RS_REVISION = "b24b66c382de53330ec21dd3137e056a2bea3e2d"
 APPROVED_ENGINE_GIT = {
-    package: ("0.2.0", ENGINE_REVISION)
+    package: ("0.2.1", ENGINE_REVISION)
     for package in {
         "hns-dane",
         "hns-browser-dane",
