@@ -1,6 +1,5 @@
 //! Fail-closed, per-user installation shared by the setup GUI and CLI.
 
-#[cfg(target_os = "linux")]
 use crate::CANONICAL_EXTENSION_ID;
 use crate::payload::{PRODUCT_LICENSE, THIRD_PARTY_NOTICES};
 use crate::{Browser, NATIVE_HOST_NAME, NativePayload, VERSION};

@@ -298,38 +298,39 @@ impl WalletAbiDiscovery {
         let mut artifact_release_qualified = false;
         let mut artifact_anti_rollback_committed = false;
         let mut artifact_launch_admitted = false;
-        let (artifact_state, reason, summary) = match &self.state {
-            #[cfg(unix)]
-            WalletArtifactState::Missing => ("missing", "walletArtifactMissing", None),
-            WalletArtifactState::Rejected(reason) => ("rejected", reason.code(), None),
-            #[cfg(unix)]
-            WalletArtifactState::IntegrityChecked(artifact) => (
-                "integrityChecked",
-                "walletArtifactAuthenticityUnavailable",
-                Some(artifact),
-            ),
-            #[cfg(unix)]
-            WalletArtifactState::AuthenticityVerified(artifact) => {
-                artifact_authenticity_verified = true;
-                (
-                    "authenticityVerified",
-                    "walletArtifactQualificationUnavailable",
+        let (artifact_state, reason, summary): (&str, &str, Option<&WalletArtifactSummary>) =
+            match &self.state {
+                #[cfg(unix)]
+                WalletArtifactState::Missing => ("missing", "walletArtifactMissing", None),
+                WalletArtifactState::Rejected(reason) => ("rejected", reason.code(), None),
+                #[cfg(unix)]
+                WalletArtifactState::IntegrityChecked(artifact) => (
+                    "integrityChecked",
+                    "walletArtifactAuthenticityUnavailable",
                     Some(artifact),
-                )
-            }
-            #[cfg(unix)]
-            WalletArtifactState::LaunchAdmitted(artifact) => {
-                artifact_authenticity_verified = true;
-                artifact_release_qualified = true;
-                artifact_anti_rollback_committed = true;
-                artifact_launch_admitted = true;
-                (
-                    "launchAdmitted",
-                    "walletServiceTransportUnavailable",
-                    Some(&artifact.summary),
-                )
-            }
-        };
+                ),
+                #[cfg(unix)]
+                WalletArtifactState::AuthenticityVerified(artifact) => {
+                    artifact_authenticity_verified = true;
+                    (
+                        "authenticityVerified",
+                        "walletArtifactQualificationUnavailable",
+                        Some(artifact),
+                    )
+                }
+                #[cfg(unix)]
+                WalletArtifactState::LaunchAdmitted(artifact) => {
+                    artifact_authenticity_verified = true;
+                    artifact_release_qualified = true;
+                    artifact_anti_rollback_committed = true;
+                    artifact_launch_admitted = true;
+                    (
+                        "launchAdmitted",
+                        "walletServiceTransportUnavailable",
+                        Some(&artifact.summary),
+                    )
+                }
+            };
         json!({
             "manifestSchemaVersion": WALLET_ARTIFACT_MANIFEST_SCHEMA_VERSION,
             "requiredWalletAbiVersion": WALLET_ABI_VERSION,
@@ -525,7 +526,6 @@ impl WalletArtifactRejection {
     }
 }
 
-#[cfg(unix)]
 #[derive(Debug)]
 struct WalletArtifactSummary {
     release_id: String,
