@@ -8779,22 +8779,43 @@ fn resolve_service_endpoints(
     port: NonZeroU16,
 ) -> Result<(Vec<AliasStep>, CanonicalHost, Vec<SocketAddr>), PlanBuildError> {
     let ipv4 = resolve_address_family(session, service_target, RecordType::A)?;
-    if session.last_icann_answer_kind() == Some(IcannDohAnswerKind::NxDomain) {
+    let ipv4_kind = session.last_icann_answer_kind();
+    if ipv4_kind == Some(IcannDohAnswerKind::NxDomain) {
         return Err(PlanBuildError::NoUsableEndpoint);
     }
     let ipv6 = resolve_address_family(session, service_target, RecordType::Aaaa)?;
-    if session.last_icann_answer_kind() == Some(IcannDohAnswerKind::NxDomain) {
+    let ipv6_kind = session.last_icann_answer_kind();
+    if ipv6_kind == Some(IcannDohAnswerKind::NxDomain) {
         return if ipv4.2.is_empty() {
             Err(PlanBuildError::NoUsableEndpoint)
         } else {
             Err(PlanBuildError::Malformed)
         };
     }
-    if ipv4.0 != ipv6.0 || ipv4.1 != ipv6.1 {
+    let family_paths_match = ipv4.0 == ipv6.0 && ipv4.1 == ipv6.1;
+    // Some legitimate ICANN authorities return an alias chain only for the
+    // address family that has an endpoint. A validated NODATA response for
+    // the other family is absence, not a conflicting positive alias path.
+    // Keep rejecting different paths when both families are positive, and do
+    // not weaken the stricter HNS plan boundary.
+    let ipv4_only = session.namespace == Namespace::Icann
+        && !ipv4.2.is_empty()
+        && ipv6.2.is_empty()
+        && ipv6_kind == Some(IcannDohAnswerKind::NoData);
+    let ipv6_only = session.namespace == Namespace::Icann
+        && ipv4.2.is_empty()
+        && ipv4_kind == Some(IcannDohAnswerKind::NoData)
+        && !ipv6.2.is_empty();
+    if !family_paths_match && !ipv4_only && !ipv6_only {
         return Err(PlanBuildError::Malformed);
     }
-    let (alias_path, endpoint_target, mut addresses) = ipv4;
-    addresses.extend(ipv6.2);
+    let (alias_path, endpoint_target, mut addresses) = if ipv6_only {
+        ipv6
+    } else {
+        let (alias_path, endpoint_target, mut addresses) = ipv4;
+        addresses.extend(ipv6.2);
+        (alias_path, endpoint_target, addresses)
+    };
     if addresses.is_empty() {
         return Err(PlanBuildError::NoUsableEndpoint);
     }
@@ -21911,6 +21932,111 @@ mod tests {
                 },
                 ResolutionRequest {
                     qname: "welcome".to_owned(),
+                    qtype: RecordType::Aaaa.code(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn icann_nodata_family_accepts_the_other_familys_positive_alias_path() {
+        let now = now_unix_seconds();
+        let host = "www.flipkart.example";
+        let target = "flipkart.example";
+        let query = OriginQuery::new(
+            CanonicalHost::parse(host).unwrap(),
+            hns_namespace_resolution::OriginScheme::Http,
+            NonZeroU16::new(80),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let evidence = IcannDohEvidence::default();
+        for (qname, qtype, kind) in [
+            (host, RecordType::A, IcannDohAnswerKind::Present),
+            (target, RecordType::A, IcannDohAnswerKind::Present),
+            (host, RecordType::Aaaa, IcannDohAnswerKind::NoData),
+        ] {
+            evidence
+                .record(
+                    &ResolutionRequest {
+                        qname: qname.to_owned(),
+                        qtype: qtype.code(),
+                    },
+                    IcannDohObservation {
+                        kind,
+                        secure: false,
+                        rcode: DNS_RCODE_NOERROR,
+                        observed_at_unix: now,
+                        expires_at_unix: now + 60,
+                    },
+                )
+                .unwrap();
+        }
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let built = build_root_resolution(
+            Namespace::Icann,
+            &query,
+            &OriginMapResolver {
+                responses: HashMap::from([
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: vec![cname_record(host, target, 60)],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: target.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(target).unwrap(),
+                            records: vec![address_record(target, [8, 8, 8, 8])],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::Aaaa.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: Vec::new(),
+                            secure: false,
+                        },
+                    ),
+                ]),
+                requests: Arc::clone(&requests),
+            },
+            None,
+            Some(&evidence),
+            NetworkKind::Mainnet,
+            None,
+        );
+        let RootLookup::Present(plan) = built.lookup else {
+            panic!("validated AAAA NODATA must not conflict with the IPv4 alias path");
+        };
+        assert_eq!(plan.endpoints(), &["8.8.8.8:80".parse().unwrap()]);
+        assert_eq!(plan.endpoint_target().as_str(), target);
+        assert_eq!(plan.endpoint_alias_path().len(), 1);
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![
+                ResolutionRequest {
+                    qname: host.to_owned(),
+                    qtype: RecordType::A.code(),
+                },
+                ResolutionRequest {
+                    qname: target.to_owned(),
+                    qtype: RecordType::A.code(),
+                },
+                ResolutionRequest {
+                    qname: host.to_owned(),
                     qtype: RecordType::Aaaa.code(),
                 },
             ]
