@@ -49,7 +49,7 @@ class CargoSourcePolicyTests(unittest.TestCase):
             for package in sorted(ENGINE_PACKAGES)
         )
         dependencies += (
-            '\nhns-light-chain = { version = "=0.2.0", '
+            '\nhns-light-chain = { version = "=0.2.1", '
             f'git = "{ENGINE_GIT_URL}", rev = "{ENGINE_REVISION}" }}\n'
             'hns-service-authority = { version = "=0.2.0", '
             f'git = "{HNS_RS_GIT_URL}", rev = "{HNS_RS_REVISION}" }}'
@@ -68,7 +68,7 @@ class CargoSourcePolicyTests(unittest.TestCase):
         locked_packages += (
             "\n[[package]]\n"
             'name = "hns-light-chain"\n'
-            'version = "0.2.0"\n'
+            'version = "0.2.1"\n'
             f'source = "git+{ENGINE_GIT_URL}?rev={ENGINE_REVISION}#{ENGINE_REVISION}"\n'
             "\n[[package]]\n"
             'name = "hns-service-authority"\n'

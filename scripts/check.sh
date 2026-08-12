@@ -24,7 +24,12 @@ fi
 "${CARGO[@]}" deny --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" check --config "$ROOT_DIR/rust/deny.toml"
 "${CARGO[@]}" test --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" --workspace -- --test-threads=2
 "${CARGO[@]}" build --locked --release --manifest-path "$ROOT_DIR/rust/Cargo.toml" -p hns-chromium-native-host
-HNS_NATIVE_HOST_PATH="$ROOT_DIR/rust/target/release/hns-chromium-native-host" \
+target_directory="$(
+  "${CARGO[@]}" metadata --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" \
+    --no-deps --format-version 1 |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
+)"
+HNS_NATIVE_HOST_PATH="$target_directory/release/hns-chromium-native-host" \
   "${CARGO[@]}" build --locked --release --manifest-path "$ROOT_DIR/rust/Cargo.toml" \
     -p hns-browser-setup --features embedded-host
 "$ROOT_DIR/scripts/fuzz-smoke.sh"

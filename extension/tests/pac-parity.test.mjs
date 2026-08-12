@@ -1,10 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { join, resolve } from "node:path";
 import vm from "node:vm";
 
-const nativeHost = resolve("rust/target/debug/hns-chromium-native-host");
+const cargoTargetDir = resolve(
+  process.env.CARGO_TARGET_DIR ??
+    JSON.parse(
+      execFileSync(
+        "cargo",
+        [
+          "+1.92.0",
+          "metadata",
+          "--no-deps",
+          "--format-version",
+          "1",
+          "--manifest-path",
+          "rust/Cargo.toml"
+        ],
+        { encoding: "utf8" }
+      )
+    ).target_directory
+);
+const nativeHost = join(
+  cargoTargetDir,
+  "debug",
+  process.platform === "win32"
+    ? "hns-chromium-native-host.exe"
+    : "hns-chromium-native-host"
+);
 const port = 43123;
 const pac = runNative(["--print-pac", String(port)]);
 

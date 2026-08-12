@@ -49,18 +49,18 @@ for relative, names in expected_product_packages.items():
 
 expected_engine_packages = {
     "rust/fuzz/Cargo.lock": {
-        "hns-browser-dane": "0.2.0",
-        "hns-browser-dnssec": "0.2.0",
-        "hns-browser-p2p": "0.2.0",
-        "hns-browser-primitives": "0.2.0",
-        "hns-browser-urkel": "0.2.0",
+        "hns-browser-dane": "0.2.1",
+        "hns-browser-dnssec": "0.2.1",
+        "hns-browser-p2p": "0.2.1",
+        "hns-browser-primitives": "0.2.1",
+        "hns-browser-urkel": "0.2.1",
     },
     "tools/hns-header-snapshot-exporter/Cargo.lock": {
-        "hns-browser-chain": "0.2.0",
-        "hns-browser-p2p": "0.2.0",
-        "hns-browser-primitives": "0.2.0",
-        "hns-browser-sync": "0.2.0",
-        "hns-browser-urkel": "0.2.0",
+        "hns-browser-chain": "0.2.1",
+        "hns-browser-p2p": "0.2.1",
+        "hns-browser-primitives": "0.2.1",
+        "hns-browser-sync": "0.2.1",
+        "hns-browser-urkel": "0.2.1",
     },
 }
 for relative, expected in expected_engine_packages.items():

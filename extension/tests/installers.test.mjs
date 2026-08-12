@@ -11,9 +11,33 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
-const nativeHost = resolve("rust/target/debug/hns-chromium-native-host");
+const cargoTargetDir = resolve(
+  process.env.CARGO_TARGET_DIR ??
+    JSON.parse(
+      execFileSync(
+        "cargo",
+        [
+          "+1.92.0",
+          "metadata",
+          "--no-deps",
+          "--format-version",
+          "1",
+          "--manifest-path",
+          "rust/Cargo.toml"
+        ],
+        { encoding: "utf8" }
+      )
+    ).target_directory
+);
+const nativeHost = join(
+  cargoTargetDir,
+  "debug",
+  process.platform === "win32"
+    ? "hns-chromium-native-host.exe"
+    : "hns-chromium-native-host"
+);
 const installScript = resolve("extension/install/install.sh");
 const uninstallScript = resolve("extension/install/uninstall.sh");
 const extensionId = "abcdefghijklmnopabcdefghijklmnop";
