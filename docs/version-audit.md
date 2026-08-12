@@ -1,6 +1,6 @@
 # Version Audit
 
-Audit date: 2026-08-10
+Audit date: 2026-08-12
 
 This table records configured versions for the Chromium extension, native
 host, and Setup build. It does not claim that each entry is the newest
@@ -8,13 +8,13 @@ upstream release.
 
 | Component | Configured version/source |
 | --- | --- |
-| Extension package | `0.5.6` |
-| Rust workspace | `0.5.6` |
-| HNS DANE Browser Setup | `0.5.6` |
+| Extension package | `0.5.7` |
+| Rust workspace | `0.5.7` |
+| HNS DANE Browser Setup | `0.5.7` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
-| Consolidated engine source | Git `2b23bd55d14d36fe60073606869d75b4796c54f7`, version `0.2.0` |
+| Consolidated engine source | Git `65c397e8347f37085ea67d2c9c745ce896328e64`, version `0.2.1` |
 | HNSA authority source | `hns-rs` Git `b24b66c382de53330ec21dd3137e056a2bea3e2d`, version `0.2.0` |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
@@ -28,7 +28,7 @@ upstream release.
 | ring | `0.17.14` |
 
 Published `v0.5.5` used the five checksum-verified crates.io `0.1.0` packages
-below. The `0.5.6` candidate consumes their `0.2.0` successors and the private
+below. The `0.5.7` candidate consumes their `0.2.1` successors and the private
 adapters from the one exact, final dated engine Git revision shown above:
 
 - `hns-browser-runtime`;

@@ -34,10 +34,10 @@ Generated input SHA-256:
   scripts/verify_cargo_git_policy.py = 1688fbf5aa0f73216e35667c11d06ed84208892033c2f64fa2065468022a875a
   release/license-texts/BSL-1.0.txt = c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566
   release/license-texts/CC0-1.0.txt = 8c5bfd05728b98356d25742d60344c8f39a82faacf5758451c2628b0f9f9773f
-  rust/Cargo.toml = 7e279f524bfc54af4cf3d9f2b6be506433924ca86d71c3a0ab54fee57050e240
-  rust/Cargo.lock = 846016359c4dd35f6d97eca1f0485ba1be9090eabf8f58c592fa6ad00d1d7f2d
-  extension/manifest.json = 7110e7d605b711e3e92986f82bd41b46d9658d38abb83b41e4c47794386c855a
-  package.json = 79e9b445a0c9ff688412c91195312e486b3996ca05c8cc1aec6920f7c0062b34
+  rust/Cargo.toml = a0ae168559d39ffb4c187b2ef0a41a808f34dded38a1607ea8c3846330032952
+  rust/Cargo.lock = a65e5455d14dbbd7f50c895cc5dff7c70bb7624a0a5ed7873780609015ef5799
+  extension/manifest.json = a38b9660fcccf53d58cbd3cc5ac9fa8cbaa3703251eee7b8c9793da9283fd8c8
+  package.json = 8dd5f6ff1ec87a73b172632a12be7e8053e2a1865cf1d6e6bd8046d8c430c704
   rust/crates/hns-browser-setup/Cargo.toml = 5a610d1b9c4f000fa1beca13dcb715c2cba23f8f29222c40b66a691bf0d2b9d1
   rust/crates/hns-chromium-native-host/Cargo.toml = fd91c86f3618f94a8fc2b45d70f51a0fca67cc4734bd8fbf7aca073050fd4019
   rust/crates/hns-chromium-platform-runtime/Cargo.toml = d0600a601098c2f0cb2119fa33ea115711fa2a4d4fb5929bf27b8c22e4fddff9

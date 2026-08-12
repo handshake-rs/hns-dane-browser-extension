@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.5.7 - 2026-08-12
+
+### Changed
+
+- Advance every product, fuzzing, and snapshot-exporter dependency to the
+  consolidated `hns-dane-engine` `0.2.1` source revision.
+- Honor Cargo's configured target directory in the complete project gate and
+  native-host JavaScript integration tests.
+
+### Fixed
+
+- Accept a positive ICANN address-family alias path when the other family has
+  validated NODATA, while continuing to reject conflicting positive paths and
+  retaining the stricter HNS boundary. This restores IPv4-only sites such as
+  Flipkart without bypassing dual-root classification.
+
 ## 0.5.6 - 2026-08-10
 
 ### Changed
