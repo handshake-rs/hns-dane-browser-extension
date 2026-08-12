@@ -8,9 +8,9 @@ upstream release.
 
 | Component | Configured version/source |
 | --- | --- |
-| Extension package | `0.5.7` |
-| Rust workspace | `0.5.7` |
-| HNS DANE Browser Setup | `0.5.7` |
+| Extension package | `0.5.8` |
+| Rust workspace | `0.5.8` |
+| HNS DANE Browser Setup | `0.5.8` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
@@ -26,9 +26,10 @@ upstream release.
 | p256 | `0.13` |
 | k256 | `0.13` |
 | ring | `0.17.14` |
+| webbrowser | `1.2.2` |
 
 Published `v0.5.5` used the five checksum-verified crates.io `0.1.0` packages
-below. The `0.5.7` candidate consumes their `0.2.1` successors and the private
+below. The `0.5.8` candidate consumes their `0.2.1` successors and the private
 adapters from the one exact, final dated engine Git revision shown above:
 
 - `hns-browser-runtime`;

@@ -10,10 +10,10 @@ excluded.
 The extension JavaScript has no third-party runtime package dependency.
 
 Supported desktop Rust target closure counts:
-  hns-browser-setup @ aarch64-apple-darwin: 210 external Cargo components
+  hns-browser-setup @ aarch64-apple-darwin: 209 external Cargo components
   hns-browser-setup @ aarch64-pc-windows-msvc: 205 external Cargo components
   hns-browser-setup @ aarch64-unknown-linux-gnu: 289 external Cargo components
-  hns-browser-setup @ x86_64-apple-darwin: 210 external Cargo components
+  hns-browser-setup @ x86_64-apple-darwin: 209 external Cargo components
   hns-browser-setup @ x86_64-pc-windows-msvc: 205 external Cargo components
   hns-browser-setup @ x86_64-unknown-linux-gnu: 289 external Cargo components
   hns-chromium-native-host @ aarch64-apple-darwin: 195 external Cargo components
@@ -34,16 +34,16 @@ Generated input SHA-256:
   scripts/verify_cargo_git_policy.py = 1688fbf5aa0f73216e35667c11d06ed84208892033c2f64fa2065468022a875a
   release/license-texts/BSL-1.0.txt = c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566
   release/license-texts/CC0-1.0.txt = 8c5bfd05728b98356d25742d60344c8f39a82faacf5758451c2628b0f9f9773f
-  rust/Cargo.toml = a0ae168559d39ffb4c187b2ef0a41a808f34dded38a1607ea8c3846330032952
-  rust/Cargo.lock = a65e5455d14dbbd7f50c895cc5dff7c70bb7624a0a5ed7873780609015ef5799
-  extension/manifest.json = a38b9660fcccf53d58cbd3cc5ac9fa8cbaa3703251eee7b8c9793da9283fd8c8
-  package.json = 8dd5f6ff1ec87a73b172632a12be7e8053e2a1865cf1d6e6bd8046d8c430c704
+  rust/Cargo.toml = 431eba0214659ca21aa83a2e623ebc818b937d1d7649665b14b180a4b17cef33
+  rust/Cargo.lock = e2758bd8c5afaac5f6d02094b64e07a7962cda826fe6b437b45724ae8ebb9e6f
+  extension/manifest.json = 75c84b8af9c4c1d68d61bdca27fe5c80881f661949fb9ec7ab1c2fd67fa26304
+  package.json = 2e9739b8e026b17e28191b8c5f8e0e628a1345d1d00b68a1bd1f44f4f9abc8bf
   rust/crates/hns-browser-setup/Cargo.toml = 5a610d1b9c4f000fa1beca13dcb715c2cba23f8f29222c40b66a691bf0d2b9d1
   rust/crates/hns-chromium-native-host/Cargo.toml = fd91c86f3618f94a8fc2b45d70f51a0fca67cc4734bd8fbf7aca073050fd4019
   rust/crates/hns-chromium-platform-runtime/Cargo.toml = d0600a601098c2f0cb2119fa33ea115711fa2a4d4fb5929bf27b8c22e4fddff9
   rust/crates/hns-meshmine-pool-stats/Cargo.toml = f0a46335239367ac12e0b15a487ced2737612adbab056bf4ee6b836b251ce4dc
 
-RUST COMPONENTS (449)
+RUST COMPONENTS (448)
   accesskit 0.24.1 | MIT OR Apache-2.0
   accesskit_atspi_common 0.18.1 | MIT OR Apache-2.0
   accesskit_consumer 0.35.0 | MIT OR Apache-2.0
@@ -115,7 +115,6 @@ RUST COMPONENTS (449)
   colorchoice 1.0.5 | MIT OR Apache-2.0
   concurrent-queue 2.5.0 | Apache-2.0 OR MIT
   const-oid 0.9.6 | Apache-2.0 OR MIT
-  core-foundation 0.10.1 | MIT OR Apache-2.0
   core-foundation 0.9.4 | MIT OR Apache-2.0
   core-foundation-sys 0.8.7 | MIT OR Apache-2.0
   core-graphics 0.23.2 | MIT OR Apache-2.0
@@ -434,7 +433,7 @@ RUST COMPONENTS (449)
   wayland-scanner 0.31.11 | MIT
   wayland-sys 0.31.11 | MIT
   web-time 1.1.0 | MIT OR Apache-2.0
-  webbrowser 1.2.1 | MIT OR Apache-2.0
+  webbrowser 1.2.2 | MIT OR Apache-2.0
   webpki-roots 1.0.8 | CDLA-Permissive-2.0
   weezl 0.1.12 | MIT OR Apache-2.0
   wgpu 29.0.4 | MIT OR Apache-2.0
@@ -4228,7 +4227,6 @@ third-party/chromium/LICENSE.
 Notice SHA-256: 3bfacc197ff245b6217891d481f11cf9be791a06baa086ba1f80c80a2273e947
 Applies to:
   - Rust crate cgl 0.3.2
-  - Rust crate core-foundation 0.10.1
   - Rust crate core-foundation 0.9.4
   - Rust crate core-foundation-sys 0.8.7
   - Rust crate core-graphics 0.23.2
@@ -9537,7 +9535,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 ================================================================================
 Notice SHA-256: 82d2cc0ccece30bbaa33b475a66519ccf2b7c14c67cac44f785b56c25d0f70a8
 Applies to:
-  - Rust crate webbrowser 1.2.1
+  - Rust crate webbrowser 1.2.2
 Source file names:
   - LICENSE-APACHE
 --------------------------------------------------------------------------------
@@ -10688,7 +10686,7 @@ DEALINGS IN THE SOFTWARE.
 ================================================================================
 Notice SHA-256: 8e71c7516506e7513f4abd2db1f23d4be5643f0bf550fff76586f237bba8c71c
 Applies to:
-  - Rust crate webbrowser 1.2.1
+  - Rust crate webbrowser 1.2.2
 Source file names:
   - LICENSE-MIT
 --------------------------------------------------------------------------------
@@ -10925,7 +10923,6 @@ Applies to:
   - Rust crate cfg-if 1.0.4
   - Rust crate cgl 0.3.2
   - Rust crate concurrent-queue 2.5.0
-  - Rust crate core-foundation 0.10.1
   - Rust crate core-foundation 0.9.4
   - Rust crate core-foundation-sys 0.8.7
   - Rust crate core-graphics 0.23.2

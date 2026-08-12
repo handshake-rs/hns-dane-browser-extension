@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.5.8 - 2026-08-12
+
+### Fixed
+
+- Upgrade `webbrowser` to `1.2.2` to close `RUSTSEC-2026-0257` in the Setup
+  application's transitive GUI dependency graph.
+- Restore Windows native-host and macOS Setup release compilation by making
+  platform-neutral status and legacy-registration types explicit.
+
 ## 0.5.7 - 2026-08-12
 
 ### Changed
