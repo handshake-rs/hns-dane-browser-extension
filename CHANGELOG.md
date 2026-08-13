@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Add a dormant Linux Chromium wallet-service transport/controller foundation.
+  It negotiates ABI-v2 sessions and exposes only correlated, deadline-bounded
+  read-only status calls. It is deliberately not joined to artifact launch or
+  database configuration; production trust/pin/floor tables and every
+  provider/value availability gate remain empty or false.
 - Require an independently entered canonical HNS name before the popup contacts
   a MeshMine public-statistics endpoint. The extension validates the exact
   lowercase label, derives its SHA3-256 name hash locally, and persists it only

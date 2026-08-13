@@ -190,6 +190,19 @@ The memfd seal covers only the main executable. A dynamically linked
 interpreter/library closure and the local wall clock used for signed
 not-before/expiry checks remain explicit production-qualification inputs.
 
+The Linux source now contains the smallest read-only child-pipe controller for
+a future qualified release. It performs one synchronous request at a time using
+the ABI-v2 four-byte big-endian frame, one absolute I/O deadline, fresh random
+host/request IDs, exact restart/session/directional sequence correlation,
+closed capabilities bounded by a caller-supplied admitted ceiling, exact
+limits, and kill-and-wait child cleanup on EOF, timeout, write failure,
+malformed output, or drop. The only implemented request is private wallet
+`status`; even a service hello containing provider or value capabilities cannot
+make those browser product gates true. This controller is deliberately not
+joined to the artifact launcher or to database configuration. No production
+path invokes it while the verifier-owned trust, qualification, and floor tables
+remain empty.
+
 ## Lifecycle, upgrade, and removal
 
 Inspection runs when the native host opens and is refreshed at the initial
@@ -227,14 +240,16 @@ The Chromium product is still not end-to-end wallet complete:
 - no independently signed wallet service artifact has been qualified, so the
   production signer, exact-release, and release-floor tables remain empty;
 - the Linux sealed-execution primitive is not joined to a released Chromium
-  child-pipe transport, and macOS/Windows equivalents do not exist;
+  child-pipe product path; its dormant read-only source controller is not
+  production-reachable, and macOS/Windows equivalents do not exist;
 - no released browser-engine opaque-authority adapter is consumable by this
   native host;
 - no reviewed native-to-public approval projection adapter is joined; and
-- the checked-in wallet subprocess runtime advertises framing, restart,
-  authority-registry, structured-approval, and typed-event foundations only.
-  It does not advertise provider dispatch, browser integration, wallet
-  operations, or value movement.
+- the checked-in persistent-control subprocess advertises the five base
+  capabilities plus persistent permissions, wallet operations, and provider
+  dispatch. Those are private negotiated service capabilities; they do not
+  supply browser authority or make the public provider available. It does not
+  advertise browser integration or value movement.
 
 The native host therefore parses typed command envelopes only to return an
 explicit unavailable error. With empty production trust and qualification

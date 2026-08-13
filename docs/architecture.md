@@ -327,14 +327,24 @@ libraries requested by a dynamically linked artifact. Production
 qualification must therefore require a self-contained artifact or separately
 pin and audit its complete runtime dependency closure.
 
+The Linux module also owns a dormant ABI-v2 read-only subprocess controller.
+It uses absolute-deadline nonblocking frames, correlates exact host/service
+sessions, restart generations, directional sequences, and request IDs, rejects
+runtime capabilities outside its caller-supplied admitted ceiling, and kills
+and reaps a child after any transport or protocol failure. Only wallet status
+is representable in this tranche. The controller is deliberately not joined to
+artifact launch or database configuration, and negotiating provider or value
+capabilities does not satisfy browser authority, projection, release, or
+availability gates.
+
 No production trust root, release pin, or release floor is configured yet, and
 test keys are compiled only for tests. No independently released service,
-reviewed Chromium transport, or native-to-public approval projection adapter is
-joined, and the current engine exposes no consumable opaque wallet authority
-context. The controller therefore never calls the launcher. All three parsed
-wallet command envelopes fail closed, `handshakeWalletProvider` is false, and
-provider injection cannot occur. The browser's DANE runtime is independent of
-this unavailable optional join.
+released Chromium transport join, or native-to-public approval projection
+adapter is joined, and the current engine exposes no consumable opaque wallet
+authority context. The browser controller therefore never calls the launcher.
+All three parsed wallet command envelopes fail closed,
+`handshakeWalletProvider` is false, and provider injection cannot occur. The
+browser's DANE runtime is independent of this unavailable optional join.
 
 Repeated provider initialization under an identical authority preserves replay
 and rate state. A generation transition replaces it. Header maintenance rotates

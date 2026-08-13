@@ -10,6 +10,8 @@
 
 #[cfg(unix)]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+#[cfg(target_os = "linux")]
+use getrandom::fill as fill_random;
 #[cfg(unix)]
 use ring::signature::{self, UnparsedPublicKey};
 #[cfg(unix)]
@@ -25,13 +27,17 @@ use std::ffi::CString;
 use std::fs::{self, File};
 #[cfg(unix)]
 use std::io::{self, Read, Seek, SeekFrom, Write};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, RawFd};
 #[cfg(unix)]
 use std::path::Component;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
-use std::process::Child;
+use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "linux")]
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, ChildStdout};
+#[cfg(target_os = "linux")]
+use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,6 +45,14 @@ pub(crate) const WALLET_ABI_VERSION: u16 = 2;
 pub(crate) const WALLET_SERVICE_PROTOCOL_VERSION: u16 = 2;
 pub(crate) const WALLET_PROVIDER_SCHEMA_VERSION: u16 = 1;
 pub(crate) const WALLET_ABI_MAX_FRAME_BYTES: u32 = 1_048_576;
+#[cfg(target_os = "linux")]
+const WALLET_SERVICE_SESSION_BYTES: usize = 32;
+#[cfg(target_os = "linux")]
+const WALLET_SERVICE_REQUEST_ID_BYTES: usize = 16;
+#[cfg(target_os = "linux")]
+const MAX_NEGOTIATED_SERVICE_CAPABILITIES: usize = 64;
+#[cfg(target_os = "linux")]
+const MAX_WALLET_SERVICE_FAILURE_MESSAGE_BYTES: usize = 1_024;
 const WALLET_APPROVAL_SCHEMA_VERSION: u16 = 3;
 const WALLET_ARTIFACT_MANIFEST_SCHEMA_VERSION: u16 = 2;
 #[cfg(unix)]
@@ -240,6 +254,796 @@ struct WalletReleaseFloor {
     minimum_sequence: u64,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "camelCase")]
+enum NegotiatedWalletServiceCapability {
+    CanonicalFraming,
+    RestartIsolation,
+    OpaqueAuthorityRegistry,
+    PersistentPermissions,
+    StructuredApprovals,
+    TypedEvents,
+    WalletOperations,
+    ProviderDispatch,
+    ValueMovement,
+    BrowserIntegration,
+}
+
+#[cfg(target_os = "linux")]
+impl NegotiatedWalletServiceCapability {
+    fn from_wire_name(value: &str) -> Option<Self> {
+        match value {
+            "canonicalFraming" => Some(Self::CanonicalFraming),
+            "restartIsolation" => Some(Self::RestartIsolation),
+            "opaqueAuthorityRegistry" => Some(Self::OpaqueAuthorityRegistry),
+            "persistentPermissions" => Some(Self::PersistentPermissions),
+            "structuredApprovals" => Some(Self::StructuredApprovals),
+            "typedEvents" => Some(Self::TypedEvents),
+            "walletOperations" => Some(Self::WalletOperations),
+            "providerDispatch" => Some(Self::ProviderDispatch),
+            "valueMovement" => Some(Self::ValueMovement),
+            "browserIntegration" => Some(Self::BrowserIntegration),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NegotiatedWalletServiceLimits {
+    outer_frame_bytes: u32,
+    provider_request_bytes: u32,
+    provider_result_bytes: u32,
+    provider_event_bytes: u32,
+    approval_frame_bytes: u32,
+    approval_lifetime_ms: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl NegotiatedWalletServiceLimits {
+    fn is_exact_v2(&self) -> bool {
+        self.outer_frame_bytes == WALLET_ABI_MAX_FRAME_BYTES
+            && self.provider_request_bytes == 65_536
+            && self.provider_result_bytes == 262_144
+            && self.provider_event_bytes == 65_536
+            && self.approval_frame_bytes == 16_384
+            && self.approval_lifetime_ms == 90_000
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Serialize)]
+#[serde(
+    tag = "frameType",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum WalletHostHelloFrame<'a> {
+    Hello { hello: WalletHostHello<'a> },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WalletHostHello<'a> {
+    protocol_version: u16,
+    platform: &'static str,
+    host_session_id: &'a str,
+    restart_generation: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(
+    tag = "frameType",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum WalletServiceHelloFrame {
+    Hello { hello: WalletServiceHello },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WalletServiceHello {
+    protocol_version: u16,
+    platform: String,
+    host_session_id: String,
+    service_session_id: String,
+    restart_generation: u64,
+    capabilities: Vec<NegotiatedWalletServiceCapability>,
+    limits: NegotiatedWalletServiceLimits,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Serialize)]
+#[serde(
+    tag = "frameType",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum WalletHostRequestFrame<'a> {
+    Request {
+        envelope: WalletHostRequestEnvelope<'a>,
+    },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WalletHostRequestEnvelope<'a> {
+    protocol_version: u16,
+    host_session_id: &'a str,
+    service_session_id: &'a str,
+    restart_generation: u64,
+    channel_sequence: u64,
+    request_id: &'a str,
+    body: WalletReadOnlyServiceRequest,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(
+    tag = "operation",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum WalletReadOnlyServiceRequest {
+    Wallet { request: WalletReadOnlyRequest },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(tag = "operation", rename_all = "camelCase")]
+enum WalletReadOnlyRequest {
+    Status,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(
+    tag = "frameType",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum WalletServiceResponseFrame {
+    Response {
+        envelope: WalletServiceResponseEnvelope,
+    },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WalletServiceResponseEnvelope {
+    protocol_version: u16,
+    host_session_id: String,
+    service_session_id: String,
+    restart_generation: u64,
+    channel_sequence: u64,
+    request_id: String,
+    body: WalletReadOnlyServiceResponse,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "result",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum WalletReadOnlyServiceResponse {
+    Wallet { response: WalletReadOnlyResponse },
+    Failure { failure: WalletServiceFailure },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+enum WalletServiceErrorCode {
+    InvalidFrame,
+    VersionMismatch,
+    SessionMismatch,
+    SequenceMismatch,
+    AuthorityUnknown,
+    AuthorityStale,
+    PermissionDenied,
+    ApprovalStale,
+    WalletLocked,
+    RateLimited,
+    Replay,
+    UnsupportedCapability,
+    InvalidRequest,
+    PersistenceFailure,
+    RuntimeFailure,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletServiceErrorCode {
+    fn is_protocol_failure(self) -> bool {
+        matches!(
+            self,
+            Self::InvalidFrame
+                | Self::VersionMismatch
+                | Self::SessionMismatch
+                | Self::SequenceMismatch
+                | Self::Replay
+                | Self::UnsupportedCapability
+        )
+    }
+
+    fn operation_error_message(self) -> &'static str {
+        match self {
+            Self::AuthorityUnknown => "wallet service authority is unknown",
+            Self::AuthorityStale => "wallet service authority is stale",
+            Self::PermissionDenied => "wallet service denied the operation",
+            Self::ApprovalStale => "wallet service approval is stale",
+            Self::WalletLocked => "wallet service is locked",
+            Self::RateLimited => "wallet service rate limited the operation",
+            Self::InvalidRequest => "wallet service rejected the operation",
+            Self::PersistenceFailure => "wallet service persistence failed",
+            Self::RuntimeFailure => "wallet service runtime failed",
+            Self::InvalidFrame
+            | Self::VersionMismatch
+            | Self::SessionMismatch
+            | Self::SequenceMismatch
+            | Self::Replay
+            | Self::UnsupportedCapability => "wallet service reported a protocol failure",
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WalletServiceFailure {
+    code: WalletServiceErrorCode,
+    message: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    unsupported_capability: Option<NegotiatedWalletServiceCapability>,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletServiceFailure {
+    fn validate(&self) -> bool {
+        !self.message.is_empty()
+            && self.message.len() <= MAX_WALLET_SERVICE_FAILURE_MESSAGE_BYTES
+            && self.message.is_ascii()
+            && (self.code == WalletServiceErrorCode::UnsupportedCapability)
+                == self.unsupported_capability.is_some()
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "result",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum WalletReadOnlyResponse {
+    Status { status: WalletReadOnlyStatus },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum WalletReadOnlyModule {
+    Handshake,
+    Bitcoin,
+    Ethereum,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct WalletReadOnlyStatus {
+    pub(crate) locked: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub(crate) active_wallet: Option<[u8; 16]>,
+    enabled_modules: Vec<WalletReadOnlyModule>,
+    pub(crate) mainnet_settlement_enabled: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn deserialize_required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlyStatus {
+    #[allow(dead_code)]
+    pub(crate) fn enabled_modules(&self) -> &[WalletReadOnlyModule] {
+        &self.enabled_modules
+    }
+
+    fn validate(&self) -> bool {
+        self.enabled_modules.len() <= 3
+            && self
+                .enabled_modules
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                == self.enabled_modules.len()
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct WalletServiceProcess {
+    child: Option<Child>,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletServiceProcess {
+    fn new(child: Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn terminate(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if child.try_wait().ok().flatten().is_none() {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for WalletServiceProcess {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) struct WalletServiceController<R: Read + AsRawFd, W: Write + AsRawFd> {
+    reader: R,
+    writer: W,
+    process: Option<WalletServiceProcess>,
+    timeout: Duration,
+    host_session_id: String,
+    service_session_id: String,
+    restart_generation: u64,
+    next_host_sequence: u64,
+    next_service_sequence: u64,
+    capabilities: BTreeSet<NegotiatedWalletServiceCapability>,
+    poisoned: bool,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub(crate) type SpawnedWalletServiceController = WalletServiceController<ChildStdout, ChildStdin>;
+
+#[cfg(target_os = "linux")]
+impl WalletServiceController<ChildStdout, ChildStdin> {
+    #[allow(dead_code)]
+    fn negotiate_spawned(
+        mut child: Child,
+        admitted_capabilities: BTreeSet<NegotiatedWalletServiceCapability>,
+        restart_generation: u64,
+        timeout: Duration,
+    ) -> io::Result<Self> {
+        let reader = match child.stdout.take() {
+            Some(reader) => reader,
+            None => {
+                let mut process = WalletServiceProcess::new(child);
+                process.terminate();
+                return Err(io::Error::other(
+                    "wallet service stdout pipe is unavailable",
+                ));
+            }
+        };
+        let writer = match child.stdin.take() {
+            Some(writer) => writer,
+            None => {
+                let mut process = WalletServiceProcess::new(child);
+                process.terminate();
+                return Err(io::Error::other("wallet service stdin pipe is unavailable"));
+            }
+        };
+        Self::negotiate(
+            reader,
+            writer,
+            Some(WalletServiceProcess::new(child)),
+            admitted_capabilities,
+            restart_generation,
+            timeout,
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
+    fn negotiate(
+        reader: R,
+        writer: W,
+        process: Option<WalletServiceProcess>,
+        admitted_capabilities: BTreeSet<NegotiatedWalletServiceCapability>,
+        restart_generation: u64,
+        timeout: Duration,
+    ) -> io::Result<Self> {
+        if restart_generation == 0 || timeout.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "wallet service restart generation and I/O timeout must be nonzero",
+            ));
+        }
+        set_nonblocking_fd(reader.as_raw_fd())?;
+        set_nonblocking_fd(writer.as_raw_fd())?;
+        let host_session_id = random_wallet_wire_id::<WALLET_SERVICE_SESSION_BYTES>()?;
+        let mut controller = Self {
+            reader,
+            writer,
+            process,
+            timeout,
+            host_session_id,
+            service_session_id: String::new(),
+            restart_generation,
+            next_host_sequence: 1,
+            next_service_sequence: 1,
+            capabilities: BTreeSet::new(),
+            poisoned: false,
+        };
+        let frame = WalletHostHelloFrame::Hello {
+            hello: WalletHostHello {
+                protocol_version: WALLET_SERVICE_PROTOCOL_VERSION,
+                platform: "chromiumNativeHost",
+                host_session_id: &controller.host_session_id,
+                restart_generation,
+            },
+        };
+        let payload = serde_json::to_vec(&frame).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "wallet hello encoding failed")
+        })?;
+        let response = controller.exchange(&payload)?;
+        let response = serde_json::from_slice::<WalletServiceHelloFrame>(&response)
+            .map_err(|_| controller.protocol_error("wallet service hello is malformed"))?;
+        let WalletServiceHelloFrame::Hello { hello } = response;
+        if hello.protocol_version != WALLET_SERVICE_PROTOCOL_VERSION
+            || hello.platform != "chromiumNativeHost"
+            || hello.host_session_id != controller.host_session_id
+            || hello.restart_generation != restart_generation
+            || !valid_wallet_wire_id(&hello.service_session_id, WALLET_SERVICE_SESSION_BYTES)
+            || !hello.limits.is_exact_v2()
+            || hello.capabilities.is_empty()
+            || hello.capabilities.len() > MAX_NEGOTIATED_SERVICE_CAPABILITIES
+        {
+            return Err(controller.protocol_error("wallet service hello contract mismatch"));
+        }
+        let capability_count = hello.capabilities.len();
+        let capabilities = hello.capabilities.into_iter().collect::<BTreeSet<_>>();
+        if capabilities.is_empty()
+            || capabilities.len() > MAX_NEGOTIATED_SERVICE_CAPABILITIES
+            || capabilities.len() != capability_count
+            || !capabilities.is_subset(&admitted_capabilities)
+            || !capabilities.contains(&NegotiatedWalletServiceCapability::CanonicalFraming)
+            || !capabilities.contains(&NegotiatedWalletServiceCapability::RestartIsolation)
+            || !capabilities.contains(&NegotiatedWalletServiceCapability::OpaqueAuthorityRegistry)
+            || !capabilities.contains(&NegotiatedWalletServiceCapability::StructuredApprovals)
+            || !capabilities.contains(&NegotiatedWalletServiceCapability::TypedEvents)
+            || (capabilities.contains(&NegotiatedWalletServiceCapability::ValueMovement)
+                && !capabilities.contains(&NegotiatedWalletServiceCapability::ProviderDispatch))
+        {
+            return Err(controller.protocol_error("wallet service capabilities are invalid"));
+        }
+        controller.service_session_id = hello.service_session_id;
+        controller.capabilities = capabilities;
+        Ok(controller)
+    }
+
+    /// Performs the sole operation in this tranche. It cannot register page
+    /// authority, dispatch provider methods, approve work, or move value.
+    #[allow(dead_code)]
+    pub(crate) fn read_status(&mut self) -> io::Result<WalletReadOnlyStatus> {
+        if self.poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "wallet service controller is poisoned",
+            ));
+        }
+        if !self
+            .capabilities
+            .contains(&NegotiatedWalletServiceCapability::WalletOperations)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet service did not negotiate read-only wallet operations",
+            ));
+        }
+        let request_id = random_wallet_wire_id::<WALLET_SERVICE_REQUEST_ID_BYTES>()?;
+        let host_sequence = self.next_host_sequence;
+        let frame = WalletHostRequestFrame::Request {
+            envelope: WalletHostRequestEnvelope {
+                protocol_version: WALLET_SERVICE_PROTOCOL_VERSION,
+                host_session_id: &self.host_session_id,
+                service_session_id: &self.service_session_id,
+                restart_generation: self.restart_generation,
+                channel_sequence: host_sequence,
+                request_id: &request_id,
+                body: WalletReadOnlyServiceRequest::Wallet {
+                    request: WalletReadOnlyRequest::Status,
+                },
+            },
+        };
+        let payload = serde_json::to_vec(&frame).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "wallet status encoding failed")
+        })?;
+        let response = self.exchange(&payload)?;
+        let response = serde_json::from_slice::<WalletServiceResponseFrame>(&response)
+            .map_err(|_| self.protocol_error("wallet status response is malformed"))?;
+        let WalletServiceResponseFrame::Response { envelope } = response;
+        if envelope.protocol_version != WALLET_SERVICE_PROTOCOL_VERSION
+            || envelope.host_session_id != self.host_session_id
+            || envelope.service_session_id != self.service_session_id
+            || envelope.restart_generation != self.restart_generation
+            || envelope.channel_sequence != self.next_service_sequence
+            || envelope.request_id != request_id
+        {
+            return Err(self.protocol_error("wallet status response session or sequence mismatch"));
+        }
+        match envelope.body {
+            WalletReadOnlyServiceResponse::Wallet { response } => {
+                let WalletReadOnlyResponse::Status { status } = response;
+                if !status.validate() {
+                    return Err(
+                        self.protocol_error("wallet status response violates bounded contract")
+                    );
+                }
+                self.advance_sequences()?;
+                Ok(status)
+            }
+            WalletReadOnlyServiceResponse::Failure { failure } => {
+                if !failure.validate() {
+                    return Err(self.protocol_error("wallet service failure is malformed"));
+                }
+                if failure.code.is_protocol_failure() {
+                    return Err(self.protocol_error("wallet service reported a protocol failure"));
+                }
+                self.advance_sequences()?;
+                Err(io::Error::other(failure.code.operation_error_message()))
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn provider_available(&self) -> bool {
+        false
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn value_available(&self) -> bool {
+        false
+    }
+
+    fn exchange(&mut self, payload: &[u8]) -> io::Result<Vec<u8>> {
+        if self.poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "wallet service controller is poisoned",
+            ));
+        }
+        let Some(deadline) = Instant::now().checked_add(self.timeout) else {
+            self.poison();
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "wallet service frame deadline is outside the clock range",
+            ));
+        };
+        if let Err(error) = write_wallet_payload(&mut self.writer, payload, deadline) {
+            self.poison();
+            return Err(error);
+        }
+        match read_wallet_payload(&mut self.reader, deadline) {
+            Ok(payload) => Ok(payload),
+            Err(error) => {
+                self.poison();
+                Err(error)
+            }
+        }
+    }
+
+    fn protocol_error(&mut self, message: &'static str) -> io::Error {
+        self.poison();
+        io::Error::new(io::ErrorKind::InvalidData, message)
+    }
+
+    fn advance_sequences(&mut self) -> io::Result<()> {
+        let Some(next_host_sequence) = self.next_host_sequence.checked_add(1) else {
+            return Err(self.protocol_error("wallet host sequence exhausted"));
+        };
+        let Some(next_service_sequence) = self.next_service_sequence.checked_add(1) else {
+            return Err(self.protocol_error("wallet service sequence exhausted"));
+        };
+        self.next_host_sequence = next_host_sequence;
+        self.next_service_sequence = next_service_sequence;
+        Ok(())
+    }
+
+    fn poison(&mut self) {
+        self.poisoned = true;
+        if let Some(process) = &mut self.process {
+            process.terminate();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<R: Read + AsRawFd, W: Write + AsRawFd> Drop for WalletServiceController<R, W> {
+    fn drop(&mut self) {
+        self.poison();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn random_wallet_wire_id<const BYTES: usize>() -> io::Result<String> {
+    let mut bytes = [0_u8; BYTES];
+    fill_random(&mut bytes)
+        .map_err(|_| io::Error::other("unable to generate wallet service session material"))?;
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(io::Error::other(
+            "wallet service session generator returned the reserved zero value",
+        ));
+    }
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+#[cfg(target_os = "linux")]
+fn valid_wallet_wire_id(value: &str, decoded_bytes: usize) -> bool {
+    URL_SAFE_NO_PAD
+        .decode(value.as_bytes())
+        .is_ok_and(|decoded| {
+            decoded.len() == decoded_bytes
+                && decoded.iter().any(|byte| *byte != 0)
+                && URL_SAFE_NO_PAD.encode(decoded) == value
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn set_nonblocking_fd(descriptor: RawFd) -> io::Result<()> {
+    // SAFETY: descriptor is borrowed from a live pipe/socket and fcntl neither
+    // retains it nor crosses the owning Rust object's lifetime.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn wait_wallet_fd(descriptor: RawFd, events: i16, deadline: Instant) -> io::Result<()> {
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "wallet service frame deadline elapsed",
+            ));
+        };
+        let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        let mut descriptor = libc::pollfd {
+            fd: descriptor,
+            events,
+            revents: 0,
+        };
+        // SAFETY: descriptor points to one initialized pollfd for this call.
+        let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+        if result > 0 {
+            return Ok(());
+        }
+        if result == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "wallet service frame deadline elapsed",
+            ));
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn write_wallet_payload<W: Write + AsRawFd>(
+    writer: &mut W,
+    payload: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    if payload.is_empty() || payload.len() > WALLET_ABI_MAX_FRAME_BYTES as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "wallet service frame is empty or oversized",
+        ));
+    }
+    let length = u32::try_from(payload.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "wallet frame is oversized"))?;
+    write_wallet_bytes(writer, &length.to_be_bytes(), deadline)?;
+    write_wallet_bytes(writer, payload, deadline)
+}
+
+#[cfg(target_os = "linux")]
+fn write_wallet_bytes<W: Write + AsRawFd>(
+    writer: &mut W,
+    mut bytes: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    while !bytes.is_empty() {
+        match writer.write(bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "wallet service pipe stopped accepting a frame",
+                ));
+            }
+            Ok(written) => bytes = &bytes[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait_wallet_fd(writer.as_raw_fd(), libc::POLLOUT, deadline)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn read_wallet_payload<R: Read + AsRawFd>(
+    reader: &mut R,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    let mut prefix = [0_u8; 4];
+    read_wallet_bytes(reader, &mut prefix, deadline)?;
+    let length = u32::from_be_bytes(prefix) as usize;
+    if length == 0 || length > WALLET_ABI_MAX_FRAME_BYTES as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "wallet service declared an empty or oversized frame",
+        ));
+    }
+    let mut payload = vec![0_u8; length];
+    read_wallet_bytes(reader, &mut payload, deadline)?;
+    Ok(payload)
+}
+
+#[cfg(target_os = "linux")]
+fn read_wallet_bytes<R: Read + AsRawFd>(
+    reader: &mut R,
+    mut bytes: &mut [u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    while !bytes.is_empty() {
+        match reader.read(bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "wallet service ended inside a frame",
+                ));
+            }
+            Ok(read) => bytes = &mut bytes[read..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait_wallet_fd(reader.as_raw_fd(), libc::POLLIN, deadline)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(crate) struct WalletAbiDiscovery {
     data_dir: PathBuf,
@@ -397,10 +1201,9 @@ impl WalletAbiDiscovery {
         }
     }
 
-    /// The controller intentionally does not call this until transport,
-    /// negotiation, projection, and browser authority are independently
-    /// released. When called, only an admitted retained handle can reach the
-    /// platform launcher.
+    /// Admission-only launcher retained separately from the dormant transport.
+    /// Joining it to a mutable wallet database requires a stable descriptor or
+    /// equivalent child-open identity attestation in a later reviewed tranche.
     #[cfg(unix)]
     #[allow(dead_code)]
     pub(crate) fn launch_admitted_service(&mut self) -> io::Result<Child> {
@@ -556,6 +1359,28 @@ struct LaunchAdmittedWalletArtifact {
 
 #[cfg(unix)]
 impl LaunchAdmittedWalletArtifact {
+    #[cfg(target_os = "linux")]
+    #[allow(dead_code)]
+    fn admitted_service_capabilities(
+        &self,
+    ) -> io::Result<BTreeSet<NegotiatedWalletServiceCapability>> {
+        let manifest = serde_json::from_slice::<WalletArtifactManifest>(&self.manifest_bytes)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wallet manifest changed"))?;
+        manifest
+            .target
+            .capabilities
+            .iter()
+            .map(|capability| {
+                NegotiatedWalletServiceCapability::from_wire_name(capability).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "wallet manifest capability is unsupported",
+                    )
+                })
+            })
+            .collect()
+    }
+
     fn launch(&mut self) -> io::Result<Child> {
         let anti_rollback_lock = acquire_anti_rollback_lock(&self.data_directory)
             .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
@@ -2004,6 +2829,8 @@ mod tests {
     use super::*;
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
+    #[cfg(target_os = "linux")]
+    use std::os::unix::net::UnixStream;
     use std::sync::atomic::{AtomicU64, Ordering};
     #[cfg(target_os = "linux")]
     use std::sync::{Arc, Barrier};
@@ -2017,6 +2844,122 @@ mod tests {
         manifest: WalletArtifactManifest,
         manifest_bytes: Vec<u8>,
         artifact_bytes: Vec<u8>,
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_capability_ceiling() -> BTreeSet<NegotiatedWalletServiceCapability> {
+        SERVICE_CAPABILITIES
+            .iter()
+            .map(|capability| {
+                NegotiatedWalletServiceCapability::from_wire_name(capability).unwrap()
+            })
+            .collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn negotiate_fixture_service(
+        service: &mut UnixStream,
+        deadline: Instant,
+        service_session_byte: u8,
+    ) -> (String, u64, String) {
+        let hello = read_wallet_payload(service, deadline).unwrap();
+        let hello = serde_json::from_slice::<Value>(&hello).unwrap();
+        assert_eq!(hello["frameType"], "hello");
+        assert_eq!(hello["hello"]["protocolVersion"], 2);
+        assert_eq!(hello["hello"]["platform"], "chromiumNativeHost");
+        let host_session = hello["hello"]["hostSessionId"].as_str().unwrap().to_owned();
+        let restart_generation = hello["hello"]["restartGeneration"].as_u64().unwrap();
+        let service_session = URL_SAFE_NO_PAD.encode([service_session_byte; 32]);
+        let response = json!({
+            "frameType": "hello",
+            "hello": {
+                "protocolVersion": 2,
+                "platform": "chromiumNativeHost",
+                "hostSessionId": host_session,
+                "serviceSessionId": service_session,
+                "restartGeneration": restart_generation,
+                "capabilities": [
+                    "canonicalFraming",
+                    "restartIsolation",
+                    "opaqueAuthorityRegistry",
+                    "persistentPermissions",
+                    "structuredApprovals",
+                    "typedEvents",
+                    "walletOperations",
+                    "providerDispatch"
+                ],
+                "limits": {
+                    "outerFrameBytes": 1_048_576,
+                    "providerRequestBytes": 65_536,
+                    "providerResultBytes": 262_144,
+                    "providerEventBytes": 65_536,
+                    "approvalFrameBytes": 16_384,
+                    "approvalLifetimeMs": 90_000
+                }
+            }
+        });
+        write_wallet_payload(service, &serde_json::to_vec(&response).unwrap(), deadline).unwrap();
+        (host_session, restart_generation, service_session)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn status_service_fixture(request_count: u64) -> (UnixStream, std::thread::JoinHandle<()>) {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (host_session, restart_generation, service_session) =
+                negotiate_fixture_service(&mut service, deadline, 2);
+
+            for sequence in 1..=request_count {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let request = read_wallet_payload(&mut service, deadline).unwrap();
+                let request = serde_json::from_slice::<Value>(&request).unwrap();
+                let envelope = &request["envelope"];
+                assert_eq!(request["frameType"], "request");
+                assert_eq!(envelope["protocolVersion"], 2);
+                assert_eq!(envelope["hostSessionId"], host_session);
+                assert_eq!(envelope["serviceSessionId"], service_session);
+                assert_eq!(envelope["restartGeneration"], restart_generation);
+                assert_eq!(envelope["channelSequence"], sequence);
+                assert_eq!(envelope["body"]["operation"], "wallet");
+                assert_eq!(envelope["body"]["request"]["operation"], "status");
+                let response = json!({
+                    "frameType": "response",
+                    "envelope": {
+                        "protocolVersion": 2,
+                        "hostSessionId": host_session,
+                        "serviceSessionId": service_session,
+                        "restartGeneration": restart_generation,
+                        "channelSequence": sequence,
+                        "requestId": envelope["requestId"],
+                        "body": {
+                            "result": "wallet",
+                            "response": {
+                                "result": "status",
+                                "status": {
+                                    "locked": sequence == 1,
+                                    "activeWallet": null,
+                                    "enabledModules": if sequence == 1 {
+                                        json!([])
+                                    } else {
+                                        json!(["handshake"])
+                                    },
+                                    "mainnetSettlementEnabled": false
+                                }
+                            }
+                        }
+                    }
+                });
+                write_wallet_payload(
+                    &mut service,
+                    &serde_json::to_vec(&response).unwrap(),
+                    deadline,
+                )
+                .unwrap();
+            }
+        });
+        (host, task)
     }
 
     #[test]
@@ -2040,6 +2983,485 @@ mod tests {
         );
         cleanup(&root);
         drop(release);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_transport_uses_one_exact_big_endian_bounded_frame() {
+        let (mut host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(host.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let mut prefix = [0_u8; 4];
+            service.read_exact(&mut prefix).unwrap();
+            assert_eq!(prefix, 5_u32.to_be_bytes());
+            let mut payload = [0_u8; 5];
+            service.read_exact(&mut payload).unwrap();
+            assert_eq!(&payload, b"hello");
+            service.write_all(&3_u32.to_be_bytes()).unwrap();
+            service.write_all(b"ack").unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        write_wallet_payload(&mut host, b"hello", deadline).unwrap();
+        assert_eq!(read_wallet_payload(&mut host, deadline).unwrap(), b"ack");
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_transport_rejects_oversized_truncated_and_eof_frames() {
+        let (mut oversized_reader, mut oversized_writer) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(oversized_reader.as_raw_fd()).unwrap();
+        oversized_writer
+            .write_all(&(WALLET_ABI_MAX_FRAME_BYTES + 1).to_be_bytes())
+            .unwrap();
+        drop(oversized_writer);
+        assert_eq!(
+            read_wallet_payload(
+                &mut oversized_reader,
+                Instant::now() + Duration::from_secs(1)
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let (mut truncated_reader, mut truncated_writer) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(truncated_reader.as_raw_fd()).unwrap();
+        truncated_writer.write_all(&5_u32.to_be_bytes()).unwrap();
+        truncated_writer.write_all(b"ab").unwrap();
+        drop(truncated_writer);
+        assert_eq!(
+            read_wallet_payload(
+                &mut truncated_reader,
+                Instant::now() + Duration::from_secs(1)
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+
+        let (mut eof_reader, eof_writer) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(eof_reader.as_raw_fd()).unwrap();
+        drop(eof_writer);
+        assert_eq!(
+            read_wallet_payload(&mut eof_reader, Instant::now() + Duration::from_secs(1))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_transport_bounds_silent_peers_and_reports_write_failure() {
+        let (mut timeout_reader, timeout_peer) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(timeout_reader.as_raw_fd()).unwrap();
+        let timeout = read_wallet_payload(
+            &mut timeout_reader,
+            Instant::now() + Duration::from_millis(20),
+        )
+        .unwrap_err();
+        assert_eq!(timeout.kind(), io::ErrorKind::TimedOut);
+        drop(timeout_peer);
+
+        let (mut failed_writer, failed_peer) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(failed_writer.as_raw_fd()).unwrap();
+        drop(failed_peer);
+        let failure = write_wallet_payload(
+            &mut failed_writer,
+            b"request",
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            failure.kind(),
+            io::ErrorKind::BrokenPipe
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_controller_negotiates_sessions_and_sequences_only_read_status() {
+        let (host, service) = status_service_fixture(2);
+        let reader = host.try_clone().unwrap();
+        let mut controller = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            7,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(!controller.provider_available());
+        assert!(!controller.value_available());
+
+        let first = controller.read_status().unwrap();
+        assert!(first.locked);
+        assert!(first.active_wallet.is_none());
+        assert!(first.enabled_modules().is_empty());
+        assert!(!first.mainnet_settlement_enabled);
+
+        let second = controller.read_status().unwrap();
+        assert!(!second.locked);
+        assert_eq!(second.enabled_modules(), &[WalletReadOnlyModule::Handshake]);
+        assert!(!controller.provider_available());
+        assert!(!controller.value_available());
+        drop(controller);
+        service.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ordinary_wallet_failure_advances_the_correlated_session() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (host_session, restart_generation, service_session) =
+                negotiate_fixture_service(&mut service, deadline, 4);
+
+            let first = read_wallet_payload(&mut service, deadline).unwrap();
+            let first = serde_json::from_slice::<Value>(&first).unwrap();
+            assert_eq!(first["envelope"]["channelSequence"], 1);
+            let failure = json!({
+                "frameType": "response",
+                "envelope": {
+                    "protocolVersion": 2,
+                    "hostSessionId": host_session,
+                    "serviceSessionId": service_session,
+                    "restartGeneration": restart_generation,
+                    "channelSequence": 1,
+                    "requestId": first["envelope"]["requestId"],
+                    "body": {
+                        "result": "failure",
+                        "failure": {
+                            "code": "persistenceFailure",
+                            "message": "internal store detail must not cross the browser boundary",
+                            "unsupportedCapability": null
+                        }
+                    }
+                }
+            });
+            write_wallet_payload(
+                &mut service,
+                &serde_json::to_vec(&failure).unwrap(),
+                deadline,
+            )
+            .unwrap();
+
+            let second = read_wallet_payload(&mut service, deadline).unwrap();
+            let second = serde_json::from_slice::<Value>(&second).unwrap();
+            assert_eq!(second["envelope"]["channelSequence"], 2);
+            let status = json!({
+                "frameType": "response",
+                "envelope": {
+                    "protocolVersion": 2,
+                    "hostSessionId": host_session,
+                    "serviceSessionId": service_session,
+                    "restartGeneration": restart_generation,
+                    "channelSequence": 2,
+                    "requestId": second["envelope"]["requestId"],
+                    "body": {
+                        "result": "wallet",
+                        "response": {
+                            "result": "status",
+                            "status": {
+                                "locked": true,
+                                "activeWallet": null,
+                                "enabledModules": [],
+                                "mainnetSettlementEnabled": false
+                            }
+                        }
+                    }
+                }
+            });
+            write_wallet_payload(
+                &mut service,
+                &serde_json::to_vec(&status).unwrap(),
+                deadline,
+            )
+            .unwrap();
+        });
+
+        let reader = host.try_clone().unwrap();
+        let mut controller = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            10,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let failure = controller.read_status().unwrap_err();
+        assert_eq!(failure.kind(), io::ErrorKind::Other);
+        assert_eq!(failure.to_string(), "wallet service persistence failed");
+        assert!(controller.read_status().unwrap().locked);
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn protocol_wallet_failure_poisons_the_correlated_session() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (host_session, restart_generation, service_session) =
+                negotiate_fixture_service(&mut service, deadline, 5);
+            let request = read_wallet_payload(&mut service, deadline).unwrap();
+            let request = serde_json::from_slice::<Value>(&request).unwrap();
+            let failure = json!({
+                "frameType": "response",
+                "envelope": {
+                    "protocolVersion": 2,
+                    "hostSessionId": host_session,
+                    "serviceSessionId": service_session,
+                    "restartGeneration": restart_generation,
+                    "channelSequence": 1,
+                    "requestId": request["envelope"]["requestId"],
+                    "body": {
+                        "result": "failure",
+                        "failure": {
+                            "code": "invalidFrame",
+                            "message": "invalid frame",
+                            "unsupportedCapability": null
+                        }
+                    }
+                }
+            });
+            write_wallet_payload(
+                &mut service,
+                &serde_json::to_vec(&failure).unwrap(),
+                deadline,
+            )
+            .unwrap();
+        });
+
+        let reader = host.try_clone().unwrap();
+        let mut controller = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            11,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            controller.read_status().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            controller.read_status().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_failure_shape_and_protocol_classification_are_exact() {
+        let protocol_codes = [
+            WalletServiceErrorCode::InvalidFrame,
+            WalletServiceErrorCode::VersionMismatch,
+            WalletServiceErrorCode::SessionMismatch,
+            WalletServiceErrorCode::SequenceMismatch,
+            WalletServiceErrorCode::Replay,
+            WalletServiceErrorCode::UnsupportedCapability,
+        ];
+        for code in protocol_codes {
+            assert!(code.is_protocol_failure());
+        }
+        assert!(!WalletServiceErrorCode::PersistenceFailure.is_protocol_failure());
+        assert!(!WalletServiceErrorCode::RuntimeFailure.is_protocol_failure());
+
+        let missing_nullable = json!({
+            "result": "failure",
+            "failure": {
+                "code": "persistenceFailure",
+                "message": "store failed"
+            }
+        });
+        assert!(serde_json::from_value::<WalletReadOnlyServiceResponse>(missing_nullable).is_err());
+
+        let inconsistent = json!({
+            "result": "failure",
+            "failure": {
+                "code": "unsupportedCapability",
+                "message": "unsupported",
+                "unsupportedCapability": null
+            }
+        });
+        let WalletReadOnlyServiceResponse::Failure { failure } =
+            serde_json::from_value(inconsistent).unwrap()
+        else {
+            panic!("expected failure response");
+        };
+        assert!(!failure.validate());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runtime_capabilities_cannot_exceed_the_qualified_manifest_ceiling() {
+        let (host, service) = status_service_fixture(0);
+        let reader = host.try_clone().unwrap();
+        let admitted_capabilities = REQUIRED_BASE_CAPABILITIES
+            .iter()
+            .map(|capability| {
+                NegotiatedWalletServiceCapability::from_wire_name(capability).unwrap()
+            })
+            .collect();
+        let error = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            admitted_capabilities,
+            8,
+            Duration::from_secs(2),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        service.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn malformed_service_hello_poisons_the_controller() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            read_wallet_payload(&mut service, deadline).unwrap();
+            write_wallet_payload(&mut service, b"{}", deadline).unwrap();
+        });
+        let reader = host.try_clone().unwrap();
+        let error = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            1,
+            Duration::from_secs(1),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn missing_required_nullable_status_field_poisons_the_negotiated_session() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let hello = read_wallet_payload(&mut service, deadline).unwrap();
+            let hello = serde_json::from_slice::<Value>(&hello).unwrap();
+            let host_session = hello["hello"]["hostSessionId"].as_str().unwrap();
+            let restart_generation = hello["hello"]["restartGeneration"].as_u64().unwrap();
+            let service_session = URL_SAFE_NO_PAD.encode([3_u8; 32]);
+            let service_hello = json!({
+                "frameType": "hello",
+                "hello": {
+                    "protocolVersion": 2,
+                    "platform": "chromiumNativeHost",
+                    "hostSessionId": host_session,
+                    "serviceSessionId": service_session,
+                    "restartGeneration": restart_generation,
+                    "capabilities": [
+                        "canonicalFraming",
+                        "restartIsolation",
+                        "opaqueAuthorityRegistry",
+                        "structuredApprovals",
+                        "typedEvents",
+                        "walletOperations"
+                    ],
+                    "limits": {
+                        "outerFrameBytes": 1_048_576,
+                        "providerRequestBytes": 65_536,
+                        "providerResultBytes": 262_144,
+                        "providerEventBytes": 65_536,
+                        "approvalFrameBytes": 16_384,
+                        "approvalLifetimeMs": 90_000
+                    }
+                }
+            });
+            write_wallet_payload(
+                &mut service,
+                &serde_json::to_vec(&service_hello).unwrap(),
+                deadline,
+            )
+            .unwrap();
+            let request = read_wallet_payload(&mut service, deadline).unwrap();
+            let request = serde_json::from_slice::<Value>(&request).unwrap();
+            let malformed = json!({
+                "frameType": "response",
+                "envelope": {
+                    "protocolVersion": 2,
+                    "hostSessionId": host_session,
+                    "serviceSessionId": service_session,
+                    "restartGeneration": restart_generation,
+                    "channelSequence": 1,
+                    "requestId": request["envelope"]["requestId"],
+                    "body": {
+                        "result": "wallet",
+                        "response": {
+                            "result": "status",
+                            "status": {
+                                "locked": true,
+                                "enabledModules": [],
+                                "mainnetSettlementEnabled": false
+                            }
+                        }
+                    }
+                }
+            });
+            write_wallet_payload(
+                &mut service,
+                &serde_json::to_vec(&malformed).unwrap(),
+                deadline,
+            )
+            .unwrap();
+        });
+        let reader = host.try_clone().unwrap();
+        let mut controller = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            9,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(
+            controller.read_status().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            controller.read_status().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_child_guard_kills_and_reaps_the_service() {
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let process_id = child.id() as libc::pid_t;
+        let mut process = WalletServiceProcess::new(child);
+        process.terminate();
+        assert!(process.child.is_none());
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
     }
 
     #[test]
