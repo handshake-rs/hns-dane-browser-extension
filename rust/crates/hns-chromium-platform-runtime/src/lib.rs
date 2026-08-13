@@ -2534,6 +2534,44 @@ impl RuntimeCoordination {
         self.reconcile_observed_authority(&maintenance, observed)
     }
 
+    /// Reconciles a cross-process authority change without making proxy
+    /// admission wait inside a lock acquisition. Callers can poll this method
+    /// through their cancellation token when another operation owns a lock.
+    fn try_reconcile_current_authority(&self, network: NetworkKind) -> Result<bool, RuntimeError> {
+        let maintenance = match self.maintenance.try_write() {
+            Ok(maintenance) => maintenance,
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(RuntimeError::Synchronization("maintenance lock"));
+            }
+            Err(TryLockError::WouldBlock) => return Ok(false),
+        };
+        let Some(mut header_state) = HeaderStateFileLock::try_shared(&self.header_state_lock_path)
+            .map_err(RuntimeError::Operation)?
+        else {
+            return Ok(false);
+        };
+        let peer_state = match self.peer_state.try_lock() {
+            Ok(peer_state) => peer_state,
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(RuntimeError::Synchronization("peer state lock"));
+            }
+            Err(TryLockError::WouldBlock) => return Ok(false),
+        };
+        let Some(process_peer_state) =
+            HeaderStateFileLock::try_shared(&self.header_state_base.join(".peer-state.lock"))
+                .map_err(RuntimeError::Operation)?
+        else {
+            return Ok(false);
+        };
+        let observed =
+            observe_ready_header_state(&self.header_state_base, network, &mut header_state)
+                .ok()
+                .and_then(|state| state.name_tree_authority);
+        self.reconcile_observed_authority(&maintenance, observed)?;
+        drop((process_peer_state, peer_state, header_state, maintenance));
+        Ok(true)
+    }
+
     fn remembered_authority_matches(
         &self,
         observed: NameTreeAuthorityIdentity,
@@ -3041,12 +3079,16 @@ impl BrowserRuntime {
         let live_identity =
             read_header_sync_storage_identity(&self.inner.coordination.header_state_base)
                 .map_err(RuntimeError::Operation)?;
-        let recorded_identity = header_state_lock.ready_identity().ok();
-        if recorded_identity != Some(live_identity)
-            || live_identity != staged.baseline_storage_identity
-        {
+        // An updating or stale publication record is a fail-closed admission
+        // signal, not a reason to make recovery impossible. The stage was
+        // captured while holding the shared header and peer-state locks, and
+        // publication now holds both locks exclusively. Equality with that
+        // captured storage identity is therefore the supersession check that
+        // matters here. On success, the coordinated publication below writes
+        // both databases at one new generation before marking the record ready.
+        if live_identity != staged.baseline_storage_identity {
             return Err(RuntimeError::Operation(
-                "header sync stage was superseded or publication state is incomplete".to_owned(),
+                "header sync stage was superseded before publication".to_owned(),
             ));
         }
         let staged_base = staged
@@ -4280,10 +4322,6 @@ impl BrowserRuntime {
             if cancellation.is_cancelled() {
                 return Err(ProxyBackendError::Cancelled);
             }
-            self.inner
-                .coordination
-                .reconcile_current_authority(self.inner.configuration.network)
-                .map_err(|_| ProxyBackendError::Internal)?;
             match self.inner.coordination.maintenance.try_read() {
                 Ok(guard) => {
                     let Some(epoch) = self.inner.coordination.publication_epoch(&guard) else {
@@ -4332,14 +4370,49 @@ impl BrowserRuntime {
                         }
                         continue;
                     };
-                    let observed = observe_ready_header_state(
+                    let observed = match observe_ready_header_state(
                         &self.inner.coordination.header_state_base,
                         self.inner.configuration.network,
                         &mut header_state_lock,
-                    )
-                    .map_err(|_| ProxyBackendError::Internal)?;
+                    ) {
+                        Ok(observed) => observed,
+                        Err(_) => {
+                            drop(process_peer_state);
+                            drop(peer_state);
+                            drop(header_state_lock);
+                            drop(guard);
+                            if self
+                                .inner
+                                .coordination
+                                .try_reconcile_current_authority(self.inner.configuration.network)
+                                .map_err(|_| ProxyBackendError::Internal)?
+                            {
+                                return Err(ProxyBackendError::Internal);
+                            }
+                            if cancellation.wait_cancelled_timeout(PROXY_MAINTENANCE_POLL_INTERVAL)
+                            {
+                                return Err(ProxyBackendError::Cancelled);
+                            }
+                            continue;
+                        }
+                    };
                     let Some(name_tree_authority) = observed.name_tree_authority else {
-                        return Err(ProxyBackendError::Internal);
+                        drop(process_peer_state);
+                        drop(peer_state);
+                        drop(header_state_lock);
+                        drop(guard);
+                        if self
+                            .inner
+                            .coordination
+                            .try_reconcile_current_authority(self.inner.configuration.network)
+                            .map_err(|_| ProxyBackendError::Internal)?
+                        {
+                            return Err(ProxyBackendError::Internal);
+                        }
+                        if cancellation.wait_cancelled_timeout(PROXY_MAINTENANCE_POLL_INTERVAL) {
+                            return Err(ProxyBackendError::Cancelled);
+                        }
+                        continue;
                     };
                     if !self
                         .inner
@@ -4347,8 +4420,19 @@ impl BrowserRuntime {
                         .remembered_authority_matches(name_tree_authority)
                         .map_err(|_| ProxyBackendError::Internal)?
                     {
+                        drop(process_peer_state);
+                        drop(peer_state);
                         drop(header_state_lock);
                         drop(guard);
+                        if !self
+                            .inner
+                            .coordination
+                            .try_reconcile_current_authority(self.inner.configuration.network)
+                            .map_err(|_| ProxyBackendError::Internal)?
+                            && cancellation.wait_cancelled_timeout(PROXY_MAINTENANCE_POLL_INTERVAL)
+                        {
+                            return Err(ProxyBackendError::Cancelled);
+                        }
                         continue;
                     }
                     return Ok(ProxyMaintenanceGuard {
@@ -15815,8 +15899,7 @@ mod tests {
 
         let initial_epoch = runtime.security_maintenance_epoch();
         let initial_identity =
-            test_header_state_lease_for_network(&runtime.inner.coordination, NetworkKind::Regtest)
-                .identity()
+            read_header_sync_storage_identity(&runtime.inner.coordination.header_state_base)
                 .unwrap();
         let status = runtime.sync_once().unwrap();
         let base = data_dir.join("hns-regtest");
@@ -15828,8 +15911,7 @@ mod tests {
         assert_eq!(peer_store.sync_generation().unwrap(), 1);
         assert_ne!(runtime.security_maintenance_epoch(), initial_epoch);
         assert_ne!(
-            test_header_state_lease_for_network(&runtime.inner.coordination, NetworkKind::Regtest,)
-                .identity()
+            read_header_sync_storage_identity(&runtime.inner.coordination.header_state_base)
                 .unwrap(),
             initial_identity
         );
@@ -18359,9 +18441,7 @@ mod tests {
         peers.record_success("8.8.8.8:12038".parse().unwrap(), Height(101), now - 9);
         let high_outlier = "9.9.9.9:12038".parse().unwrap();
         peers.record_success(high_outlier, Height(u32::MAX), now - 8);
-        for _ in 0..32 {
-            peers.record_transient_failure(high_outlier);
-        }
+        peers.record_malformed(high_outlier, now, 600);
         assert!(peers.get(high_outlier).unwrap().is_banned(now));
 
         let target = assess_peer_target(&peers, &hns_core::network::mainnet(), now);
