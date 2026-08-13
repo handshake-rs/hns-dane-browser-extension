@@ -16239,12 +16239,9 @@ mod tests {
 
     #[test]
     fn header_state_token_is_fail_closed_and_lock_admission_is_nonblocking() {
-        let data_dir = temp_dir_path("header-state-token-fail-closed");
-        let runtime =
-            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
-                .unwrap();
-        let lease =
-            test_header_state_lease_for_network(&runtime.inner.coordination, NetworkKind::Regtest);
+        let (data_dir, runtime, _anchor_height) =
+            runtime_with_current_mainnet_authority("header-state-token-fail-closed");
+        let lease = test_header_state_lease(&runtime.inner.coordination);
         assert!(
             lease.identity().unwrap().best_hash.is_some(),
             "the token must be initialized after the genesis header exists"

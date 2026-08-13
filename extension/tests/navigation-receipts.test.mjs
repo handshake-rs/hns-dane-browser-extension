@@ -227,14 +227,16 @@ test("header maintenance keeps the committed receipt but bars cache reuse", () =
     securityMaintenanceEpoch: runtime.securityMaintenanceEpoch + 1
   };
   assert.equal(store.ensureRuntime(afterMaintenance), true);
+  assert.equal(store.completeMaintenance(afterMaintenance, 0), true);
   const cached = request({
     requestId: "cached-after-sync",
     tabId: 5,
     documentId: "document-2"
   });
-  store.beginRequest(cached, afterMaintenance);
-  store.commitDocument(
-    commit({ tabId: 5, documentId: "document-2" })
+  assert.equal(store.beginRequest(cached, afterMaintenance), true);
+  assert.equal(
+    store.commitDocument(commit({ tabId: 5, documentId: "document-2" })),
+    true
   );
   assert.equal(
     store.completeRequest(
@@ -263,7 +265,7 @@ test("successful same-root maintenance completes at an unchanged epoch", () => {
     store.providerAuthorityForDocument(
       4,
       "document-1",
-      "https://welcome/",
+      "https://welcome",
       runtime,
       "https://welcome/"
     ),
