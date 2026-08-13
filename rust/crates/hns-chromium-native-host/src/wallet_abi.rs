@@ -53,6 +53,12 @@ const WALLET_SERVICE_REQUEST_ID_BYTES: usize = 16;
 const MAX_NEGOTIATED_SERVICE_CAPABILITIES: usize = 64;
 #[cfg(target_os = "linux")]
 const MAX_WALLET_SERVICE_FAILURE_MESSAGE_BYTES: usize = 1_024;
+#[cfg(target_os = "linux")]
+const MAX_WALLET_READ_ITEMS: usize = 128;
+#[cfg(target_os = "linux")]
+const MAX_WALLET_PUBLIC_STRING_BYTES: usize = 4_096;
+#[cfg(target_os = "linux")]
+const MAX_WALLET_RECEIVE_TARGET_BYTES: usize = 512;
 const WALLET_APPROVAL_SCHEMA_VERSION: u16 = 3;
 const WALLET_ARTIFACT_MANIFEST_SCHEMA_VERSION: u16 = 2;
 #[cfg(unix)]
@@ -398,9 +404,29 @@ enum WalletReadOnlyServiceRequest {
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Serialize)]
-#[serde(tag = "operation", rename_all = "camelCase")]
+#[serde(
+    tag = "operation",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum WalletReadOnlyRequest {
     Status,
+    ListAccounts,
+    Balance {
+        module: WalletReadOnlyModule,
+        account: [u8; 16],
+    },
+    ReceiveTarget {
+        module: WalletReadOnlyModule,
+        account: [u8; 16],
+    },
+    TransactionHistory {
+        module: WalletReadOnlyModule,
+        account: [u8; 16],
+    },
+    ModuleStatus {
+        module: WalletReadOnlyModule,
+    },
 }
 
 #[cfg(target_os = "linux")]
@@ -529,11 +555,28 @@ impl WalletServiceFailure {
     deny_unknown_fields
 )]
 enum WalletReadOnlyResponse {
-    Status { status: WalletReadOnlyStatus },
+    Status {
+        status: WalletReadOnlyStatus,
+    },
+    Accounts {
+        accounts: Vec<WalletReadOnlyAccountSummary>,
+    },
+    Balance {
+        amount: WalletReadOnlyAmount,
+    },
+    ReceiveTarget {
+        target: WalletReadOnlyReceiveTarget,
+    },
+    TransactionHistory {
+        transactions: Vec<WalletReadOnlyTransactionSummary>,
+    },
+    ModuleStatus {
+        status: WalletReadOnlySyncStatus,
+    },
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum WalletReadOnlyModule {
     Handshake,
@@ -569,7 +612,16 @@ impl WalletReadOnlyStatus {
     }
 
     fn validate(&self) -> bool {
-        self.enabled_modules.len() <= 3
+        !self.mainnet_settlement_enabled
+            && self.locked == self.active_wallet.is_none()
+            && self
+                .active_wallet
+                .is_none_or(|wallet| wallet.iter().any(|byte| *byte != 0))
+            && self.enabled_modules.len() <= 1
+            && self
+                .enabled_modules
+                .iter()
+                .all(|module| *module == WalletReadOnlyModule::Handshake)
             && self
                 .enabled_modules
                 .iter()
@@ -577,6 +629,254 @@ impl WalletReadOnlyStatus {
                 .collect::<BTreeSet<_>>()
                 .len()
                 == self.enabled_modules.len()
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct WalletReadOnlyAccountSummary {
+    pub(crate) account_id: [u8; 16],
+    pub(crate) module: WalletReadOnlyModule,
+    pub(crate) label: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub(crate) receive_display: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlyAccountSummary {
+    fn validate(&self) -> bool {
+        self.account_id.iter().any(|byte| *byte != 0)
+            && self.module == WalletReadOnlyModule::Handshake
+            && valid_wallet_public_string(&self.label, MAX_WALLET_PUBLIC_STRING_BYTES)
+            && self.receive_display.as_ref().is_none_or(|display| {
+                valid_wallet_public_string(display, MAX_WALLET_PUBLIC_STRING_BYTES)
+            })
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "UPPERCASE")]
+pub(crate) enum WalletReadOnlyAsset {
+    Hns,
+    Btc,
+    Eth,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WalletReadOnlyBaseUnits(u128);
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlyBaseUnits {
+    #[allow(dead_code)]
+    pub(crate) const fn get(self) -> u128 {
+        self.0
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<'de> Deserialize<'de> for WalletReadOnlyBaseUnits {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        let canonical = encoded == "0"
+            || (!encoded.is_empty()
+                && encoded.len() <= 39
+                && encoded.as_bytes()[0].is_ascii_digit()
+                && encoded.as_bytes()[0] != b'0'
+                && encoded.as_bytes()[1..].iter().all(u8::is_ascii_digit));
+        if !canonical {
+            return Err(serde::de::Error::custom(
+                "wallet base units are not canonical decimal u128",
+            ));
+        }
+        encoded
+            .parse::<u128>()
+            .map(Self)
+            .map_err(|_| serde::de::Error::custom("wallet base units exceed u128"))
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WalletReadOnlyAmount {
+    pub(crate) asset: WalletReadOnlyAsset,
+    pub(crate) base_units: WalletReadOnlyBaseUnits,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlyAmount {
+    fn validate(&self) -> bool {
+        self.asset == WalletReadOnlyAsset::Hns
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WalletReadOnlyReceiveTarget {
+    pub(crate) module: WalletReadOnlyModule,
+    pub(crate) account: [u8; 16],
+    pub(crate) display: String,
+    pub(crate) derivation_index: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlyReceiveTarget {
+    fn validate(&self, selected_account: [u8; 16]) -> bool {
+        self.module == WalletReadOnlyModule::Handshake
+            && self.account == selected_account
+            && valid_wallet_display_string(&self.display, MAX_WALLET_RECEIVE_TARGET_BYTES)
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WalletReadOnlyTransactionStatus {
+    Prepared,
+    Authorized,
+    Broadcast,
+    Mempool,
+    Confirmed,
+    Replaced,
+    Conflicted,
+    Reorged,
+    Dropped,
+    Failed,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WalletReadOnlySignedBaseUnits {
+    pub(crate) negative: bool,
+    pub(crate) magnitude: WalletReadOnlyBaseUnits,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlySignedBaseUnits {
+    fn validate(&self) -> bool {
+        !self.negative || self.magnitude.get() != 0
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WalletReadOnlyTransactionSummary {
+    pub(crate) module: WalletReadOnlyModule,
+    pub(crate) txid: [u8; 32],
+    pub(crate) status: WalletReadOnlyTransactionStatus,
+    pub(crate) net_amount: WalletReadOnlySignedBaseUnits,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub(crate) fee: Option<WalletReadOnlyBaseUnits>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub(crate) block_height: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub(crate) first_seen_unix: Option<u64>,
+    pub(crate) confirmation_count: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlyTransactionSummary {
+    fn validate(&self) -> bool {
+        self.module == WalletReadOnlyModule::Handshake
+            && self.txid.iter().any(|byte| *byte != 0)
+            && self.net_amount.validate()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_wallet_transaction_history(transactions: &[WalletReadOnlyTransactionSummary]) -> bool {
+    let unique_txids = transactions
+        .iter()
+        .map(|transaction| transaction.txid)
+        .collect::<BTreeSet<_>>();
+    transactions.len() <= MAX_WALLET_READ_ITEMS
+        && unique_txids.len() == transactions.len()
+        && transactions
+            .iter()
+            .all(WalletReadOnlyTransactionSummary::validate)
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WalletReadOnlySyncPhase {
+    Disabled,
+    Starting,
+    Headers,
+    Filters,
+    WalletScan,
+    Ready,
+    Degraded,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WalletReadOnlySyncStatus {
+    pub(crate) phase: WalletReadOnlySyncPhase,
+    pub(crate) validated_height: u64,
+    pub(crate) scanned_height: u64,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub(crate) target_height: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub(crate) last_error: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlySyncStatus {
+    fn validate(&self) -> bool {
+        self.phase == WalletReadOnlySyncPhase::Ready
+            && self.validated_height == self.scanned_height
+            && self.target_height == Some(self.validated_height)
+            && self.last_error.is_none()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn valid_wallet_public_string(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+}
+
+#[cfg(target_os = "linux")]
+fn valid_wallet_display_string(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WalletReadOnlyResponseKind {
+    Status,
+    Accounts,
+    Balance,
+    ReceiveTarget,
+    TransactionHistory,
+    ModuleStatus,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlyResponse {
+    fn kind(&self) -> WalletReadOnlyResponseKind {
+        match self {
+            Self::Status { .. } => WalletReadOnlyResponseKind::Status,
+            Self::Accounts { .. } => WalletReadOnlyResponseKind::Accounts,
+            Self::Balance { .. } => WalletReadOnlyResponseKind::Balance,
+            Self::ReceiveTarget { .. } => WalletReadOnlyResponseKind::ReceiveTarget,
+            Self::TransactionHistory { .. } => WalletReadOnlyResponseKind::TransactionHistory,
+            Self::ModuleStatus { .. } => WalletReadOnlyResponseKind::ModuleStatus,
+        }
     }
 }
 
@@ -621,6 +921,7 @@ pub(crate) struct WalletServiceController<R: Read + AsRawFd, W: Write + AsRawFd>
     next_host_sequence: u64,
     next_service_sequence: u64,
     capabilities: BTreeSet<NegotiatedWalletServiceCapability>,
+    selected_hns_account: Option<[u8; 16]>,
     poisoned: bool,
 }
 
@@ -696,6 +997,7 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
             next_host_sequence: 1,
             next_service_sequence: 1,
             capabilities: BTreeSet::new(),
+            selected_hns_account: None,
             poisoned: false,
         };
         let frame = WalletHostHelloFrame::Hello {
@@ -745,10 +1047,169 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
         Ok(controller)
     }
 
-    /// Performs the sole operation in this tranche. It cannot register page
-    /// authority, dispatch provider methods, approve work, or move value.
+    /// Reads wallet lock/module status without granting any page authority.
     #[allow(dead_code)]
     pub(crate) fn read_status(&mut self) -> io::Result<WalletReadOnlyStatus> {
+        let response = self.wallet_request(
+            WalletReadOnlyRequest::Status,
+            WalletReadOnlyResponseKind::Status,
+        )?;
+        let WalletReadOnlyResponse::Status { status } = response else {
+            return Err(self.protocol_error("wallet status response class changed after checking"));
+        };
+        if !status.validate() {
+            return Err(self.protocol_error("wallet status response violates bounded HNS contract"));
+        }
+        if status.locked
+            || !status
+                .enabled_modules
+                .contains(&WalletReadOnlyModule::Handshake)
+        {
+            self.selected_hns_account = None;
+        }
+        Ok(status)
+    }
+
+    /// Resolves the service's one exact HNS account. Subsequent read methods
+    /// use this retained identifier rather than accepting caller-selected
+    /// account or module input.
+    #[allow(dead_code)]
+    pub(crate) fn list_accounts(&mut self) -> io::Result<WalletReadOnlyAccountSummary> {
+        let response = self.wallet_request(
+            WalletReadOnlyRequest::ListAccounts,
+            WalletReadOnlyResponseKind::Accounts,
+        )?;
+        let WalletReadOnlyResponse::Accounts { mut accounts } = response else {
+            return Err(
+                self.protocol_error("wallet accounts response class changed after checking")
+            );
+        };
+        if accounts.len() != 1 || !accounts[0].validate() {
+            return Err(self.protocol_error("wallet account response violates exact HNS contract"));
+        }
+        let Some(account) = accounts.pop() else {
+            return Err(
+                self.protocol_error("wallet account response changed after bounded validation")
+            );
+        };
+        if self
+            .selected_hns_account
+            .is_some_and(|selected| selected != account.account_id)
+        {
+            return Err(self.protocol_error("wallet service changed its selected HNS account"));
+        }
+        self.selected_hns_account = Some(account.account_id);
+        Ok(account)
+    }
+
+    /// Each value read is a separate service operation and therefore carries
+    /// only its own synchronization authority; these methods do not compose a
+    /// cross-operation snapshot.
+    #[allow(dead_code)]
+    pub(crate) fn read_balance(&mut self) -> io::Result<WalletReadOnlyAmount> {
+        let account = self.require_selected_hns_account()?;
+        let response = self.wallet_request(
+            WalletReadOnlyRequest::Balance {
+                module: WalletReadOnlyModule::Handshake,
+                account,
+            },
+            WalletReadOnlyResponseKind::Balance,
+        )?;
+        let WalletReadOnlyResponse::Balance { amount } = response else {
+            return Err(self.protocol_error("wallet balance response class changed after checking"));
+        };
+        if !amount.validate() {
+            return Err(self.protocol_error("wallet balance response violates HNS contract"));
+        }
+        Ok(amount)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn read_receive_target(&mut self) -> io::Result<WalletReadOnlyReceiveTarget> {
+        let account = self.require_selected_hns_account()?;
+        let response = self.wallet_request(
+            WalletReadOnlyRequest::ReceiveTarget {
+                module: WalletReadOnlyModule::Handshake,
+                account,
+            },
+            WalletReadOnlyResponseKind::ReceiveTarget,
+        )?;
+        let WalletReadOnlyResponse::ReceiveTarget { target } = response else {
+            return Err(
+                self.protocol_error("wallet receive-target response class changed after checking")
+            );
+        };
+        if !target.validate(account) {
+            return Err(
+                self.protocol_error("wallet receive target response violates exact HNS contract")
+            );
+        }
+        Ok(target)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn read_transaction_history(
+        &mut self,
+    ) -> io::Result<Vec<WalletReadOnlyTransactionSummary>> {
+        let account = self.require_selected_hns_account()?;
+        let response = self.wallet_request(
+            WalletReadOnlyRequest::TransactionHistory {
+                module: WalletReadOnlyModule::Handshake,
+                account,
+            },
+            WalletReadOnlyResponseKind::TransactionHistory,
+        )?;
+        let WalletReadOnlyResponse::TransactionHistory { transactions } = response else {
+            return Err(self.protocol_error("wallet history response class changed after checking"));
+        };
+        if !validate_wallet_transaction_history(&transactions) {
+            return Err(
+                self.protocol_error("wallet history response violates bounded HNS contract")
+            );
+        }
+        Ok(transactions)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn read_module_status(&mut self) -> io::Result<WalletReadOnlySyncStatus> {
+        self.require_selected_hns_account()?;
+        let response = self.wallet_request(
+            WalletReadOnlyRequest::ModuleStatus {
+                module: WalletReadOnlyModule::Handshake,
+            },
+            WalletReadOnlyResponseKind::ModuleStatus,
+        )?;
+        let WalletReadOnlyResponse::ModuleStatus { status } = response else {
+            return Err(
+                self.protocol_error("wallet module-status response class changed after checking")
+            );
+        };
+        if !status.validate() {
+            return Err(self.protocol_error("wallet module status violates bounded HNS contract"));
+        }
+        Ok(status)
+    }
+
+    fn require_selected_hns_account(&self) -> io::Result<[u8; 16]> {
+        if self.poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "wallet service controller is poisoned",
+            ));
+        }
+        self.selected_hns_account.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet HNS account must be selected through listAccounts first",
+            )
+        })
+    }
+
+    fn wallet_request(
+        &mut self,
+        request: WalletReadOnlyRequest,
+        expected_response: WalletReadOnlyResponseKind,
+    ) -> io::Result<WalletReadOnlyResponse> {
         if self.poisoned {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -774,17 +1235,15 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
                 restart_generation: self.restart_generation,
                 channel_sequence: host_sequence,
                 request_id: &request_id,
-                body: WalletReadOnlyServiceRequest::Wallet {
-                    request: WalletReadOnlyRequest::Status,
-                },
+                body: WalletReadOnlyServiceRequest::Wallet { request },
             },
         };
         let payload = serde_json::to_vec(&frame).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, "wallet status encoding failed")
+            io::Error::new(io::ErrorKind::InvalidData, "wallet read encoding failed")
         })?;
         let response = self.exchange(&payload)?;
         let response = serde_json::from_slice::<WalletServiceResponseFrame>(&response)
-            .map_err(|_| self.protocol_error("wallet status response is malformed"))?;
+            .map_err(|_| self.protocol_error("wallet read response is malformed"))?;
         let WalletServiceResponseFrame::Response { envelope } = response;
         if envelope.protocol_version != WALLET_SERVICE_PROTOCOL_VERSION
             || envelope.host_session_id != self.host_session_id
@@ -793,18 +1252,15 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
             || envelope.channel_sequence != self.next_service_sequence
             || envelope.request_id != request_id
         {
-            return Err(self.protocol_error("wallet status response session or sequence mismatch"));
+            return Err(self.protocol_error("wallet read response session or sequence mismatch"));
         }
         match envelope.body {
             WalletReadOnlyServiceResponse::Wallet { response } => {
-                let WalletReadOnlyResponse::Status { status } = response;
-                if !status.validate() {
-                    return Err(
-                        self.protocol_error("wallet status response violates bounded contract")
-                    );
+                if response.kind() != expected_response {
+                    return Err(self.protocol_error("wallet response class does not match request"));
                 }
                 self.advance_sequences()?;
-                Ok(status)
+                Ok(response)
             }
             WalletReadOnlyServiceResponse::Failure { failure } => {
                 if !failure.validate() {
@@ -2939,7 +3395,11 @@ mod tests {
                                 "result": "status",
                                 "status": {
                                     "locked": sequence == 1,
-                                    "activeWallet": null,
+                                    "activeWallet": if sequence == 1 {
+                                        Value::Null
+                                    } else {
+                                        json!(vec![7_u8; 16])
+                                    },
                                     "enabledModules": if sequence == 1 {
                                         json!([])
                                     } else {
@@ -2960,6 +3420,84 @@ mod tests {
             }
         });
         (host, task)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_wallet_fixture_request(
+        request: &Value,
+        host_session: &str,
+        service_session: &str,
+        restart_generation: u64,
+        sequence: u64,
+        expected_body: Value,
+    ) {
+        let envelope = &request["envelope"];
+        assert_eq!(request["frameType"], "request");
+        assert_eq!(envelope["protocolVersion"], WALLET_SERVICE_PROTOCOL_VERSION);
+        assert_eq!(envelope["hostSessionId"], host_session);
+        assert_eq!(envelope["serviceSessionId"], service_session);
+        assert_eq!(envelope["restartGeneration"], restart_generation);
+        assert_eq!(envelope["channelSequence"], sequence);
+        assert!(valid_wallet_wire_id(
+            envelope["requestId"].as_str().unwrap(),
+            WALLET_SERVICE_REQUEST_ID_BYTES
+        ));
+        assert_eq!(envelope["body"], expected_body);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_wallet_fixture_result(
+        service: &mut UnixStream,
+        deadline: Instant,
+        session: (&str, &str, u64),
+        sequence: u64,
+        request: &Value,
+        response: Value,
+    ) {
+        let (host_session, service_session, restart_generation) = session;
+        let frame = json!({
+            "frameType": "response",
+            "envelope": {
+                "protocolVersion": WALLET_SERVICE_PROTOCOL_VERSION,
+                "hostSessionId": host_session,
+                "serviceSessionId": service_session,
+                "restartGeneration": restart_generation,
+                "channelSequence": sequence,
+                "requestId": request["envelope"]["requestId"],
+                "body": {
+                    "result": "wallet",
+                    "response": response
+                }
+            }
+        });
+        write_wallet_payload(service, &serde_json::to_vec(&frame).unwrap(), deadline).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn hns_account_json(account_byte: u8) -> Value {
+        json!({
+            "accountId": vec![account_byte; 16],
+            "module": "handshake",
+            "label": "Primary HNS",
+            "receiveDisplay": null
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn hns_transaction_json(txid_byte: u8, status: &str, confirmed: bool) -> Value {
+        json!({
+            "module": "handshake",
+            "txid": vec![txid_byte; 32],
+            "status": status,
+            "net_amount": {
+                "negative": false,
+                "magnitude": "17"
+            },
+            "fee": "2",
+            "block_height": if confirmed { Some(100_u64) } else { None },
+            "first_seen_unix": 1_700_000_000_u64,
+            "confirmation_count": if confirmed { 6_u32 } else { 0_u32 }
+        })
     }
 
     #[test]
@@ -3084,7 +3622,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn wallet_controller_negotiates_sessions_and_sequences_only_read_status() {
+    fn wallet_controller_negotiates_sessions_and_sequences_for_status() {
         let (host, service) = status_service_fixture(2);
         let reader = host.try_clone().unwrap();
         let mut controller = WalletServiceController::negotiate(
@@ -3116,6 +3654,509 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn wallet_controller_reads_the_exact_selected_hns_account_operations() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (host_session, restart_generation, service_session) =
+                negotiate_fixture_service(&mut service, deadline, 21);
+            let account = vec![9_u8; 16];
+
+            for sequence in 1..=6 {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let request = read_wallet_payload(&mut service, deadline).unwrap();
+                let request = serde_json::from_slice::<Value>(&request).unwrap();
+                let (expected_body, response) = match sequence {
+                    1 => (
+                        json!({
+                            "operation": "wallet",
+                            "request": { "operation": "status" }
+                        }),
+                        json!({
+                            "result": "status",
+                            "status": {
+                                "locked": false,
+                                "activeWallet": vec![7_u8; 16],
+                                "enabledModules": ["handshake"],
+                                "mainnetSettlementEnabled": false
+                            }
+                        }),
+                    ),
+                    2 => (
+                        json!({
+                            "operation": "wallet",
+                            "request": { "operation": "listAccounts" }
+                        }),
+                        json!({
+                            "result": "accounts",
+                            "accounts": [hns_account_json(9)]
+                        }),
+                    ),
+                    3 => (
+                        json!({
+                            "operation": "wallet",
+                            "request": {
+                                "operation": "balance",
+                                "module": "handshake",
+                                "account": account
+                            }
+                        }),
+                        json!({
+                            "result": "balance",
+                            "amount": {
+                                "asset": "HNS",
+                                "base_units": "340282366920938463463374607431768211455"
+                            }
+                        }),
+                    ),
+                    4 => (
+                        json!({
+                            "operation": "wallet",
+                            "request": {
+                                "operation": "receiveTarget",
+                                "module": "handshake",
+                                "account": account
+                            }
+                        }),
+                        json!({
+                            "result": "receiveTarget",
+                            "target": {
+                                "module": "handshake",
+                                "account": account,
+                                "display": "rs1qchromiumwallet",
+                                "derivation_index": 7
+                            }
+                        }),
+                    ),
+                    5 => (
+                        json!({
+                            "operation": "wallet",
+                            "request": {
+                                "operation": "transactionHistory",
+                                "module": "handshake",
+                                "account": account
+                            }
+                        }),
+                        json!({
+                            "result": "transactionHistory",
+                            "transactions": [
+                                hns_transaction_json(0xab, "confirmed", true),
+                                hns_transaction_json(0xcd, "mempool", false)
+                            ]
+                        }),
+                    ),
+                    6 => (
+                        json!({
+                            "operation": "wallet",
+                            "request": {
+                                "operation": "moduleStatus",
+                                "module": "handshake"
+                            }
+                        }),
+                        json!({
+                            "result": "moduleStatus",
+                            "status": {
+                                "phase": "ready",
+                                "validated_height": 100,
+                                "scanned_height": 100,
+                                "target_height": 100,
+                                "last_error": null
+                            }
+                        }),
+                    ),
+                    _ => unreachable!(),
+                };
+                assert_wallet_fixture_request(
+                    &request,
+                    &host_session,
+                    &service_session,
+                    restart_generation,
+                    sequence,
+                    expected_body,
+                );
+                write_wallet_fixture_result(
+                    &mut service,
+                    deadline,
+                    (&host_session, &service_session, restart_generation),
+                    sequence,
+                    &request,
+                    response,
+                );
+            }
+        });
+
+        let reader = host.try_clone().unwrap();
+        let mut controller = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            20,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            controller.read_balance().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+
+        let status = controller.read_status().unwrap();
+        assert!(!status.locked);
+        assert_eq!(status.active_wallet, Some([7_u8; 16]));
+        assert_eq!(status.enabled_modules(), &[WalletReadOnlyModule::Handshake]);
+
+        let account = controller.list_accounts().unwrap();
+        assert_eq!(account.account_id, [9_u8; 16]);
+        assert_eq!(account.module, WalletReadOnlyModule::Handshake);
+        assert_eq!(account.label, "Primary HNS");
+        assert!(account.receive_display.is_none());
+
+        let balance = controller.read_balance().unwrap();
+        assert_eq!(balance.asset, WalletReadOnlyAsset::Hns);
+        assert_eq!(balance.base_units.get(), u128::MAX);
+
+        let target = controller.read_receive_target().unwrap();
+        assert_eq!(target.account, [9_u8; 16]);
+        assert_eq!(target.display, "rs1qchromiumwallet");
+        assert_eq!(target.derivation_index, 7);
+
+        let history = controller.read_transaction_history().unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].txid, [0xab; 32]);
+        assert_eq!(
+            history[0].status,
+            WalletReadOnlyTransactionStatus::Confirmed
+        );
+        assert_eq!(history[0].fee.map(WalletReadOnlyBaseUnits::get), Some(2));
+        assert_eq!(history[0].block_height, Some(100));
+        assert_eq!(history[0].first_seen_unix, Some(1_700_000_000));
+        assert_eq!(history[0].confirmation_count, 6);
+        assert_eq!(history[1].status, WalletReadOnlyTransactionStatus::Mempool);
+
+        let module_status = controller.read_module_status().unwrap();
+        assert_eq!(module_status.phase, WalletReadOnlySyncPhase::Ready);
+        assert_eq!(module_status.validated_height, 100);
+        assert_eq!(module_status.scanned_height, 100);
+        assert_eq!(module_status.target_height, Some(100));
+        assert!(module_status.last_error.is_none());
+        assert!(!controller.provider_available());
+        assert!(!controller.value_available());
+        drop(controller);
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_read_response_class_substitution_poisons_the_session() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (host_session, restart_generation, service_session) =
+                negotiate_fixture_service(&mut service, deadline, 22);
+            let request = read_wallet_payload(&mut service, deadline).unwrap();
+            let request = serde_json::from_slice::<Value>(&request).unwrap();
+            assert_wallet_fixture_request(
+                &request,
+                &host_session,
+                &service_session,
+                restart_generation,
+                1,
+                json!({
+                    "operation": "wallet",
+                    "request": { "operation": "listAccounts" }
+                }),
+            );
+            write_wallet_fixture_result(
+                &mut service,
+                deadline,
+                (&host_session, &service_session, restart_generation),
+                1,
+                &request,
+                json!({
+                    "result": "balance",
+                    "amount": { "asset": "HNS", "base_units": "42" }
+                }),
+            );
+        });
+
+        let reader = host.try_clone().unwrap();
+        let mut controller = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            21,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            controller.list_accounts().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            controller.read_status().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        drop(controller);
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_read_domain_validation_failure_poisons_the_session() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (host_session, restart_generation, service_session) =
+                negotiate_fixture_service(&mut service, deadline, 23);
+            let request = read_wallet_payload(&mut service, deadline).unwrap();
+            let request = serde_json::from_slice::<Value>(&request).unwrap();
+            assert_wallet_fixture_request(
+                &request,
+                &host_session,
+                &service_session,
+                restart_generation,
+                1,
+                json!({
+                    "operation": "wallet",
+                    "request": { "operation": "status" }
+                }),
+            );
+            write_wallet_fixture_result(
+                &mut service,
+                deadline,
+                (&host_session, &service_session, restart_generation),
+                1,
+                &request,
+                json!({
+                    "result": "status",
+                    "status": {
+                        "locked": false,
+                        "activeWallet": vec![7_u8; 16],
+                        "enabledModules": ["handshake"],
+                        "mainnetSettlementEnabled": true
+                    }
+                }),
+            );
+        });
+
+        let reader = host.try_clone().unwrap();
+        let mut controller = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            22,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            controller.read_status().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            controller.read_status().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+        drop(controller);
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_read_models_reject_non_hns_noncanonical_and_incoherent_values() {
+        assert_eq!(
+            serde_json::from_value::<WalletReadOnlyBaseUnits>(json!("0"))
+                .unwrap()
+                .get(),
+            0
+        );
+        assert!(serde_json::from_value::<WalletReadOnlyBaseUnits>(json!("00")).is_err());
+        assert!(serde_json::from_value::<WalletReadOnlyBaseUnits>(json!("+1")).is_err());
+        assert!(
+            serde_json::from_value::<WalletReadOnlyBaseUnits>(json!(
+                "340282366920938463463374607431768211456"
+            ))
+            .is_err()
+        );
+
+        let bitcoin_amount = serde_json::from_value::<WalletReadOnlyAmount>(json!({
+            "asset": "BTC",
+            "base_units": "42"
+        }))
+        .unwrap();
+        assert!(!bitcoin_amount.validate());
+        assert!(
+            serde_json::from_value::<WalletReadOnlyAmount>(json!({
+                "asset": "HNS",
+                "baseUnits": "42"
+            }))
+            .is_err()
+        );
+
+        let zero_account = serde_json::from_value::<WalletReadOnlyAccountSummary>(json!({
+            "accountId": vec![0_u8; 16],
+            "module": "handshake",
+            "label": "Primary HNS",
+            "receiveDisplay": null
+        }))
+        .unwrap();
+        assert!(!zero_account.validate());
+        let non_hns_account = serde_json::from_value::<WalletReadOnlyAccountSummary>(json!({
+            "accountId": vec![9_u8; 16],
+            "module": "bitcoin",
+            "label": "Primary HNS",
+            "receiveDisplay": null
+        }))
+        .unwrap();
+        assert!(!non_hns_account.validate());
+        let maximum_account_display =
+            serde_json::from_value::<WalletReadOnlyAccountSummary>(json!({
+                "accountId": vec![9_u8; 16],
+                "module": "handshake",
+                "label": "Primary HNS",
+                "receiveDisplay": "x".repeat(MAX_WALLET_PUBLIC_STRING_BYTES)
+            }))
+            .unwrap();
+        assert!(maximum_account_display.validate());
+        let oversized_account_display =
+            serde_json::from_value::<WalletReadOnlyAccountSummary>(json!({
+                "accountId": vec![9_u8; 16],
+                "module": "handshake",
+                "label": "Primary HNS",
+                "receiveDisplay": "x".repeat(MAX_WALLET_PUBLIC_STRING_BYTES + 1)
+            }))
+            .unwrap();
+        assert!(!oversized_account_display.validate());
+
+        let wrong_target = serde_json::from_value::<WalletReadOnlyReceiveTarget>(json!({
+            "module": "handshake",
+            "account": vec![8_u8; 16],
+            "display": "rs1qwrongaccount",
+            "derivation_index": 0
+        }))
+        .unwrap();
+        assert!(!wrong_target.validate([9_u8; 16]));
+        let spaced_target = serde_json::from_value::<WalletReadOnlyReceiveTarget>(json!({
+            "module": "handshake",
+            "account": vec![9_u8; 16],
+            "display": "rs1q invalid",
+            "derivation_index": 0
+        }))
+        .unwrap();
+        assert!(!spaced_target.validate([9_u8; 16]));
+        assert!(
+            serde_json::from_value::<WalletReadOnlyReceiveTarget>(json!({
+                "module": "handshake",
+                "account": vec![9_u8; 16],
+                "display": "rs1qwirecase",
+                "derivationIndex": 0
+            }))
+            .is_err()
+        );
+
+        let negative_zero = serde_json::from_value::<WalletReadOnlyTransactionSummary>(json!({
+            "module": "handshake",
+            "txid": vec![1_u8; 32],
+            "status": "mempool",
+            "net_amount": { "negative": true, "magnitude": "0" },
+            "fee": null,
+            "block_height": null,
+            "first_seen_unix": 1,
+            "confirmation_count": 0
+        }))
+        .unwrap();
+        assert!(!negative_zero.validate());
+        let valid_transaction = serde_json::from_value::<WalletReadOnlyTransactionSummary>(
+            hns_transaction_json(1, "mempool", false),
+        )
+        .unwrap();
+        assert!(valid_transaction.validate());
+        assert!(!validate_wallet_transaction_history(&[
+            valid_transaction.clone(),
+            valid_transaction
+        ]));
+        let structurally_valid_unconfirmed = serde_json::from_value::<
+            WalletReadOnlyTransactionSummary,
+        >(hns_transaction_json(2, "confirmed", false))
+        .unwrap();
+        assert!(structurally_valid_unconfirmed.validate());
+        let oversized_history = (1_u8..=129)
+            .map(|txid| {
+                serde_json::from_value::<WalletReadOnlyTransactionSummary>(hns_transaction_json(
+                    txid, "mempool", false,
+                ))
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(!validate_wallet_transaction_history(&oversized_history));
+        assert!(
+            serde_json::from_value::<WalletReadOnlyTransactionSummary>(json!({
+                "module": "handshake",
+                "txid": vec![1_u8; 32],
+                "status": "mempool",
+                "netAmount": { "negative": false, "magnitude": "1" },
+                "fee": null,
+                "blockHeight": null,
+                "firstSeenUnix": 1,
+                "confirmationCount": 0
+            }))
+            .is_err()
+        );
+
+        let not_ready = serde_json::from_value::<WalletReadOnlySyncStatus>(json!({
+            "phase": "headers",
+            "validated_height": 100,
+            "scanned_height": 100,
+            "target_height": 100,
+            "last_error": null
+        }))
+        .unwrap();
+        assert!(!not_ready.validate());
+        let mismatched_height = serde_json::from_value::<WalletReadOnlySyncStatus>(json!({
+            "phase": "ready",
+            "validated_height": 100,
+            "scanned_height": 99,
+            "target_height": 100,
+            "last_error": null
+        }))
+        .unwrap();
+        assert!(!mismatched_height.validate());
+        let reported_error = serde_json::from_value::<WalletReadOnlySyncStatus>(json!({
+            "phase": "ready",
+            "validated_height": 100,
+            "scanned_height": 100,
+            "target_height": 100,
+            "last_error": "backend unavailable"
+        }))
+        .unwrap();
+        assert!(!reported_error.validate());
+        assert!(
+            serde_json::from_value::<WalletReadOnlySyncStatus>(json!({
+                "phase": "ready",
+                "validatedHeight": 100,
+                "scannedHeight": 100,
+                "targetHeight": 100,
+                "lastError": null
+            }))
+            .is_err()
+        );
+
+        let missing_active_wallet = serde_json::from_value::<WalletReadOnlyStatus>(json!({
+            "locked": false,
+            "activeWallet": null,
+            "enabledModules": ["handshake"],
+            "mainnetSettlementEnabled": false
+        }))
+        .unwrap();
+        assert!(!missing_active_wallet.validate());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn ordinary_wallet_failure_advances_the_correlated_session() {
         let (host, mut service) = UnixStream::pair().unwrap();
         set_nonblocking_fd(service.as_raw_fd()).unwrap();
@@ -3127,6 +4168,13 @@ mod tests {
             let first = read_wallet_payload(&mut service, deadline).unwrap();
             let first = serde_json::from_slice::<Value>(&first).unwrap();
             assert_eq!(first["envelope"]["channelSequence"], 1);
+            assert_eq!(
+                first["envelope"]["body"],
+                json!({
+                    "operation": "wallet",
+                    "request": { "operation": "listAccounts" }
+                })
+            );
             let failure = json!({
                 "frameType": "response",
                 "envelope": {
@@ -3156,6 +4204,13 @@ mod tests {
             let second = read_wallet_payload(&mut service, deadline).unwrap();
             let second = serde_json::from_slice::<Value>(&second).unwrap();
             assert_eq!(second["envelope"]["channelSequence"], 2);
+            assert_eq!(
+                second["envelope"]["body"],
+                json!({
+                    "operation": "wallet",
+                    "request": { "operation": "status" }
+                })
+            );
             let status = json!({
                 "frameType": "response",
                 "envelope": {
@@ -3197,7 +4252,7 @@ mod tests {
             Duration::from_secs(2),
         )
         .unwrap();
-        let failure = controller.read_status().unwrap_err();
+        let failure = controller.list_accounts().unwrap_err();
         assert_eq!(failure.kind(), io::ErrorKind::Other);
         assert_eq!(failure.to_string(), "wallet service persistence failed");
         assert!(controller.read_status().unwrap().locked);

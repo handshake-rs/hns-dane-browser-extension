@@ -184,6 +184,13 @@ change.
   becomes unavailable. This adds no native request or process launch: lock
   state, active wallet, and modules remain unavailable, and provider, value,
   and settlement remain disabled.
+- The dormant Linux child-pipe controller now implements the ABI-v2 HNS read
+  classes behind an exact singleton account selected from `listAccounts`:
+  balance, receive target, bounded transaction history, and exact-ready module
+  status. Request/response classes and session sequences remain correlated,
+  malformed or non-HNS data poisons the private session, and independent value
+  calls do not claim a coherent snapshot. No launcher, database configuration,
+  extension request, provider, approval, or value path invokes these reads.
 
 Passing portable source gates is not a substitute for those release gates.
 

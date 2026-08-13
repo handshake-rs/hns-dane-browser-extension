@@ -196,12 +196,15 @@ the ABI-v2 four-byte big-endian frame, one absolute I/O deadline, fresh random
 host/request IDs, exact restart/session/directional sequence correlation,
 closed capabilities bounded by a caller-supplied admitted ceiling, exact
 limits, and kill-and-wait child cleanup on EOF, timeout, write failure,
-malformed output, or drop. The only implemented request is private wallet
-`status`; even a service hello containing provider or value capabilities cannot
-make those browser product gates true. This controller is deliberately not
-joined to the artifact launcher or to database configuration. No production
-path invokes it while the verifier-owned trust, qualification, and floor tables
-remain empty.
+malformed output, or drop. Its private read surface includes wallet status,
+singleton HNS-account selection, balance, receive target, transaction history,
+and exact-ready module status. Module and account selectors are fixed by the
+controller, responses are HNS-only and bounded, and separately synchronized
+value calls are not represented as one coherent snapshot. Even a service hello
+containing provider or value capabilities cannot make those browser product
+gates true. This controller is deliberately not joined to the artifact
+launcher or to database configuration. No production path invokes it while
+the verifier-owned trust, qualification, and floor tables remain empty.
 
 ## Lifecycle, upgrade, and removal
 

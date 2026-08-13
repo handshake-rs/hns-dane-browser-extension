@@ -331,11 +331,14 @@ The Linux module also owns a dormant ABI-v2 read-only subprocess controller.
 It uses absolute-deadline nonblocking frames, correlates exact host/service
 sessions, restart generations, directional sequences, and request IDs, rejects
 runtime capabilities outside its caller-supplied admitted ceiling, and kills
-and reaps a child after any transport or protocol failure. Only wallet status
-is representable in this tranche. The controller is deliberately not joined to
-artifact launch or database configuration, and negotiating provider or value
-capabilities does not satisfy browser authority, projection, release, or
-availability gates.
+and reaps a child after any transport or protocol failure. Its private request
+surface covers wallet status, one exact HNS account admitted by
+`listAccounts`, and HNS balance, receive target, transaction history, and
+module status. The controller supplies no caller-selected account or module,
+and each value call has only its own synchronization authority rather than a
+shared snapshot across calls. It is deliberately not joined to artifact launch
+or database configuration, and negotiating provider or value capabilities does
+not satisfy browser authority, projection, release, or availability gates.
 
 No production trust root, release pin, or release floor is configured yet, and
 test keys are compiled only for tests. No independently released service,
