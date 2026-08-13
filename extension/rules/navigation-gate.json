@@ -1,0 +1,18 @@
+[
+  {
+    "id": 73100,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "extensionPath": "/src/proxy-wait.html"
+      }
+    },
+    "condition": {
+      "regexFilter": "^(https?://.*)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": ["main_frame"],
+      "requestMethods": ["get"]
+    }
+  }
+]

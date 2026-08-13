@@ -1773,10 +1773,13 @@ impl NativeHostController {
                 let diagnostics = diagnostics_json();
                 let core = serde_json::from_str(&diagnostics)
                     .unwrap_or_else(|_| Value::String(diagnostics.to_owned()));
-                let maintenance_epoch = self.runtime.security_maintenance_epoch();
+                let runtime_status = self.status_result();
+                let maintenance_epoch = runtime_status
+                    .get("securityMaintenanceEpoch")
+                    .and_then(Value::as_u64);
                 let value = json!({
                     "core": core,
-                    "runtime": self.status_result(),
+                    "runtime": runtime_status,
                     "recentSecurityResults": self
                         .security_observations
                         .recent(maintenance_epoch),
@@ -1849,7 +1852,8 @@ impl NativeHostController {
         let runtime_generation = authority.runtime_generation();
         let policy_generation = authority.policy_generation();
         let proxy_generation = proxy.generation();
-        let maintenance_epoch = self.runtime.security_maintenance_epoch();
+        let (header_sync, header_sync_unavailable_reason, maintenance_epoch) =
+            self.header_sync_status_result();
         self.security_observations.activate(
             ActiveSecurityContext {
                 runtime_session: runtime_session.clone(),
@@ -1862,7 +1866,6 @@ impl NativeHostController {
         );
         let pac_script = chromium_dane_pac_script(proxy.port())
             .map_err(|error| ("pacGenerationFailed", error.to_string()))?;
-        let (header_sync, header_sync_unavailable_reason) = self.header_sync_status_result();
         let result = json!({
             "state": "active",
             "proxy": {
@@ -1894,8 +1897,8 @@ impl NativeHostController {
     fn status_result(&self) -> Value {
         let proxy = self.proxy.as_ref();
         let context = self.security_observations.active_context();
-        let maintenance_epoch = self.runtime.security_maintenance_epoch();
-        let (header_sync, header_sync_unavailable_reason) = self.header_sync_status_result();
+        let (header_sync, header_sync_unavailable_reason, maintenance_epoch) =
+            self.header_sync_status_result();
         json!({
             "state": if proxy.is_some_and(|proxy| !proxy.is_stop_requested()) {
                 "active"
@@ -1948,18 +1951,22 @@ impl NativeHostController {
         self.error_response(request_id, code, message)
     }
 
-    fn header_sync_status_result(&self) -> (Value, Value) {
-        match self.runtime.sync_status() {
-            Ok(status) => match serde_json::from_str::<Value>(&status.to_json()) {
-                Ok(value) => (value, Value::Null),
-                Err(_) => (
-                    Value::Null,
-                    Value::String("headerSyncStatusInvalid".to_owned()),
-                ),
-            },
+    fn header_sync_status_result(&self) -> (Value, Value, Option<u64>) {
+        match self.runtime.sync_status_with_security_epoch() {
+            Ok((status, maintenance_epoch)) => {
+                match serde_json::from_str::<Value>(&status.to_json()) {
+                    Ok(value) => (value, Value::Null, maintenance_epoch),
+                    Err(_) => (
+                        Value::Null,
+                        Value::String("headerSyncStatusInvalid".to_owned()),
+                        None,
+                    ),
+                }
+            }
             Err(_) => (
                 Value::Null,
                 Value::String("headerSyncStatusUnavailable".to_owned()),
+                None,
             ),
         }
     }

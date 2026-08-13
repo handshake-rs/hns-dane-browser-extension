@@ -22,7 +22,7 @@ desktop notices. Mobile build and release evidence is maintained in
   `hns-browser-runtime`, `hns-browser-observability`, `hns-icann-dane`,
   `hns-namespace-resolution`, and `hns-resolution-policy`.
 - Every canonical package and private Chromium adapter is pinned and locked to
-  engine version `0.2.0` at that same revision.
+  engine version `0.2.1` at that same revision.
 - The source-policy verifier and its negative tests reject unreviewed Git
   inputs, moving engine or HNSA-authority revisions, canonical registry
   fallbacks, and different locked versions.

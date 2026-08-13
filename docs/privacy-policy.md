@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: 2026-08-10
+Last updated: 2026-08-12
 
 HNS DANE Browser Extension is published by Denuo Web, LLC. Privacy and
 support questions can be sent to `info@denuoweb.com`. Do not post personal
@@ -101,6 +101,19 @@ not sent to the native host or any network service, is scoped to the exact
 runtime and policy generation, and is cleared when the browser session ends.
 Header maintenance prevents those URL entries from authorizing a new cached
 document.
+
+During native-proxy replacement or a name-tree readiness gap, a local
+extension waiting page temporarily carries the exact credential-free HTTP(S)
+GET target in its URL fragment. The page records that target and the local
+gate revision in its own `sessionStorage` only to prevent an automatic resume
+loop. The fragment is not sent to the native host, destination website, or a
+developer-operated service. The marker is retained only for that tab's page
+session and is discarded when the tab or session ends. POST requests are
+never queued or replayed. On first install or upgrade, the packaged bootstrap
+rule cannot carry a catalog-specific extension URL and its original target in
+one static rule. The worker therefore keeps at most one such target per tab in
+worker memory for up to one minute, exposes it only to the waiting page in
+that same tab, and clears it when consumed or when the tab closes.
 
 For Chromium-owned ICANN WebPKI tunnels, session state may also retain the
 native decision's exact host and port, runtime tuple, event number,

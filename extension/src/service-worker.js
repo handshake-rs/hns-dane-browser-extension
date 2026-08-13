@@ -20,6 +20,10 @@ import {
   registerNavigationLifecycle
 } from "./navigation-receipts.js";
 import {
+  NavigationGateController,
+  validNavigationGateTarget
+} from "./navigation-gate.js";
+import {
   isProviderBridgeMessage,
   protocolError,
   providerErrorPayload,
@@ -48,7 +52,6 @@ import {
   BLOCKING_PAC_SCRIPT,
   SerializedEpochMutationController,
   SerializedMandatoryPacController,
-  deactivateIfHeaderEvidenceExpired,
   headerReadinessFailClosed,
   installPacForCurrentNativeGeneration,
   runtimeControlToken,
@@ -62,6 +65,11 @@ const HEALTH_ALARM = "hns-runtime-health";
 const RECONNECT_ALARM = "hns-runtime-reconnect";
 const HEADER_SYNC_DEADLINE_ALARM = "hns-header-sync-deadline";
 const HEADER_EVIDENCE_EXPIRY_ALARM = "hns-header-evidence-expiry";
+// Chrome alarms and MV3 worker wakeups are not real-time. Close the
+// synchronous navigation gate well before Rust's authenticated evidence hard
+// deadline so a delayed callback cannot expose native rejection pages.
+const HEADER_EVIDENCE_GATE_LEAD_MS = 30 * 1000;
+const NAVIGATION_GATE_BOOTSTRAP_TARGET_TTL_MS = 60 * 1000;
 const LEGACY_HEADER_SYNC_ALARM = "hns-header-sync";
 const HEALTH_PERIOD_MINUTES = 5;
 const HEADER_SYNC_LAST_ATTEMPT_KEY = "headerSyncLastAttemptAt";
@@ -73,6 +81,11 @@ const WALLET_APPROVAL_CLEANUP_ALARM = "wallet-approval-cleanup";
 const WALLET_APPROVAL_STORAGE_PREFIX = "walletApproval:";
 const MAX_PENDING_WALLET_APPROVALS = 8;
 const MAX_PENDING_WALLET_APPROVALS_PER_ORIGIN = 2;
+const RECOVERABLE_PROXY_NAVIGATION_ERRORS = new Set([
+  "net::ERR_FAILED",
+  "net::ERR_PROXY_CONNECTION_FAILED",
+  "net::ERR_TUNNEL_CONNECTION_FAILED"
+]);
 const client = new NativeClient(chrome, NATIVE_HOST);
 const walletProviderRouter = new WalletProviderRouter({
   nativeRequest: walletProviderNativeRequest,
@@ -80,6 +93,33 @@ const walletProviderRouter = new WalletProviderRouter({
   deliverEvent: deliverWalletProviderEvent
 });
 let controlEpoch = 0;
+const navigationGateBootstrapTargets = new Map();
+const admittedMainFrameNavigations = new Map();
+const navigationGate = new NavigationGateController({
+  updateDynamicRules: (update) =>
+    chromeCall(
+      chrome.declarativeNetRequest.updateDynamicRules,
+      chrome.declarativeNetRequest,
+      update
+    ),
+  updateSessionRules: (update) =>
+    chromeCall(
+      chrome.declarativeNetRequest.updateSessionRules,
+      chrome.declarativeNetRequest,
+      update
+    ),
+  waitPageUrl: chrome.runtime.getURL("src/proxy-wait.html"),
+  isCurrent: (expectedControlEpoch) => expectedControlEpoch === controlEpoch,
+  runtimeReady: (status, nowUnixSeconds) =>
+    status?.state === "active" &&
+    status?.proxyActive === true &&
+    credentials != null &&
+    client.currentConnectionEpoch() != null &&
+    headerSyncReadyForNavigationGate(
+      status?.headerSync,
+      nowUnixSeconds * 1000
+    )
+});
 const pacController = new SerializedMandatoryPacController(
   (pacScript) => setMandatoryPac(pacScript),
   () => readMandatoryPacScript(),
@@ -94,6 +134,7 @@ let recoveryOperation = null;
 let headerSyncOperation = null;
 let headerMaintenanceOperation = null;
 let nativeDisconnectCleanupOperation = null;
+let proxyNavigationRecoveryOperation = null;
 let lastHeaderSyncAttemptAt = null;
 let lastHeaderSyncAttemptLoaded = false;
 let retainedHeaderSyncUrgentRetryWindow = null;
@@ -194,7 +235,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     return true;
   }
-  void handleUiMessage(message)
+  void handleUiMessage(message, sender)
     .then((result) => sendResponse({ ok: true, result }))
     .catch((error) =>
       sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) })
@@ -228,18 +269,75 @@ chrome.webRequest.onAuthRequired.addListener(
 
 registerNavigationLifecycle(chrome, {
   beforeRequest(details) {
+    const gateTarget = validNavigationGateRequest(details);
+    if (gateTarget) {
+      const candidate = {
+        requestId: details.requestId,
+        tabId: details.tabId,
+        target: gateTarget,
+        capturedAtUnixMs: Date.now()
+      };
+      if (navigationGate.logicallyOpen(publicStatus)) {
+        navigationGateBootstrapTargets.delete(details.tabId);
+        admittedMainFrameNavigations.set(details.requestId, candidate);
+      } else {
+        // An enabled static rule normally performs this transfer. Repeating it
+        // from the request event also catches a session allow left behind by
+        // worker suspension or OS sleep before asynchronous startup can close
+        // that rule.
+        rememberNavigationGateBootstrapTarget(candidate);
+        void transferMainFrameNavigation(candidate).catch(() => {});
+      }
+    }
     const statusAtRequest = publicStatus;
     void withNavigationReceiptStore((store) =>
       store.beginRequest(details, statusAtRequest)
     );
   },
   beforeRedirect(details) {
+    const admitted = admittedMainFrameNavigations.get(details.requestId);
+    const redirectedTarget = validNavigationGateTarget(details.redirectUrl);
+    if (admitted && redirectedTarget) {
+      admitted.target = redirectedTarget;
+    }
     void withNavigationReceiptStore((store) => store.redirectRequest(details));
   },
   completed(details) {
+    admittedMainFrameNavigations.delete(details.requestId);
     void captureCompletedMainFrame(details);
   },
   requestError(details) {
+    const admitted = admittedMainFrameNavigations.get(details.requestId);
+    const recoverableProxyError = normalizedProxyNavigationError(details.error);
+    const failedTarget = validNavigationGateRequest(details);
+    const failedCandidate =
+      admitted ??
+      (failedTarget == null
+        ? null
+        : {
+            requestId: details.requestId,
+            tabId: details.tabId,
+            target: failedTarget,
+            capturedAtUnixMs: Date.now()
+          });
+    if (failedCandidate && recoverableProxyError != null) {
+      // A navigation can outlive an MV3 worker instance. Retain (or rebuild)
+      // the exact failed GET so both this recovery and a concurrent lifecycle
+      // close can move it off Chromium's raw proxy error page.
+      admittedMainFrameNavigations.set(
+        failedCandidate.requestId,
+        failedCandidate
+      );
+      const failureControlEpoch = controlEpoch;
+      const failureRuntimeControl = captureHeaderMaintenanceControl();
+      void recoverProxyNavigationFailure(
+        failedCandidate,
+        failureControlEpoch,
+        failureRuntimeControl
+      ).catch(() => {});
+    } else {
+      admittedMainFrameNavigations.delete(details.requestId);
+    }
     void withNavigationReceiptStore((store) => store.failRequest(details));
   },
   committed(details) {
@@ -267,12 +365,18 @@ registerNavigationLifecycle(chrome, {
   },
   tabRemoved(tabId) {
     walletProviderRouter.forgetTab(tabId);
+    navigationGateBootstrapTargets.delete(tabId);
+    forgetAdmittedMainFrameNavigations(tabId);
     void invalidateWalletApprovalsForTab(tabId, null, "tabClosed");
     void withNavigationReceiptStore((store) => store.removeTab(tabId));
   },
   tabReplaced(addedTabId, removedTabId) {
     walletProviderRouter.forgetTab(removedTabId);
     walletProviderRouter.forgetTab(addedTabId);
+    navigationGateBootstrapTargets.delete(removedTabId);
+    navigationGateBootstrapTargets.delete(addedTabId);
+    forgetAdmittedMainFrameNavigations(removedTabId);
+    forgetAdmittedMainFrameNavigations(addedTabId);
     void invalidateWalletApprovalsForTab(removedTabId, null, "tabReplaced");
     void withNavigationReceiptStore((store) =>
       store.replaceTab(addedTabId, removedTabId)
@@ -319,6 +423,26 @@ function handleNativeDisconnect(disconnectedConnectionEpoch) {
   const cleanup = (async () => {
     // Persist recovery intent before changing the PAC. If the worker is
     // terminated during cleanup, a fresh worker will finish replacement.
+    let gateCloseFailure = null;
+    try {
+      await closeNavigationGateAndTransfer(cleanupControlEpoch);
+      requireControlGeneration(cleanupControlEpoch);
+    } catch (error) {
+      if (isSupersededControlError(error)) return publicStatus;
+      gateCloseFailure = error;
+      // The listener is already gone, so the PAC still has to become a fixed
+      // blocker. Retry the independent gate closure once before that change;
+      // a later recovery generation will keep retrying if Chromium's rules API
+      // remains unavailable.
+      try {
+        await closeNavigationGateAndTransfer(cleanupControlEpoch);
+        requireControlGeneration(cleanupControlEpoch);
+        gateCloseFailure = null;
+      } catch (retryError) {
+        if (isSupersededControlError(retryError)) return publicStatus;
+        gateCloseFailure = retryError;
+      }
+    }
     try {
       await createAlarmForControl(
         RECONNECT_ALARM,
@@ -328,7 +452,11 @@ function handleNativeDisconnect(disconnectedConnectionEpoch) {
     } catch (error) {
       if (isSupersededControlError(error)) return publicStatus;
     }
-    let failure = new Error("Native host disconnected");
+    let failure = gateCloseFailure
+      ? new Error(
+          `native host disconnected and the navigation gate could not be confirmed closed: ${boundedError(gateCloseFailure)}`
+        )
+      : new Error("Native host disconnected");
     try {
       // Replace the now-dead live PAC with a fixed mandatory blocker. There is
       // never an interval in which Chromium falls back to DIRECT.
@@ -364,7 +492,10 @@ function handleNativeDisconnect(disconnectedConnectionEpoch) {
     }
     setStatus({
       state: "degraded",
-      reason: "nativeHostDisconnected",
+      reason:
+        gateCloseFailure == null
+          ? "nativeHostDisconnected"
+          : "navigationGateCloseFailed",
       proxyActive: false,
       headerSyncInProgress: false,
       headerSyncError: boundedError(failure),
@@ -427,6 +558,9 @@ function recover() {
   recoveryOperation = enqueueRuntimeLifecycle(() =>
     startRuntime().catch((error) => {
         if (isSupersededControlError(error)) return publicStatus;
+        if (error?.code === "navigationGateTransitionFailed") {
+          return publicStatus;
+        }
         setStatus({
           state: publicStatus.state === "blocked" ? "blocked" : "degraded",
           reason: error instanceof Error ? error.message : String(error),
@@ -478,6 +612,7 @@ async function startRuntime(policyOverride) {
   let activationStatus = null;
   let blockerConfirmed = false;
   let livePacConfirmed = false;
+  let navigationGateClosed = false;
   let replacedConnectionDisconnected = false;
   setStatus({
     state: "starting",
@@ -491,6 +626,11 @@ async function startRuntime(policyOverride) {
     recentConnectSecurityDecisions: []
   });
   try {
+    // Close the synchronous main-frame gate before selecting a PAC whose
+    // listener is deliberately unavailable during replacement.
+    await closeNavigationGateAndTransfer(startControlEpoch);
+    requireControlGeneration(startControlEpoch);
+    navigationGateClosed = true;
     // A replacement always transitions live PAC -> mandatory blocker before
     // disconnecting the captured old native connection. DIRECT is never used.
     await installBlockingPac(startControlEpoch);
@@ -541,12 +681,10 @@ async function startRuntime(policyOverride) {
       throw new Error("local CA installation is required before the HNS PAC can activate");
     }
 
-    if (!headerSyncReadyForProxyActivation(result.headerSync)) {
-      // The native proxy is already able to serve ICANN traffic while its HNS
-      // header authority catches up. Select that authenticated live listener
-      // before the potentially long initial sync so Chromium is not stranded
-      // on the fixed blocker. Rust still rejects HNS work until current,
-      // independently corroborated header evidence is available.
+    if (!headerSyncReadyForNavigationGate(result.headerSync)) {
+      // Select the authenticated live listener before the potentially long
+      // initial sync. Main-frame GET navigation remains on the extension wait
+      // page until the independently corroborated tree root is ready.
       credentials = {
         port: result.proxy.port,
         username: result.proxy.username,
@@ -589,7 +727,7 @@ async function startRuntime(policyOverride) {
       startControlEpoch,
       activationConnectionEpoch
     );
-    if (!headerSyncReadyForProxyActivation(activationStatus.headerSync)) {
+    if (!headerSyncReadyForNavigationGate(activationStatus.headerSync)) {
       throw new Error(
         "validated header target evidence expired before PAC activation"
       );
@@ -614,7 +752,7 @@ async function startRuntime(policyOverride) {
             activationConnectionEpoch
           ),
         () => {
-          if (!headerSyncReadyForProxyActivation(activationStatus.headerSync)) {
+          if (!headerSyncReadyForNavigationGate(activationStatus.headerSync)) {
             throw new Error(
               "validated header target evidence expired during PAC activation"
             );
@@ -623,6 +761,11 @@ async function startRuntime(policyOverride) {
       );
       livePacConfirmed = true;
     }
+    await navigationGate.open(startControlEpoch);
+    requireRuntimeControl(
+      startControlEpoch,
+      activationConnectionEpoch
+    );
     setStatus({
       state: "active",
       reason: null,
@@ -673,6 +816,54 @@ async function startRuntime(policyOverride) {
       throw supersededControlError();
     }
     let failure = error;
+    if (!navigationGateClosed) {
+      // No PAC or native-listener mutation has occurred. Keep the prior live
+      // generation intact and, when it was ready, repair its allow rule before
+      // a later recovery attempt retries the replacement.
+      credentials = priorCredentials;
+      let priorGateRestored = false;
+      if (
+        priorStatus.proxyActive === true &&
+        priorCredentials != null &&
+        headerSyncReadyForNavigationGate(priorStatus.headerSync)
+      ) {
+        try {
+          await navigationGate.open(startControlEpoch);
+          requireControlGeneration(startControlEpoch);
+          priorGateRestored = true;
+        } catch (restoreError) {
+          if (isSupersededControlError(restoreError)) {
+            throw supersededControlError();
+          }
+          failure = new Error(
+            `navigation gate could not be closed or restored: ${boundedError(restoreError)}`
+          );
+        }
+      }
+      setStatus(
+        priorGateRestored
+          ? {
+              ...priorStatus,
+              headerSyncError: `Runtime replacement postponed: ${boundedError(failure)}`
+            }
+          : {
+              ...priorStatus,
+              state: "degraded",
+              reason: "navigationGateTransitionFailed",
+              proxyActive:
+                priorStatus.proxyActive === true && priorCredentials != null,
+              headerSyncInProgress: false,
+              headerSyncError: boundedError(failure)
+            }
+      );
+      await createAlarmForControl(
+        RECONNECT_ALARM,
+        { delayInMinutes: 1 },
+        startControlEpoch
+      );
+      failure.code = "navigationGateTransitionFailed";
+      throw failure;
+    }
     if (
       livePacConfirmed &&
       activationConnectionEpoch != null &&
@@ -792,7 +983,7 @@ async function establishStartupHeaderReadiness(
   expectedControlEpoch,
   expectedConnectionEpoch
 ) {
-  if (headerSyncReadyForProxyActivation(startResult.headerSync)) {
+  if (headerSyncReadyForNavigationGate(startResult.headerSync)) {
     return startResult;
   }
 
@@ -824,7 +1015,7 @@ async function establishStartupHeaderReadiness(
   if (refreshError) {
     throw new Error(refreshError);
   }
-  if (!headerSyncReadyForProxyActivation(synchronized)) {
+  if (!headerSyncReadyForNavigationGate(synchronized)) {
     throw new Error(
       "header synchronization did not establish current unexpired target evidence"
     );
@@ -836,7 +1027,7 @@ async function establishStartupHeaderReadiness(
     expectedConnectionEpoch
   );
   validateStatusResult(status, startResult);
-  if (!headerSyncReadyForProxyActivation(status.headerSync)) {
+  if (!headerSyncReadyForNavigationGate(status.headerSync)) {
     throw new Error(
       "native status did not retain current unexpired target evidence"
     );
@@ -844,12 +1035,16 @@ async function establishStartupHeaderReadiness(
   return status;
 }
 
-async function handleUiMessage(message) {
+async function handleUiMessage(message, sender) {
   switch (message.type) {
     case "getStatus": {
       const status = await refreshNativeStatus();
       return statusForTab(status, message.tabId);
     }
+    case "navigationGateStatus":
+      return navigationGate.status(publicStatus);
+    case "navigationGateBootstrap":
+      return navigationGateBootstrapTarget(sender?.tab?.id);
     case "restart":
       // An explicit restart preempts a long-running header sync: startRuntime
       // first confirms the blocker, then disconnects only captured A.
@@ -875,6 +1070,177 @@ async function handleUiMessage(message) {
     default:
       throw new Error("unsupported extension message");
   }
+}
+
+async function navigationGateBootstrapTarget(tabId) {
+  if (!Number.isSafeInteger(tabId) || tabId < 0) {
+    return { target: null };
+  }
+  const candidate = navigationGateBootstrapTargets.get(tabId);
+  const age = Date.now() - candidate?.capturedAtUnixMs;
+  if (
+    !candidate ||
+    candidate.tabId !== tabId ||
+    !Number.isSafeInteger(candidate.capturedAtUnixMs) ||
+    !Number.isSafeInteger(age) ||
+    age < 0 ||
+    age > NAVIGATION_GATE_BOOTSTRAP_TARGET_TTL_MS
+  ) {
+    navigationGateBootstrapTargets.delete(tabId);
+    return { target: null };
+  }
+  navigationGateBootstrapTargets.delete(tabId);
+  return { target: validNavigationGateTarget(candidate.target) };
+}
+
+function rememberNavigationGateBootstrapTarget(candidate) {
+  navigationGateBootstrapTargets.set(candidate.tabId, candidate);
+  setTimeout(() => {
+    if (navigationGateBootstrapTargets.get(candidate.tabId) === candidate) {
+      navigationGateBootstrapTargets.delete(candidate.tabId);
+    }
+  }, NAVIGATION_GATE_BOOTSTRAP_TARGET_TTL_MS);
+}
+
+function validNavigationGateRequest(details) {
+  if (
+    details?.type !== "main_frame" ||
+    details?.method !== "GET" ||
+    !Number.isSafeInteger(details?.tabId) ||
+    details.tabId < 0
+  ) {
+    return null;
+  }
+  return validNavigationGateTarget(details.url);
+}
+
+function forgetAdmittedMainFrameNavigations(tabId) {
+  for (const [requestId, candidate] of admittedMainFrameNavigations) {
+    if (candidate.tabId === tabId) {
+      admittedMainFrameNavigations.delete(requestId);
+    }
+  }
+}
+
+async function transferMainFrameNavigation(candidate) {
+  const target = validNavigationGateTarget(candidate?.target);
+  if (
+    target == null ||
+    !Number.isSafeInteger(candidate?.tabId) ||
+    candidate.tabId < 0
+  ) {
+    throw new Error("main-frame navigation transfer target is invalid");
+  }
+  await chromeCall(
+    chrome.tabs.update,
+    chrome.tabs,
+    candidate.tabId,
+    {
+      url: `${chrome.runtime.getURL("src/proxy-wait.html")}#${target}`
+    }
+  );
+  if (navigationGateBootstrapTargets.get(candidate.tabId) === candidate) {
+    navigationGateBootstrapTargets.delete(candidate.tabId);
+  }
+  if (typeof candidate.requestId === "string") {
+    admittedMainFrameNavigations.delete(candidate.requestId);
+  }
+}
+
+async function transferAdmittedMainFrameNavigations() {
+  const pending = [...admittedMainFrameNavigations.values()];
+  let firstFailure = null;
+  for (const candidate of pending) {
+    try {
+      await transferMainFrameNavigation(candidate);
+    } catch (error) {
+      if (!admittedMainFrameNavigations.has(candidate.requestId)) {
+        continue;
+      }
+      firstFailure ??= new Error(
+        `could not move an admitted main-frame GET to the waiting page: ${boundedError(error)}`
+      );
+    }
+  }
+  if (firstFailure) throw firstFailure;
+}
+
+async function closeNavigationGateAndTransfer(expectedControlEpoch) {
+  let closeFailure = null;
+  try {
+    await navigationGate.close(expectedControlEpoch);
+  } catch (error) {
+    closeFailure = error;
+  }
+  let transferFailure = null;
+  try {
+    // Moving a GET to an extension page is safe even if a newer lifecycle
+    // superseded this close: an already-open newer gate simply resumes it.
+    // Always make the attempt, including after a physical allow removal whose
+    // dynamic-rule repair or generation check failed.
+    await transferAdmittedMainFrameNavigations();
+  } catch (error) {
+    transferFailure = error;
+  }
+  if (closeFailure) throw closeFailure;
+  requireControlGeneration(expectedControlEpoch);
+  if (transferFailure) throw transferFailure;
+}
+
+function normalizedProxyNavigationError(error) {
+  if (typeof error !== "string") return null;
+  const normalized = error.startsWith("net::") ? error : `net::${error}`;
+  return RECOVERABLE_PROXY_NAVIGATION_ERRORS.has(normalized)
+    ? normalized
+    : null;
+}
+
+async function recoverProxyNavigationFailure(
+  candidate,
+  failureControlEpoch,
+  failureRuntimeControl
+) {
+  // Transfer first and without an epoch precondition. Native disconnect is a
+  // common companion to a tunnel error and may advance controlEpoch before a
+  // generation-bound health decision can run.
+  await transferMainFrameNavigation(candidate);
+  if (failureControlEpoch !== controlEpoch) return publicStatus;
+
+  if (
+    proxyNavigationRecoveryOperation?.controlEpoch ===
+    failureControlEpoch
+  ) {
+    return proxyNavigationRecoveryOperation.promise;
+  }
+
+  const operation = (async () => {
+    requireControlGeneration(failureControlEpoch);
+    if (failureRuntimeControl != null) {
+      requireHeaderMaintenanceControl(failureRuntimeControl);
+      // An isolated origin can legitimately reject CONNECT. Revalidate the
+      // current native generation without rotating the gate revision or
+      // restarting a healthy runtime. A not-ready native response takes the
+      // normal fail-closed deactivation path inside refreshNativeStatus.
+      return refreshNativeStatus();
+    }
+    if (headerMaintenanceRuntimeAvailable()) {
+      // The same lifecycle became ready after the failure was observed. The
+      // waiting page can resume against it without an old error restarting it.
+      return publicStatus;
+    }
+    return recover();
+  })();
+  let tracked;
+  tracked = operation.finally(() => {
+    if (proxyNavigationRecoveryOperation?.promise === tracked) {
+      proxyNavigationRecoveryOperation = null;
+    }
+  });
+  proxyNavigationRecoveryOperation = {
+    controlEpoch: failureControlEpoch,
+    promise: tracked
+  };
+  return tracked;
 }
 
 async function handleWalletProviderMessage(message, sender) {
@@ -1273,6 +1639,9 @@ async function refreshNativeStatus(allowDuringHeaderSync = false) {
     requestedRuntime
   );
   if (requestedRuntimeControl == null) return publicStatus;
+  let validatedNativeStatus = false;
+  let validatedNativeReady = null;
+  let validatedNativeStatusPatch = null;
   try {
     const result = await client.request("status");
     if (
@@ -1291,11 +1660,9 @@ async function refreshNativeStatus(allowDuringHeaderSync = false) {
     const recentConnectSecurityDecisions =
       validatedConnectSecurityDecisions(result);
     const headerSync = currentHeaderSync(result.headerSync);
-    const ready = headerSyncReadyForProxyActivation(headerSync);
-    setStatus({
-      state: ready ? "active" : "degraded",
-      reason: ready ? null : "headerReadinessUnavailable",
-      proxyActive: true,
+    const ready = headerSyncReadyForNavigationGate(headerSync);
+    validatedNativeReady = ready;
+    validatedNativeStatusPatch = {
       runtimeSession: result.runtimeSession,
       runtimeGeneration: result.runtimeGeneration,
       policyGeneration: result.policyGeneration,
@@ -1317,6 +1684,29 @@ async function refreshNativeStatus(allowDuringHeaderSync = false) {
           ? result.latestMainFrameSecurityUnavailableReason
           : null,
       recentConnectSecurityDecisions
+    };
+    validatedNativeStatus = true;
+    if (!ready) {
+      return await deactivateProxyForHeaderReadiness(
+        new Error("validated header target evidence is unavailable or expired"),
+        requestedRuntimeControl,
+        validatedNativeStatusPatch
+      );
+    }
+    if (allowDuringHeaderSync) {
+      await closeNavigationGateAndTransfer(requestedControlEpoch);
+    } else {
+      await navigationGate.open(requestedControlEpoch);
+    }
+    requireRuntimeControl(
+      requestedControlEpoch,
+      requestedConnectionEpoch
+    );
+    setStatus({
+      state: "active",
+      reason: null,
+      proxyActive: true,
+      ...validatedNativeStatusPatch
     });
     if (ready) {
       await scheduleHeaderSyncDeadline(
@@ -1328,11 +1718,6 @@ async function refreshNativeStatus(allowDuringHeaderSync = false) {
         RECONNECT_ALARM,
         requestedControlEpoch
       );
-    } else {
-      await deactivateProxyForHeaderReadiness(
-        new Error("validated header target evidence is unavailable or expired"),
-        requestedRuntimeControl
-      );
     }
   } catch (error) {
     if (
@@ -1343,14 +1728,36 @@ async function refreshNativeStatus(allowDuringHeaderSync = false) {
     ) {
       return publicStatus;
     }
+    if (allowDuringHeaderSync) throw error;
+    if (validatedNativeStatus) {
+      // A validated native response is authoritative. A navigation-rule or
+      // alarm failure after that response must never be mistaken for a status
+      // timeout and must never restore an allow rule from stale public state.
+      return await deactivateProxyForHeaderReadiness(
+        new Error(
+          `${
+            validatedNativeReady
+              ? "navigation gate could not publish validated readiness"
+              : "validated header target evidence is unavailable or expired"
+          }: ${boundedError(error)}`
+        ),
+        requestedRuntimeControl,
+        validatedNativeStatusPatch ?? {}
+      );
+    }
     if (
       publicStatus.proxyActive === true &&
       credentials != null &&
-      headerSyncReadyForProxyActivation(publicStatus.headerSync)
+      headerSyncReadyForNavigationGate(publicStatus.headerSync)
     ) {
       // A status timeout is not proof that the proxy listener died. Retain the
       // last authenticated generation until its independent hard deadline;
       // the NativeClient disconnect observer handles an actual dead process.
+      await navigationGate.open(requestedControlEpoch);
+      requireRuntimeControl(
+        requestedControlEpoch,
+        requestedConnectionEpoch
+      );
       setStatus({
         state: "active",
         reason: null,
@@ -1382,7 +1789,7 @@ function maintainHeaderFreshness(refreshStatus) {
     let status = refreshStatus ? await refreshNativeStatus() : publicStatus;
     requireHeaderMaintenanceControl(maintenanceControl, status);
     requireHeaderMaintenanceControl(maintenanceControl);
-    if (!headerSyncReadyForProxyActivation(status.headerSync)) {
+    if (!headerSyncReadyForNavigationGate(status.headerSync)) {
       const readinessError = new Error(
         "validated header target evidence is unavailable or expired"
       );
@@ -1394,7 +1801,7 @@ function maintainHeaderFreshness(refreshStatus) {
       status = publicStatus;
     }
     if (
-      headerSyncReadyForProxyActivation(status.headerSync) &&
+      headerSyncReadyForNavigationGate(status.headerSync) &&
       !needsAutomaticHeaderSync(status.headerSync)
     ) {
       await scheduleHeaderSyncDeadline(
@@ -1455,13 +1862,17 @@ function synchronizeHeaders() {
     return Promise.reject(new Error("header sync requires a connected native runtime"));
   }
   const syncControlEpoch = syncRuntimeControl.controlEpoch;
+  let receiptMaintenanceStarted = false;
+  let nativeSyncAttempted = false;
   walletProviderRouter.invalidateAuthority();
   void invalidateAllWalletApprovals("headerMaintenanceStarted");
-  setStatus({
-    headerSyncInProgress: true,
-    headerSyncError: null
-  });
   headerSyncOperation = (async () => {
+    await closeNavigationGateAndTransfer(syncControlEpoch);
+    requireHeaderMaintenanceControl(syncRuntimeControl);
+    setStatus({
+      headerSyncInProgress: true,
+      headerSyncError: null
+    });
     const maintenanceStarted = await withNavigationReceiptStore((store) =>
       store.beginMaintenance(publicStatus)
     );
@@ -1469,10 +1880,12 @@ function synchronizeHeaders() {
     if (!maintenanceStarted) {
       throw new Error("header maintenance could not invalidate navigation authority");
     }
+    receiptMaintenanceStarted = true;
     await recordHeaderSyncAttempt(Date.now());
     requireHeaderMaintenanceControl(syncRuntimeControl);
     let syncError = null;
     try {
+      nativeSyncAttempted = true;
       const result = await client.request(
         "syncOnce",
         {},
@@ -1496,13 +1909,16 @@ function synchronizeHeaders() {
     requireHeaderMaintenanceControl(syncRuntimeControl);
     if (headerMaintenanceRuntimeAvailable(authoritativeStatus)) {
       const adopted = await withNavigationReceiptStore((store) =>
-        store.ensureRuntime(authoritativeStatus)
+        store.completeMaintenance(authoritativeStatus)
       );
       requireHeaderMaintenanceControl(syncRuntimeControl);
       if (!adopted) {
         syncError ??= new Error(
           "native host returned an invalid security maintenance epoch"
         );
+      } else if (headerSyncReadyForNavigationGate(authoritativeStatus.headerSync)) {
+        await navigationGate.open(syncControlEpoch);
+        requireHeaderMaintenanceControl(syncRuntimeControl);
       }
     } else {
       syncError ??= new Error(
@@ -1514,7 +1930,7 @@ function synchronizeHeaders() {
       if (!headerMaintenanceRuntimeAvailable()) {
         throw syncError;
       }
-      if (!headerSyncReadyForProxyActivation(publicStatus.headerSync)) {
+      if (!headerSyncReadyForNavigationGate(publicStatus.headerSync)) {
         await deactivateProxyForHeaderReadiness(
           syncError,
           syncRuntimeControl
@@ -1532,7 +1948,7 @@ function synchronizeHeaders() {
       requireHeaderMaintenanceControl(syncRuntimeControl);
       throw syncError;
     }
-    if (!headerSyncReadyForProxyActivation(publicStatus.headerSync)) {
+    if (!headerSyncReadyForNavigationGate(publicStatus.headerSync)) {
       const readinessError = new Error(
         "header synchronization did not establish current unexpired target evidence"
       );
@@ -1574,7 +1990,24 @@ function synchronizeHeaders() {
     await clearAlarmForControl(RECONNECT_ALARM, syncControlEpoch);
     requireHeaderMaintenanceControl(syncRuntimeControl);
     return publicStatus;
-  })().finally(() => {
+  })().catch(async (error) => {
+    if (
+      headerMaintenanceControlIsCurrent(syncRuntimeControl) &&
+      headerSyncReadyForNavigationGate(publicStatus.headerSync) &&
+      !nativeSyncAttempted
+    ) {
+      if (receiptMaintenanceStarted) {
+        const restored = await withNavigationReceiptStore((store) =>
+          store.completeMaintenance(publicStatus)
+        );
+        requireHeaderMaintenanceControl(syncRuntimeControl);
+        if (!restored) throw error;
+      }
+      await navigationGate.open(syncControlEpoch);
+      requireHeaderMaintenanceControl(syncRuntimeControl);
+    }
+    throw error;
+  }).finally(() => {
     headerSyncOperation = null;
   });
   return headerSyncOperation;
@@ -1582,20 +2015,43 @@ function synchronizeHeaders() {
 
 async function deactivateProxyForHeaderReadiness(
   error,
-  expectedRuntimeControl = captureHeaderMaintenanceControl()
+  expectedRuntimeControl = captureHeaderMaintenanceControl(),
+  statusPatch = {}
 ) {
   if (expectedRuntimeControl == null) return publicStatus;
   requireHeaderMaintenanceControl(expectedRuntimeControl);
   const degradedControlEpoch = expectedRuntimeControl.controlEpoch;
+  let gateCloseFailure = null;
+  try {
+    await closeNavigationGateAndTransfer(degradedControlEpoch);
+  } catch (closeError) {
+    if (isSupersededControlError(closeError)) throw closeError;
+    gateCloseFailure = closeError;
+    try {
+      await closeNavigationGateAndTransfer(degradedControlEpoch);
+      gateCloseFailure = null;
+    } catch (retryError) {
+      if (isSupersededControlError(retryError)) throw retryError;
+      gateCloseFailure = retryError;
+    }
+  }
+  requireHeaderMaintenanceControl(expectedRuntimeControl);
   // Keep the live mandatory PAC and native listener. Rust independently
   // rejects stale header work, so degraded browsing remains genuinely
   // fail-closed instead of silently falling back to DIRECT/WebPKI.
   setStatus({
+    ...statusPatch,
     state: "degraded",
-    reason: "headerReadinessUnavailable",
+    reason:
+      gateCloseFailure == null
+        ? "headerReadinessUnavailable"
+        : "navigationGateCloseFailed",
     proxyActive: true,
     headerSyncInProgress: false,
-    headerSyncError: boundedError(error),
+    headerSyncError:
+      gateCloseFailure == null
+        ? boundedError(error)
+        : `Navigation gate could not be confirmed closed: ${boundedError(gateCloseFailure)}; ${boundedError(error)}`,
     latestMainFrameSecurity: null,
     latestMainFrameSecurityUnavailableReason: null,
     recentConnectSecurityDecisions: []
@@ -1630,17 +2086,16 @@ async function enforceHeaderEvidenceExpiry() {
     // later by the same control generation.
     return false;
   }
-  const expired = await deactivateIfHeaderEvidenceExpired(
-    publicStatus.headerSync,
-    () =>
-      deactivateProxyForHeaderReadiness(
-        new Error("validated header target evidence expired")
-      )
-  );
-  if (!expired) {
+  const sync = authoritativeHeaderSync(publicStatus.headerSync);
+  const closesAt = headerEvidenceGateClosesAt(sync);
+  if (closesAt != null && Date.now() < closesAt) {
     await scheduleHeaderEvidenceExpiry(publicStatus.headerSync);
+    return false;
   }
-  return expired;
+  await deactivateProxyForHeaderReadiness(
+    new Error("validated header target evidence is approaching expiry")
+  );
+  return true;
 }
 
 async function scheduleHeaderSyncRetry(
@@ -1761,8 +2216,46 @@ async function scheduleHeaderEvidenceExpiry(
       : now;
   await createAlarmForControl(
     HEADER_EVIDENCE_EXPIRY_ALARM,
-    { when: Math.max(now + 1000, expiresAt) },
+    {
+      when: Math.max(
+        now + 1000,
+        expiresAt - HEADER_EVIDENCE_GATE_LEAD_MS
+      )
+    },
     expectedControlEpoch
+  );
+}
+
+function headerEvidenceGateClosesAt(candidate) {
+  const sync = authoritativeHeaderSync(candidate);
+  if (
+    !sync ||
+    !Number.isSafeInteger(sync.targetEvidenceValidUntilUnix) ||
+    sync.targetEvidenceValidUntilUnix >
+      Math.floor(Number.MAX_SAFE_INTEGER / 1000)
+  ) {
+    return null;
+  }
+  return Math.max(
+    0,
+    sync.targetEvidenceValidUntilUnix * 1000 -
+      HEADER_EVIDENCE_GATE_LEAD_MS
+  );
+}
+
+function headerSyncReadyForNavigationGate(
+  candidate,
+  nowUnixMs = Date.now()
+) {
+  if (!Number.isSafeInteger(nowUnixMs) || nowUnixMs < 0) return false;
+  const closesAt = headerEvidenceGateClosesAt(candidate);
+  return (
+    closesAt != null &&
+    closesAt > nowUnixMs &&
+    headerSyncReadyForProxyActivation(
+      candidate,
+      Math.floor(nowUnixMs / 1000)
+    )
   );
 }
 

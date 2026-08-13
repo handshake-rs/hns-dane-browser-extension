@@ -6,7 +6,7 @@ product. Current Android and iOS work lives in
 
 The Chromium adapter consumes five canonical browser contracts and the private
 Chromium adapters from one exact reviewed `handshake-rs/hns-dane-engine`
-`0.2.0` Git revision. The canonical
+`0.2.1` Git revision. The canonical
 `hns-browser-runtime` owns session-bound request authority;
 `hns-browser-observability` checks typed status;
 `hns-icann-dane` owns ICANN TLSA policy;
@@ -82,12 +82,15 @@ baseline, validates the delta, and atomically publishes the canonical headers,
 peer observations, and readiness generation. A stale, incomplete, or
 superseded stage is rejected. Request validation uses the read side of the
 maintenance lock, so a page cannot publish against a chain that changes under
-it while routine synchronization no longer pauses the live proxy.
+it. Routine synchronization does not tear down the live proxy;
+same-authority publication pauses existing work only for the brief commit
+window.
 
-An unchanged-header peer refresh publishes updated quorum evidence without
-rotating the header-maintenance epoch. A header advance or reorganization
-rotates that epoch and invalidates proof-cache and status evidence bound to the
-old chain.
+An unchanged-authority refresh publishes updated headers or quorum evidence
+without rotating the header-maintenance epoch. Publication rotates that epoch
+when the exact authoritative network, root height, or tree-root hash changes
+or becomes unavailable, invalidating proof-cache and status evidence bound to
+the old name state.
 
 Live currentness is intentionally separate from cache retention:
 
@@ -106,12 +109,12 @@ genesis-time schedule estimate are shown only as diagnostics. No corroborated
 target produces `Unknown`, which is non-admissible for HNS resolution.
 The native status includes the last Unix second through which a quorum remains
 valid, derived from the remaining independent observations. The extension
-schedules one synchronization two minutes before that point and reuses the
+schedules one synchronization ten minutes before that point and reuses the
 existing five-minute local health alarm as a safety path, rather than adding
 another periodic peer poll. Failed attempts in routine stale or unknown state
 remain rate-limited to a ten-minute retry interval. Only around a previously
 authenticated quorum deadline, failed automatic or manual attempts use a
-bounded one-minute retry cadence from the two-minute lead window through two
+bounded one-minute retry cadence from the ten-minute lead window through two
 minutes after expiry. An explicit toolbar action can still request one
 immediate sync.
 
@@ -165,9 +168,10 @@ The proxy publishes CONNECT 200, the persistent namespace binding, and a
 host/port-scoped decision before either tunnel half may move bytes. The
 decision has no HTTP-status or main-frame claim; the extension may correlate
 it only with a successful Chromium navigation in the same runtime tuple and
-native maintenance epoch. Header synchronization advances that epoch and
-revokes both halves. If the selected raw origin socket cannot open, the proxy
-returns a pre-TLS CONNECT failure and never substitutes local TLS.
+native maintenance epoch. Same-authority publication briefly pauses and then
+resumes both halves; a changed or unavailable authoritative root advances the
+epoch and revokes them. If the selected raw origin socket cannot open, the
+proxy returns a pre-TLS CONNECT failure and never substitutes local TLS.
 
 ## Request authority and publication
 

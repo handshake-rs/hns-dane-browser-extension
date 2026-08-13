@@ -70,7 +70,10 @@ export class NavigationReceiptStore {
       return false;
     } else if (maintenanceEpoch > this.maintenanceEpoch) {
       this.maintenanceEpoch = maintenanceEpoch;
-      this.maintenancePending = false;
+      // Epoch observation can race the explicit post-sync completion. Preserve
+      // an active maintenance barrier until completeMaintenance validates the
+      // authoritative ready status; a normal (non-maintenance) epoch advance
+      // keeps the existing false value.
       this.pending = Object.create(null);
     }
     this.noteNativeEvent(candidate);
@@ -295,6 +298,23 @@ export class NavigationReceiptStore {
   beginMaintenance(runtimeStatus) {
     if (!this.ensureRuntime(runtimeStatus)) return false;
     this.maintenancePending = true;
+    this.pending = Object.create(null);
+    return true;
+  }
+
+  completeMaintenance(
+    runtimeStatus,
+    nowUnixSeconds = Math.floor(Date.now() / 1000)
+  ) {
+    const wasPending = this.maintenancePending;
+    if (
+      !wasPending ||
+      !maintenanceCompletionReady(runtimeStatus, nowUnixSeconds) ||
+      !this.ensureRuntime(runtimeStatus)
+    ) {
+      return false;
+    }
+    this.maintenancePending = false;
     this.pending = Object.create(null);
     return true;
   }
@@ -855,6 +875,21 @@ export class NavigationReceiptStore {
     pruneObject(this.tabs, MAX_TABS, () => false);
     this.prunePending();
   }
+}
+
+function maintenanceCompletionReady(candidate, nowUnixSeconds) {
+  const validUntil = candidate?.headerSync?.targetEvidenceValidUntilUnix;
+  return Boolean(
+    Number.isSafeInteger(nowUnixSeconds) &&
+      nowUnixSeconds >= 0 &&
+      candidate?.state === "active" &&
+      candidate?.proxyActive === true &&
+      candidate?.headerSync?.treeRootReady === true &&
+      candidate?.headerSync?.blocksUntilAuthoritativeTreeRoot === 0 &&
+      candidate?.headerSync?.targetEvidenceExpired === false &&
+      Number.isSafeInteger(validUntil) &&
+      validUntil > nowUnixSeconds
+  );
 }
 
 export function registerNavigationLifecycle(chromeApi, handlers) {

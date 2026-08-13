@@ -11,12 +11,18 @@ const popup = readFileSync("extension/src/popup.html", "utf8");
 const popupScript = readFileSync("extension/src/popup.js", "utf8");
 const setup = readFileSync("extension/src/setup.html", "utf8");
 const setupScript = readFileSync("extension/src/setup.js", "utf8");
+const waitPage = readFileSync("extension/src/proxy-wait.html", "utf8");
+const waitPageScript = readFileSync("extension/src/proxy-wait.js", "utf8");
+const navigationGateRules = JSON.parse(
+  readFileSync("extension/rules/navigation-gate.json", "utf8")
+);
 
 test("manifest is MV3 with native messaging, mandatory proxy, and auth permissions", () => {
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.background.service_worker, "src/service-worker.js");
   assert.equal(manifest.background.type, "module");
   for (const permission of [
+    "declarativeNetRequestWithHostAccess",
     "nativeMessaging",
     "proxy",
     "storage",
@@ -26,6 +32,23 @@ test("manifest is MV3 with native messaging, mandatory proxy, and auth permissio
   ]) {
     assert.ok(manifest.permissions.includes(permission), permission);
   }
+  assert.equal(manifest.incognito, "not_allowed");
+  assert.deepEqual(manifest.declarative_net_request, {
+    rule_resources: [
+      {
+        id: "navigation_gate",
+        enabled: true,
+        path: "rules/navigation-gate.json"
+      }
+    ]
+  });
+  assert.equal(navigationGateRules[0].action.redirect.extensionPath, "/src/proxy-wait.html");
+  assert.deepEqual(manifest.web_accessible_resources, [
+    {
+      resources: ["src/proxy-wait.html"],
+      matches: ["http://*/*", "https://*/*"]
+    }
+  ]);
   for (const size of ["16", "32", "48", "128"]) {
     assert.equal(manifest.icons[size], `assets/icons/icon-${size}.png`);
     assert.equal(
@@ -34,6 +57,85 @@ test("manifest is MV3 with native messaging, mandatory proxy, and auth permissio
     );
     assert.ok(existsSync(`extension/assets/icons/icon-${size}.png`), size);
   }
+});
+
+test("main-frame navigation waits synchronously across proxy and root transitions", () => {
+  assert.match(worker, /new NavigationGateController\(/);
+  assert.match(
+    worker,
+    /await closeNavigationGateAndTransfer\(startControlEpoch\)[\s\S]*?await installBlockingPac\(startControlEpoch\)/
+  );
+  assert.match(
+    worker,
+    /await navigationGate\.open\(startControlEpoch\)[\s\S]*?state: "active"/
+  );
+  assert.match(worker, /case "navigationGateStatus"/);
+  assert.match(
+    worker,
+    /headerSyncReadyForNavigationGate\(publicStatus\.headerSync\)[\s\S]*?await navigationGate\.open\(syncControlEpoch\)/
+  );
+  assert.match(
+    worker,
+    /nativeSyncAttempted = true;[\s\S]*?refreshNativeStatus\(true\)[\s\S]*?headerSyncReadyForNavigationGate\(publicStatus\.headerSync\) &&[\s\S]*?!nativeSyncAttempted/
+  );
+  assert.match(waitPage, /Waiting for the secure proxy/);
+  assert.match(waitPageScript, /sessionStorage\.setItem/);
+  assert.match(waitPageScript, /resumed\?\.target === target/);
+  assert.match(waitPageScript, /location\.replace\(target\)/);
+  assert.match(waitPageScript, /navigationGateBootstrap/);
+  assert.doesNotMatch(waitPageScript, /tabs\.(?:reload|update)/);
+
+  const refresh = worker.match(
+    /async function refreshNativeStatus[\s\S]*?\n\}\n\nfunction maintainHeaderFreshness/
+  )?.[0];
+  assert.ok(refresh, "refreshNativeStatus implementation");
+  const validatedFailure = refresh.indexOf("if (validatedNativeStatus)");
+  const timeoutFallback = refresh.indexOf(
+    "// A status timeout is not proof that the proxy listener died."
+  );
+  assert.ok(validatedFailure >= 0, "validated native status failure branch");
+  assert.ok(timeoutFallback > validatedFailure, "timeout fallback ordering");
+  assert.match(
+    refresh.slice(validatedFailure, timeoutFallback),
+    /deactivateProxyForHeaderReadiness/
+  );
+  assert.doesNotMatch(
+    refresh.slice(validatedFailure, timeoutFallback),
+    /navigationGate\.open/
+  );
+  assert.match(
+    worker,
+    /async function deactivateProxyForHeaderReadiness[\s\S]*?closeNavigationGateAndTransfer\(degradedControlEpoch\)[\s\S]*?closeNavigationGateAndTransfer\(degradedControlEpoch\)[\s\S]*?reason:[\s\S]*?"navigationGateCloseFailed"/
+  );
+  assert.match(worker, /HEADER_EVIDENCE_GATE_LEAD_MS = 30 \* 1000/);
+  assert.match(
+    worker,
+    /expiresAt - HEADER_EVIDENCE_GATE_LEAD_MS/
+  );
+  assert.match(
+    worker,
+    /closeNavigationGateAndTransfer\(syncControlEpoch\)[\s\S]*?client\.request\(\s*"syncOnce"/
+  );
+  assert.match(worker, /RECOVERABLE_PROXY_NAVIGATION_ERRORS/);
+  assert.match(
+    worker,
+    /const failedCandidate =\s*admitted \?\?[\s\S]*?const failureControlEpoch = controlEpoch;[\s\S]*?recoverProxyNavigationFailure\(\s*failedCandidate,\s*failureControlEpoch,\s*failureRuntimeControl\s*\)/
+  );
+  assert.match(
+    worker,
+    /async function recoverProxyNavigationFailure[\s\S]*?transferMainFrameNavigation\(candidate\)[\s\S]*?failureControlEpoch !== controlEpoch[\s\S]*?return refreshNativeStatus\(\)/
+  );
+  assert.doesNotMatch(
+    worker.match(
+      /async function recoverProxyNavigationFailure[\s\S]*?\n\}/
+    )?.[0] ?? "",
+    /startRuntime|deactivateProxyForHeaderReadiness|navigationGate\.close/
+  );
+  assert.match(
+    worker,
+    /async function closeNavigationGateAndTransfer[\s\S]*?catch \(error\)[\s\S]*?transferAdmittedMainFrameNavigations\(\)/
+  );
+  assert.match(worker, /navigationGate\.logicallyOpen\(publicStatus\)/);
 });
 
 test("service worker activates the authenticated proxy before initial header catch-up", () => {
@@ -147,7 +249,11 @@ test("popup security status is scoped to the active Chromium tab", () => {
     /latestMainFrameConnectDecisionReceipt: scoped\.connectDecisionReceipt/
   );
   assert.match(worker, /chrome\.storage\.session\.set/);
-  assert.match(worker, /store\.ensureRuntime\(authoritativeStatus\)/);
+  assert.match(worker, /store\.completeMaintenance\(authoritativeStatus\)/);
+  assert.match(
+    worker,
+    /store\.completeMaintenance\(authoritativeStatus\)[\s\S]*?await navigationGate\.open\(syncControlEpoch\)/
+  );
   assert.doesNotMatch(
     worker,
     /headerSyncInProgress: true,[\s\S]{0,180}latestMainFrameSecurity: null/

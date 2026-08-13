@@ -40,8 +40,11 @@ an extension ID.
   DANE, page anchor, and header-chain status.
 - Use a bad DNSSEC/TLSA test case and confirm the request fails closed.
 - Remove or make the native host/CA unavailable and confirm the extension
-  installs its fixed blocking PAC and browsing is blocked rather than silently
-  bypassed through system or direct routing.
+  moves a top-level GET to its packaged waiting page before installing the
+  fixed blocking PAC. The packaged rule is enabled before first-start/update
+  worker code runs. Restore the host and confirm that exact navigation
+  resumes once rather than surfacing a proxy-tunnel error or silently
+  bypassing through system/direct routing. POST requests are never replayed.
 - Run the supplied uninstaller and confirm native registrations, exact CA,
   binary, and runtime data are removed.
 

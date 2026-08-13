@@ -22,7 +22,7 @@ The local Chromium adapter, loopback listener, native messaging, per-install
 CA, lifecycle, storage, and origin transport remain product code.
 
 The MeshMine public-feed verifier core separately pins
-`hns-light-chain 0.2.0` to that engine revision and
+`hns-light-chain 0.2.1` to that engine revision and
 `hns-service-authority 0.2.0` to exact `hns-rs` revision
 `b24b66c382de53330ec21dd3137e056a2bea3e2d`. Source policy and the lock reject
 moving or registry substitutions for either authority type.
@@ -63,7 +63,7 @@ admission. Header-height evidence has its own persisted observation timestamp;
 proof retrieval, DNS-relay traffic, and unrelated transport success cannot
 refresh it or promote a version-packet height. Native status derives the last
 Unix second through which at least three independent observations remain, and
-the extension requests synchronization two minutes before that point. Failed
+the extension requests synchronization ten minutes before that point. Failed
 attempts retain a bounded one-minute urgent retry window through two minutes
 after that known deadline; unrelated stale or unknown state remains on the
 ten-minute attempt floor.
@@ -182,9 +182,10 @@ The raw tunnel owns independent bounded reader and writer halves so an idle
 upload cannot throttle a download, and vice versa. It cannot move bytes before
 the namespace binding is committed and the authenticated CONNECT 200 is
 written under the same invalidation-exclusion boundary. The tunnel remains
-gated unless the CONNECT write succeeds.
-Header maintenance advances a native epoch which revokes both halves; stop,
-policy change, readiness loss, or generation rotation also closes them.
+gated unless the CONNECT write succeeds. Header publication pauses both halves
+while state is incomplete. It advances the native epoch and revokes them only
+when the exact authoritative name-tree root changes or becomes unavailable;
+stop, policy change, readiness loss, or generation rotation also closes them.
 
 ## Namespace ambiguity
 
@@ -317,9 +318,19 @@ already have committed. The same binding applies to reads.
   uninstalling the extension is the browser-owned path that removes its proxy
   setting.
 - During first-run header catch-up, the newly authenticated native listener
-  replaces the fixed transition blocker before synchronization begins. ICANN
-  requests remain inside Rust and can proceed; HNS admission remains
-  fail-closed until current corroborated target evidence is available.
+  replaces the fixed transition blocker before synchronization begins. A
+  packaged, enabled declarative main-frame rule is already present during
+  first install and extension upgrade. It keeps HTTP(S) GET navigation on a
+  local waiting page until the exact corroborated name-tree authority is ready,
+  then a higher-priority session rule permits the waiting document to resume
+  its own URL once. The allow rule closes before peer evidence can expire, and
+  already-admitted main-frame GETs are transferred before native state changes.
+  A request/error safety path handles stale allows after worker suspension or
+  OS sleep. It never replays POST or adds a direct-routing fallback.
+- Established transport continuity is bound to the exact authoritative
+  network, root height, and tree-root hash rather than the incidental SQLite
+  generation. Same-root header publication can therefore preserve an ICANN
+  WebPKI tunnel, while a new root or readiness loss still revokes it.
 
 The local CA authenticates the browser-to-loopback hop only on branches where
 Rust must terminate TLS, including HNS DANE and ICANN DANE. It is not an

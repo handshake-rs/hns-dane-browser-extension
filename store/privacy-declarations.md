@@ -8,7 +8,11 @@ with the exact release before submission.
 - **Web history / website activity:** `Yes, locally and for core
   functionality.` Exact URLs and document/tab identifiers may be retained in
   bounded `chrome.storage.session` receipts until the browser session ends.
-  They are not sent to Denuo Web.
+  During a proxy/root transition, the packaged waiting page also keeps its
+  exact credential-free GET target and local gate revision in that tab's
+  `sessionStorage` to prevent a resume loop. During a first-install or upgrade
+  bootstrap, the worker may also hold at most one target per tab in memory for
+  up to one minute. They are not sent to Denuo Web.
 - **Domain-level DNS activity:** `Yes, for core functionality.` Queried
   hostnames, record types, timing, protocol metadata, and the user's network
   address are necessarily visible to the built-in Cloudflare validating ICANN
@@ -45,6 +49,10 @@ with the exact release before submission.
 
 - User policy stays on the device.
 - Navigation receipts are bounded and session-only.
+- Transition waiting-page targets are tab-scoped, retained only for the tab's
+  page session (or for at most one minute in worker memory during bootstrap),
+  and discarded when that tab or session ends; POST requests are never queued
+  or replayed.
 - Resolver, proof, header, namespace-binding, and peer state remain in the
   local native-host data directory.
 - Users can clear the optional recursive resolver, disable P2P requester use,

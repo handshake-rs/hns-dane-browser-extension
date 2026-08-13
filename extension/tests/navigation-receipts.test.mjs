@@ -10,7 +10,15 @@ const runtime = Object.freeze({
   runtimeSession: "session-a",
   runtimeGeneration: 7,
   policyGeneration: 3,
-  securityMaintenanceEpoch: 1
+  securityMaintenanceEpoch: 1,
+  state: "active",
+  proxyActive: true,
+  headerSync: {
+    treeRootReady: true,
+    blocksUntilAuthoritativeTreeRoot: 0,
+    targetEvidenceExpired: false,
+    targetEvidenceValidUntilUnix: 10
+  }
 });
 
 function securityResult(host, eventSequence, overrides = {}) {
@@ -239,6 +247,75 @@ test("header maintenance keeps the committed receipt but bars cache reuse", () =
   assert.equal(
     store.receiptForTab(5, afterMaintenance).unavailableReason,
     "browserCacheReceiptUnavailable"
+  );
+});
+
+test("successful same-root maintenance completes at an unchanged epoch", () => {
+  const store = new NavigationReceiptStore();
+  const original = completeNetworkNavigation(store);
+  assert.equal(store.beginMaintenance(runtime), true);
+  assert.equal(store.completeMaintenance(runtime, 0), true);
+
+  const existing = store.receiptForTab(4, runtime);
+  assert.equal(existing.receipt, original);
+  assert.notEqual(existing.state, "committedBeforeHeaderMaintenance");
+  assert.notEqual(
+    store.providerAuthorityForDocument(
+      4,
+      "document-1",
+      "https://welcome/",
+      runtime,
+      "https://welcome/"
+    ),
+    null
+  );
+});
+
+test("successful root-changing maintenance completes at an advanced epoch", () => {
+  const store = new NavigationReceiptStore();
+  completeNetworkNavigation(store);
+  assert.equal(store.beginMaintenance(runtime), true);
+  const advanced = {
+    ...runtime,
+    securityMaintenanceEpoch: runtime.securityMaintenanceEpoch + 1
+  };
+  // A webRequest or popup read can observe and adopt the new epoch before the
+  // serialized sync path completes its explicit maintenance transaction.
+  assert.equal(store.ensureRuntime(advanced), true);
+  assert.equal(store.completeMaintenance(advanced, 0), true);
+  assert.equal(
+    store.receiptForTab(4, advanced).state,
+    "committedBeforeHeaderMaintenance"
+  );
+});
+
+test("degraded same-epoch maintenance remains fail-closed", () => {
+  const store = new NavigationReceiptStore();
+  completeNetworkNavigation(store);
+  assert.equal(store.beginMaintenance(runtime), true);
+  const degraded = {
+    ...runtime,
+    state: "degraded",
+    headerSync: {
+      treeRootReady: false,
+      targetEvidenceExpired: false
+    }
+  };
+  assert.equal(store.completeMaintenance(degraded, 0), false);
+  assert.equal(
+    store.receiptForTab(4, degraded).state,
+    "committedBeforeHeaderMaintenance"
+  );
+});
+
+test("expired target evidence cannot complete maintenance", () => {
+  const store = new NavigationReceiptStore();
+  completeNetworkNavigation(store);
+  assert.equal(store.beginMaintenance(runtime), true);
+  assert.equal(store.completeMaintenance(runtime, 10), false);
+  assert.equal(
+    store.receiptForTab(4, runtime).state,
+    "committedBeforeHeaderMaintenance"
   );
 });
 

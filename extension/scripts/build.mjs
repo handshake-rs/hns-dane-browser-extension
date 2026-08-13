@@ -8,6 +8,7 @@ if (manifest.background?.service_worker !== "src/service-worker.js") {
   throw new Error("the Rust-native lifecycle service worker is required");
 }
 for (const permission of [
+  "declarativeNetRequestWithHostAccess",
   "nativeMessaging",
   "proxy",
   "storage",
@@ -24,6 +25,7 @@ rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 cpSync("extension/manifest.json", `${output}/manifest.json`);
 cpSync("extension/src", `${output}/src`, { recursive: true });
+cpSync("extension/rules", `${output}/rules`, { recursive: true });
 cpSync("extension/assets", `${output}/assets`, { recursive: true });
 cpSync("LICENSE", `${output}/LICENSE`);
 cpSync("docs/privacy-policy.md", `${output}/PRIVACY.md`);

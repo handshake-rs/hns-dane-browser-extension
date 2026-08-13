@@ -52,19 +52,29 @@ If fresh corroboration is unavailable, currentness is `Unknown` and HNS
 resolution fails closed.
 
 On first start, the native host creates its authenticated loopback listener
-before beginning a potentially long header catch-up. The extension replaces
-its fixed transition blocker with that live PAC immediately. ICANN resolution
-therefore continues through Rust during synchronization, while the native
-runtime rejects HNS work until current corroborated header evidence exists.
+before beginning a potentially long header catch-up. An enabled packaged
+declarative rule exists before the MV3 worker or an updated native process can
+start, and moves HTTP(S) GET navigations to a local waiting page. The worker
+adds an exact-target redirect while closed; once the live PAC and corroborated
+name-tree authority are ready, a still-higher-priority session rule opens the
+gate and the waiting document resumes its exact credential-free URL once. The
+packaged bootstrap also covers the first upgrade from an older extension that
+had no dynamic gate and restored tabs after browser restart, without retrying
+POST requests or loosening the mandatory proxy. Before proxy or root
+invalidation, the worker transfers top-level GETs that already passed the
+session allow-rule to the same local page. A request-time safety path also
+catches an allow-rule left behind across worker suspension or OS sleep and
+recovers the exact GET if Chromium reports a proxy/tunnel failure.
 
 `Sync headers now` performs one explicit synchronization without rotating the
 proxy generation or changing policy. A failed sync is reported in the header
 section and does not disable an otherwise active proxy while authenticated
 target evidence remains unexpired. Rust reports the last Unix second through
 which the current independent-peer quorum remains valid, and the extension
-schedules one sync two minutes before that point. A separate hard-expiry alarm
-fails closed even if a native synchronization request hangs; native sync
-requests are also bounded to fifteen minutes. The existing five-minute local
+schedules one sync ten minutes before that point. A separate alarm closes the
+navigation gate before hard expiry even if a native synchronization request
+hangs; native sync requests are also bounded to fifteen minutes. The existing
+five-minute local
 runtime health check is the safety path; there is no second periodic peer
 poll. Routine stale or unknown state retains a ten-minute retry floor. If an
 automatic or manual attempt fails around a known quorum deadline, the
@@ -328,11 +338,19 @@ does not tear down the native connection or clear proxy control.
 - CA-not-installed, host disconnect before listener activation, malformed
   startup response, rejected policy, or proxy restart enters a confirmed fixed
   blocking PAC before the captured native process is disconnected or replaced.
-  Once the new authenticated listener is confirmed, initial header catch-up
-  retains its live PAC: ICANN can proceed while HNS remains fail-closed in
-  Rust. Runtime lifecycle and retry paths never clear proxy control to system
-  or direct routing. Failure to confirm the required PAC write remains fail
-  closed.
+  An enabled packaged declarative rule holds top-level HTTP(S) GET navigation
+  on a local waiting page throughout that transition and any header-root
+  readiness gap. Once the authenticated listener and exact authoritative root are
+  confirmed, the page resumes its own URL once. The gate closes ahead of the
+  authenticated evidence deadline so delayed worker wakeups cannot expose the
+  native rejection interval; POST, certificate, DNS, and
+  stable-active failures are never replayed. Runtime lifecycle and retry paths
+  never clear proxy control to system or direct routing. Failure to confirm
+  the required PAC write remains fail closed.
+- Header publications retain established work only when the exact
+  authoritative `(network, height, tree root)` tuple is unchanged. A root
+  boundary or readiness loss revokes it; generation-only changes at the same
+  root no longer abort established ICANN WebPKI tunnels.
 - Namespace fingerprints partition pools, TLS verification and resumption, and
   Alt-Svc state.
 - Selected HNS HTTPS never falls back to WebPKI. It never contacts a recursive

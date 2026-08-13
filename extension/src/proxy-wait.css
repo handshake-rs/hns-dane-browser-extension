@@ -1,0 +1,44 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #10241b;
+  color: #f3fbf6;
+}
+
+main {
+  box-sizing: border-box;
+  width: min(42rem, calc(100% - 2rem));
+  padding: 2rem;
+  border: 1px solid #3f6f58;
+  border-radius: 0.75rem;
+  background: #173326;
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 25%);
+}
+
+h1 {
+  margin: 1rem 0 0.5rem;
+  font-size: 1.5rem;
+}
+
+.target {
+  overflow-wrap: anywhere;
+  color: #acd8bf;
+}
+
+button {
+  padding: 0.65rem 1rem;
+  border: 0;
+  border-radius: 0.35rem;
+  font: inherit;
+  font-weight: 650;
+  color: #10241b;
+  background: #b7f0ca;
+  cursor: pointer;
+}

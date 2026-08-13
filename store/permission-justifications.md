@@ -18,6 +18,12 @@ the native Rust host, not executable extension code.
 - `alarms`: run a five-minute health safety check, schedule one-shot header
   refresh before authenticated peer-target evidence expires, and bound
   reconnect retries. It is not used for tracking.
+- `declarativeNetRequestWithHostAccess`: synchronously hold only top-level
+  HTTP(S) GET navigation on a packaged waiting page while the mandatory proxy
+  listener or authoritative name-tree root is unavailable. The enabled static
+  rule is present before first-start or update code runs; a higher-priority
+  session rule permits navigation only after both are ready. The rule never
+  queues POST, adds direct routing, filters content, or sends data elsewhere.
 - `nativeMessaging`: communicate with the installed Rust resolver, proxy, CA,
   policy, and diagnostics host. JavaScript does not implement the trust path.
 - `proxy`: install the mandatory, Rust-generated PAC that routes ordinary web
@@ -32,7 +38,8 @@ the native Rust host, not executable extension code.
   leaves the provider absent.
 - `storage`: retain user settings, including an optional MeshMine public-feed
   endpoint, locally and keep bounded session-only navigation/security receipts
-  needed to bind native results to the exact active document.
+  needed to bind native results to the exact active document. The packaged
+  bootstrap handoff is held only in worker memory, not persistent storage.
 - `webNavigation`: bind redirects, commits, History API changes, BFCache
   restores, and errors to the corresponding Rust security receipt.
 - `webRequest`: observe bounded request lifecycle metadata so main-frame,
@@ -44,8 +51,10 @@ the native Rust host, not executable extension code.
 - `<all_urls>` host permission: every ordinary DNS web hostname, redirect,
   subresource, download, Service Worker request, and WebSocket must be covered
   by the same dual-root decision. It also permits an explicit credential-free
-  read from a user-selected MeshMine statistics endpoint. A hostname allowlist
-  would permit security bypasses. There are no remotely supplied scripts.
+  read from a user-selected MeshMine statistics endpoint and lets the
+  declarative transition gate cover top-level HTTP(S) GET navigation. A
+  hostname allowlist would permit security bypasses. There are no remotely
+  supplied scripts.
 
 ## Local CA
 

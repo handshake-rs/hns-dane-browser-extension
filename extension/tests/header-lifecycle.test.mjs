@@ -27,7 +27,7 @@ test("worker delegates lifecycle races to the executable controls", () => {
   assert.match(worker, /runtimeControlTokenIsCurrent\(/);
   assert.match(worker, /headerSyncReadyForProxyActivation\(/);
   assert.match(worker, /headerSyncRefreshError\(/);
-  assert.match(worker, /deactivateIfHeaderEvidenceExpired\(/);
+  assert.match(worker, /headerEvidenceGateClosesAt\(/);
   assert.match(worker, /client\.disconnectIfCurrent\(/);
   assert.match(worker, /chrome\.proxy\.settings\.get/);
   assert.match(worker, /createAlarmForControl\(\s*HEADER_SYNC_DEADLINE_ALARM/);

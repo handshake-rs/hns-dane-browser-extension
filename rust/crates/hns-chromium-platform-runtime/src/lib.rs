@@ -125,7 +125,8 @@ use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{
-    Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError, Weak,
+    Arc, Condvar, Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    TryLockError, Weak,
 };
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1149,17 +1150,25 @@ struct CanonicalWorkStamp {
     admitted_snapshot: hns_browser_runtime::RuntimeSnapshot,
     proxy_generation: u64,
     storage_identity: Option<HeaderSyncStorageIdentity>,
+    name_tree_authority: Option<NameTreeAuthorityIdentity>,
 }
 
 impl CanonicalWorkStamp {
-    fn with_storage_identity(mut self, identity: HeaderSyncStorageIdentity) -> Self {
-        self.storage_identity = Some(identity);
+    fn with_header_state(
+        mut self,
+        storage_identity: HeaderSyncStorageIdentity,
+        name_tree_authority: NameTreeAuthorityIdentity,
+    ) -> Self {
+        self.storage_identity = Some(storage_identity);
+        self.name_tree_authority = Some(name_tree_authority);
         self
     }
 }
 
 struct CanonicalReadiness {
-    _private: (),
+    name_tree_authority: NameTreeAuthorityIdentity,
+    _header_state_lock: HeaderStateFileLock,
+    _process_peer_state: HeaderStateFileLock,
 }
 
 trait CanonicalTransportReadinessProbe: Send + Sync {
@@ -1204,6 +1213,8 @@ struct CanonicalAuthority {
     prepared_proxy_generation: AtomicU64,
     active_proxy_generation: AtomicU64,
     readiness_base: PathBuf,
+    readiness_lock_path: PathBuf,
+    readiness_peer_lock_path: PathBuf,
     readiness_network: NetworkKind,
     transport_readiness: Arc<dyn CanonicalTransportReadinessProbe>,
 }
@@ -1240,6 +1251,8 @@ impl CanonicalAuthority {
             policy: RwLock::new(policy),
             prepared_proxy_generation: AtomicU64::new(0),
             active_proxy_generation: AtomicU64::new(0),
+            readiness_lock_path: readiness_base.join(".header-state.lock"),
+            readiness_peer_lock_path: readiness_base.join(".peer-state.lock"),
             readiness_base,
             readiness_network,
             transport_readiness,
@@ -1247,6 +1260,34 @@ impl CanonicalAuthority {
     }
 
     fn verify_readiness(&self) -> Result<CanonicalReadiness, RuntimeError> {
+        let mut header_state_lock = HeaderStateFileLock::shared(&self.readiness_lock_path)
+            .map_err(|error| {
+                RuntimeError::Operation(format!(
+                    "canonical authority could not lock header publication state: {error}"
+                ))
+            })?;
+        let process_peer_state = HeaderStateFileLock::shared(&self.readiness_peer_lock_path)
+            .map_err(|error| {
+                RuntimeError::Operation(format!(
+                    "canonical authority could not lock peer publication state: {error}"
+                ))
+            })?;
+        let recorded_identity = header_state_lock.ready_identity().map_err(|error| {
+            RuntimeError::Operation(format!(
+                "canonical authority could not read header publication state: {error}"
+            ))
+        })?;
+        let live_identity =
+            read_header_sync_storage_identity(&self.readiness_base).map_err(|error| {
+                RuntimeError::Operation(format!(
+                    "canonical authority could not read live header identity: {error}"
+                ))
+            })?;
+        if recorded_identity != live_identity {
+            return Err(RuntimeError::Operation(
+                "canonical authority observed incomplete header publication".to_owned(),
+            ));
+        }
         let currentness = local_chain_currentness(&self.readiness_base, self.readiness_network)
             .map_err(|error| {
                 RuntimeError::Operation(format!(
@@ -1274,7 +1315,18 @@ impl CanonicalAuthority {
                     "canonical authority has no usable policy-permitted DNS transport: {error}"
                 ))
             })?;
-        Ok(CanonicalReadiness { _private: () })
+        let name_tree_authority =
+            authoritative_name_tree_identity(&self.readiness_base, self.readiness_network)
+                .map_err(|error| {
+                    RuntimeError::Operation(format!(
+                        "canonical authority could not identify the current name-tree root: {error}"
+                    ))
+                })?;
+        Ok(CanonicalReadiness {
+            name_tree_authority,
+            _header_state_lock: header_state_lock,
+            _process_peer_state: process_peer_state,
+        })
     }
 
     fn readiness_or_invalidate(&self) -> Result<CanonicalReadiness, RuntimeError> {
@@ -1447,11 +1499,17 @@ impl CanonicalAuthority {
             admitted_snapshot,
             proxy_generation,
             storage_identity: None,
+            name_tree_authority: None,
         })
     }
 
     fn admits(&self, stamp: CanonicalWorkStamp) -> bool {
-        self.readiness_or_invalidate().is_ok() && self.admits_without_readiness(stamp)
+        self.readiness_or_invalidate().is_ok_and(|readiness| {
+            stamp
+                .name_tree_authority
+                .is_none_or(|expected| expected == readiness.name_tree_authority)
+                && self.admits_without_readiness(stamp)
+        })
     }
 
     fn admits_without_readiness(&self, stamp: CanonicalWorkStamp) -> bool {
@@ -1467,8 +1525,15 @@ impl CanonicalAuthority {
         stamp: CanonicalWorkStamp,
         operation: impl FnOnce() -> Result<T, TransportError>,
     ) -> Result<T, TransportError> {
-        self.readiness_or_invalidate()
+        let readiness = self
+            .readiness_or_invalidate()
             .map_err(|_| canonical_authority_transport_error())?;
+        if stamp
+            .name_tree_authority
+            .is_some_and(|expected| expected != readiness.name_tree_authority)
+        {
+            return Err(canonical_authority_transport_error());
+        }
         let runtime = self
             .runtime
             .lock()
@@ -1484,8 +1549,15 @@ impl CanonicalAuthority {
         stamp: CanonicalWorkStamp,
         operation: &mut dyn FnMut() -> std::io::Result<()>,
     ) -> std::io::Result<()> {
-        self.readiness_or_invalidate()
+        let readiness = self
+            .readiness_or_invalidate()
             .map_err(|_| canonical_authority_publication_error())?;
+        if stamp
+            .name_tree_authority
+            .is_some_and(|expected| expected != readiness.name_tree_authority)
+        {
+            return Err(canonical_authority_publication_error());
+        }
         let runtime = self
             .runtime
             .lock()
@@ -1508,7 +1580,15 @@ impl CanonicalAuthority {
                 "canonical authority rejected a non-direct publication stamp".to_owned(),
             ));
         }
-        self.readiness_or_invalidate()?;
+        let readiness = self.readiness_or_invalidate()?;
+        if stamp
+            .name_tree_authority
+            .is_some_and(|expected| expected != readiness.name_tree_authority)
+        {
+            return Err(RuntimeError::Operation(
+                "canonical authority rejected changed name-tree authority".to_owned(),
+            ));
+        }
         let runtime = self
             .runtime
             .lock()
@@ -1612,17 +1692,12 @@ impl ProxyPublicationAuthority for CanonicalProxyPublicationAuthority {
         if self.coordination.publication_epoch(&maintenance) != Some(self.maintenance_epoch) {
             return Err(canonical_authority_publication_error());
         }
-        let mut header_state_lock =
-            HeaderStateFileLock::try_shared(&self.coordination.header_state_lock_path)
-                .map_err(|_| canonical_authority_publication_error())?
-                .ok_or_else(canonical_authority_publication_error)?;
-        if header_state_lock
-            .ready_identity()
-            .map_err(|_| canonical_authority_publication_error())?
-            != self.storage_identity
-        {
-            return Err(canonical_authority_publication_error());
-        }
+        let _header_state_lock = HeaderStateLease::new(
+            Arc::clone(&self.coordination),
+            self.storage_identity,
+            self.stamp.name_tree_authority,
+        )
+        .acquire()?;
         self.authority.publish_current(self.stamp, &mut || {
             if let Some(publication) = &self.namespace_publication {
                 persist_successful_namespace_decision(
@@ -2082,6 +2157,7 @@ struct RuntimeCoordination {
     sync_lock: Mutex<()>,
     maintenance: RwLock<()>,
     maintenance_epoch: AtomicU64,
+    observed_name_tree_authority: Mutex<RememberedNameTreeAuthority>,
     header_state_base: PathBuf,
     header_state_lock_path: PathBuf,
     header_sync_lock_path: PathBuf,
@@ -2096,8 +2172,11 @@ struct MaintenanceEpoch(u64);
 struct ProxyMaintenanceGuard<'a> {
     _guard: RwLockReadGuard<'a, ()>,
     _header_state_lock: HeaderStateFileLock,
+    _peer_state: MutexGuard<'a, ()>,
+    _process_peer_state: HeaderStateFileLock,
     epoch: MaintenanceEpoch,
     storage_identity: HeaderSyncStorageIdentity,
+    name_tree_authority: NameTreeAuthorityIdentity,
 }
 
 impl ProxyMaintenanceGuard<'_> {
@@ -2108,6 +2187,10 @@ impl ProxyMaintenanceGuard<'_> {
     fn storage_identity(&self) -> HeaderSyncStorageIdentity {
         self.storage_identity
     }
+
+    fn name_tree_authority(&self) -> NameTreeAuthorityIdentity {
+        self.name_tree_authority
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2115,6 +2198,24 @@ struct HeaderSyncStorageIdentity {
     header_generation: u64,
     peer_generation: u64,
     best_hash: Option<hns_core::Hash>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NameTreeAuthorityIdentity {
+    network: NetworkKind,
+    anchor: ResourceValueAnchor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RememberedNameTreeAuthority {
+    PendingLocalInvalidation,
+    Stable(Option<NameTreeAuthorityIdentity>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ObservedHeaderState {
+    storage_identity: HeaderSyncStorageIdentity,
+    name_tree_authority: Option<NameTreeAuthorityIdentity>,
 }
 
 struct HeaderStateFileLock {
@@ -2314,8 +2415,24 @@ fn initialize_header_state_record(base: &Path, lock_path: &Path) -> Result<(), S
     }
 }
 
+fn observe_ready_header_state(
+    base: &Path,
+    network: NetworkKind,
+    lock: &mut HeaderStateFileLock,
+) -> Result<ObservedHeaderState, String> {
+    let recorded_identity = lock.ready_identity()?;
+    let storage_identity = read_header_sync_storage_identity(base)?;
+    if recorded_identity != storage_identity {
+        return Err("recorded and live header-state identities do not match".to_owned());
+    }
+    Ok(ObservedHeaderState {
+        storage_identity,
+        name_tree_authority: authoritative_name_tree_identity(base, network).ok(),
+    })
+}
+
 impl RuntimeCoordination {
-    fn begin_maintenance(&self, _guard: &RwLockWriteGuard<'_, ()>) -> Result<(), RuntimeError> {
+    fn advance_maintenance_epoch(&self) -> Result<(), RuntimeError> {
         let current = self.maintenance_epoch.load(Ordering::Acquire);
         if current == 0 {
             return Err(RuntimeError::Operation(
@@ -2333,6 +2450,95 @@ impl RuntimeCoordination {
         };
         self.maintenance_epoch.store(next, Ordering::Release);
         Ok(())
+    }
+
+    fn begin_maintenance(&self, _guard: &RwLockWriteGuard<'_, ()>) -> Result<(), RuntimeError> {
+        let mut remembered = self
+            .observed_name_tree_authority
+            .lock()
+            .map_err(|_| RuntimeError::Synchronization("name-tree authority observation"))?;
+        self.advance_maintenance_epoch()?;
+        *remembered = RememberedNameTreeAuthority::PendingLocalInvalidation;
+        Ok(())
+    }
+
+    fn observation_matches(
+        &self,
+        observed: Option<NameTreeAuthorityIdentity>,
+    ) -> Result<bool, RuntimeError> {
+        let remembered = self
+            .observed_name_tree_authority
+            .lock()
+            .map_err(|_| RuntimeError::Synchronization("name-tree authority observation"))?;
+        Ok(matches!(
+            *remembered,
+            RememberedNameTreeAuthority::Stable(current) if current == observed
+        ))
+    }
+
+    fn reconcile_observed_authority(
+        &self,
+        _guard: &RwLockWriteGuard<'_, ()>,
+        observed: Option<NameTreeAuthorityIdentity>,
+    ) -> Result<(), RuntimeError> {
+        let mut remembered = self
+            .observed_name_tree_authority
+            .lock()
+            .map_err(|_| RuntimeError::Synchronization("name-tree authority observation"))?;
+        match *remembered {
+            RememberedNameTreeAuthority::PendingLocalInvalidation => {
+                *remembered = RememberedNameTreeAuthority::Stable(observed);
+            }
+            RememberedNameTreeAuthority::Stable(current) if current == observed => {}
+            RememberedNameTreeAuthority::Stable(_) => {
+                self.advance_maintenance_epoch()?;
+                *remembered = RememberedNameTreeAuthority::Stable(observed);
+            }
+        }
+        Ok(())
+    }
+
+    fn reconcile_current_authority(&self, network: NetworkKind) -> Result<(), RuntimeError> {
+        {
+            let _maintenance = self
+                .maintenance
+                .read()
+                .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+            let mut header_state = HeaderStateFileLock::shared(&self.header_state_lock_path)
+                .map_err(RuntimeError::Operation)?;
+            let _process_peer_state =
+                HeaderStateFileLock::shared(&self.header_state_base.join(".peer-state.lock"))
+                    .map_err(RuntimeError::Operation)?;
+            let observed =
+                observe_ready_header_state(&self.header_state_base, network, &mut header_state)
+                    .ok()
+                    .and_then(|state| state.name_tree_authority);
+            if self.observation_matches(observed)? {
+                return Ok(());
+            }
+        }
+
+        let maintenance = self
+            .maintenance
+            .write()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        let mut header_state = HeaderStateFileLock::shared(&self.header_state_lock_path)
+            .map_err(RuntimeError::Operation)?;
+        let _process_peer_state =
+            HeaderStateFileLock::shared(&self.header_state_base.join(".peer-state.lock"))
+                .map_err(RuntimeError::Operation)?;
+        let observed =
+            observe_ready_header_state(&self.header_state_base, network, &mut header_state)
+                .ok()
+                .and_then(|state| state.name_tree_authority);
+        self.reconcile_observed_authority(&maintenance, observed)
+    }
+
+    fn remembered_authority_matches(
+        &self,
+        observed: NameTreeAuthorityIdentity,
+    ) -> Result<bool, RuntimeError> {
+        self.observation_matches(Some(observed))
     }
 
     fn publication_epoch(&self, _guard: &RwLockReadGuard<'_, ()>) -> Option<MaintenanceEpoch> {
@@ -2372,10 +2578,22 @@ fn runtime_coordination(
     let header_state_lock_path = identity.join(".header-state.lock");
     initialize_header_state_record(&identity, &header_state_lock_path)
         .map_err(RuntimeError::Operation)?;
+    let initial_name_tree_authority = {
+        let mut header_state = HeaderStateFileLock::shared(&header_state_lock_path)
+            .map_err(RuntimeError::Operation)?;
+        let _process_peer_state = HeaderStateFileLock::shared(&identity.join(".peer-state.lock"))
+            .map_err(RuntimeError::Operation)?;
+        observe_ready_header_state(&identity, network, &mut header_state)
+            .ok()
+            .and_then(|state| state.name_tree_authority)
+    };
     let coordination = Arc::new(RuntimeCoordination {
         sync_lock: Mutex::new(()),
         maintenance: RwLock::new(()),
         maintenance_epoch: AtomicU64::new(1),
+        observed_name_tree_authority: Mutex::new(RememberedNameTreeAuthority::Stable(
+            initial_name_tree_authority,
+        )),
         header_state_base: identity.clone(),
         header_state_lock_path,
         header_sync_lock_path: identity.join(".header-sync.lock"),
@@ -2731,6 +2949,9 @@ impl BrowserRuntime {
             .sync_lock
             .lock()
             .map_err(|_| RuntimeError::Synchronization("sync lock"))?;
+        self.inner
+            .coordination
+            .reconcile_current_authority(self.inner.configuration.network)?;
         let mut observed_header_state =
             HeaderStateFileLock::shared(&self.inner.coordination.header_state_lock_path)
                 .map_err(RuntimeError::Operation)?;
@@ -2769,6 +2990,10 @@ impl BrowserRuntime {
             && current_status.freshness == "current"
             && !current_status.target_evidence_expired
         {
+            drop(header_state_lock);
+            self.inner
+                .coordination
+                .reconcile_current_authority(self.inner.configuration.network)?;
             current_status.status = "coalesced";
             return Ok(current_status);
         }
@@ -2789,57 +3014,6 @@ impl BrowserRuntime {
         )
         .map_err(RuntimeError::Operation)?;
 
-        if staged_status.freshness == "current"
-            && !staged_status.target_evidence_expired
-            && staged_headers_match_baseline(&staged, self.inner.configuration.network)
-                .map_err(RuntimeError::Operation)?
-        {
-            let _maintenance = self
-                .inner
-                .coordination
-                .maintenance
-                .read()
-                .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
-            let mut header_state_lock =
-                HeaderStateFileLock::shared(&self.inner.coordination.header_state_lock_path)
-                    .map_err(RuntimeError::Operation)?;
-            let live_identity =
-                read_header_sync_storage_identity(&self.inner.coordination.header_state_base)
-                    .map_err(RuntimeError::Operation)?;
-            let recorded_identity = header_state_lock.ready_identity().ok();
-            if live_identity != staged.baseline_storage_identity {
-                return Err(RuntimeError::Operation(format!(
-                    "header sync stage was superseded before peer refresh \
-                     (baseline {baseline:?}, live {live_identity:?}, record {recorded_identity:?})",
-                    baseline = staged.baseline_storage_identity,
-                )));
-            }
-            if recorded_identity == Some(live_identity) {
-                let _peer_state = self
-                    .inner
-                    .coordination
-                    .peer_state
-                    .lock()
-                    .map_err(|_| RuntimeError::Synchronization("peer state lock"))?;
-                let peer_store_path = self
-                    .inner
-                    .coordination
-                    .header_state_base
-                    .join("peers.sqlite");
-                let process_peer_state_path =
-                    peer_state_lock_path(&peer_store_path).map_err(RuntimeError::Operation)?;
-                let _process_peer_state = HeaderStateFileLock::exclusive(&process_peer_state_path)
-                    .map_err(RuntimeError::Operation)?;
-                return publish_peer_only_sync_stage(
-                    &self.inner.data_dir,
-                    &staged,
-                    self.inner.configuration.network,
-                    staged_status,
-                )
-                .map_err(RuntimeError::Operation);
-            }
-        }
-
         let maintenance = self
             .inner
             .coordination
@@ -2849,14 +3023,6 @@ impl BrowserRuntime {
         let mut header_state_lock =
             HeaderStateFileLock::exclusive(&self.inner.coordination.header_state_lock_path)
                 .map_err(RuntimeError::Operation)?;
-        let live_identity =
-            read_header_sync_storage_identity(&self.inner.coordination.header_state_base)
-                .map_err(RuntimeError::Operation)?;
-        if live_identity != staged.baseline_storage_identity {
-            return Err(RuntimeError::Operation(
-                "header sync stage was superseded by another process before publication".to_owned(),
-            ));
-        }
         let _peer_state = self
             .inner
             .coordination
@@ -2872,16 +3038,61 @@ impl BrowserRuntime {
             peer_state_lock_path(&peer_store_path).map_err(RuntimeError::Operation)?;
         let _process_peer_state = HeaderStateFileLock::exclusive(&process_peer_state_path)
             .map_err(RuntimeError::Operation)?;
+        let live_identity =
+            read_header_sync_storage_identity(&self.inner.coordination.header_state_base)
+                .map_err(RuntimeError::Operation)?;
+        let recorded_identity = header_state_lock.ready_identity().ok();
+        if recorded_identity != Some(live_identity)
+            || live_identity != staged.baseline_storage_identity
+        {
+            return Err(RuntimeError::Operation(
+                "header sync stage was superseded or publication state is incomplete".to_owned(),
+            ));
+        }
+        let staged_base = staged
+            .network_base(self.inner.configuration.network)
+            .map_err(RuntimeError::Operation)?;
+        let (live_peers, merged_peers) = merged_header_sync_peer_views(
+            &self.inner.coordination.header_state_base,
+            &staged_base,
+            &staged,
+            self.inner.configuration.network,
+        )
+        .map_err(RuntimeError::Operation)?;
+        let authority_now = now_unix_seconds();
+        let live_authority = authoritative_name_tree_identity_with_peers(
+            &self.inner.coordination.header_state_base,
+            self.inner.configuration.network,
+            &live_peers,
+            authority_now,
+        )
+        .ok();
+        let staged_authority = authoritative_name_tree_identity_with_peers(
+            &staged_base,
+            self.inner.configuration.network,
+            &merged_peers,
+            authority_now,
+        )
+        .ok();
+        let preserves_name_tree_authority = live_authority.is_some()
+            && live_authority == staged_authority
+            && self
+                .inner
+                .coordination
+                .observation_matches(live_authority)?;
         header_state_lock
             .mark_updating()
             .map_err(RuntimeError::Operation)?;
-        self.inner.coordination.begin_maintenance(&maintenance)?;
+        if !preserves_name_tree_authority {
+            self.inner.coordination.begin_maintenance(&maintenance)?;
+        }
         let status = publish_header_sync_stage(
             &self.inner.data_dir,
             &staged,
             self.inner.configuration.network,
             self.inner.configuration.sync.resource_cache_limit_bytes,
             staged_status,
+            &merged_peers,
         )
         .map_err(RuntimeError::Operation)?;
         let published_identity =
@@ -2890,21 +3101,95 @@ impl BrowserRuntime {
         header_state_lock
             .mark_ready(published_identity)
             .map_err(RuntimeError::Operation)?;
+        let published_authority = authoritative_name_tree_identity(
+            &self.inner.coordination.header_state_base,
+            self.inner.configuration.network,
+        )
+        .ok();
+        self.inner
+            .coordination
+            .reconcile_observed_authority(&maintenance, published_authority)?;
         Ok(status)
     }
 
     pub fn sync_status(&self) -> Result<SyncStatus, RuntimeError> {
-        let _maintenance = self
-            .inner
-            .coordination
-            .maintenance
-            .read()
-            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
-        let _header_state_lock =
-            HeaderStateFileLock::shared(&self.inner.coordination.header_state_lock_path)
+        self.sync_status_with_security_epoch()
+            .map(|(status, _epoch)| status)
+    }
+
+    /// Returns one header-status/maintenance-epoch snapshot captured under the
+    /// same cross-process publication lock.
+    pub fn sync_status_with_security_epoch(
+        &self,
+    ) -> Result<(SyncStatus, Option<u64>), RuntimeError> {
+        loop {
+            self.inner
+                .coordination
+                .reconcile_current_authority(self.inner.configuration.network)?;
+            let maintenance = self
+                .inner
+                .coordination
+                .maintenance
+                .read()
+                .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+            let mut header_state_lock =
+                HeaderStateFileLock::shared(&self.inner.coordination.header_state_lock_path)
+                    .map_err(RuntimeError::Operation)?;
+            let _peer_state = self
+                .inner
+                .coordination
+                .peer_state
+                .lock()
+                .map_err(|_| RuntimeError::Synchronization("peer state lock"))?;
+            let peer_store_path = self
+                .inner
+                .coordination
+                .header_state_base
+                .join("peers.sqlite");
+            let process_peer_state_path =
+                peer_state_lock_path(&peer_store_path).map_err(RuntimeError::Operation)?;
+            let _process_peer_state = HeaderStateFileLock::shared(&process_peer_state_path)
                 .map_err(RuntimeError::Operation)?;
-        read_sync_status(&self.inner.data_dir, self.inner.configuration.network)
-            .map_err(RuntimeError::Operation)
+            let observed = observe_ready_header_state(
+                &self.inner.coordination.header_state_base,
+                self.inner.configuration.network,
+                &mut header_state_lock,
+            )
+            .map_err(RuntimeError::Operation)?;
+            if !self
+                .inner
+                .coordination
+                .observation_matches(observed.name_tree_authority)?
+            {
+                drop(header_state_lock);
+                drop(maintenance);
+                continue;
+            }
+            let status = read_sync_status(&self.inner.data_dir, self.inner.configuration.network)
+                .map_err(RuntimeError::Operation)?;
+            let final_observed = observe_ready_header_state(
+                &self.inner.coordination.header_state_base,
+                self.inner.configuration.network,
+                &mut header_state_lock,
+            )
+            .map_err(RuntimeError::Operation)?;
+            if final_observed != observed
+                || !self
+                    .inner
+                    .coordination
+                    .observation_matches(final_observed.name_tree_authority)?
+            {
+                drop(header_state_lock);
+                drop(maintenance);
+                continue;
+            }
+            let maintenance_epoch = self
+                .inner
+                .coordination
+                .publication_epoch(&maintenance)
+                .map(|epoch| epoch.0);
+            return Ok((status, maintenance_epoch));
+        }
     }
 
     /// Verifies and persists one explicitly configured relay-capable Handshake peer.
@@ -3121,6 +3406,14 @@ impl BrowserRuntime {
         header_state_lock
             .mark_ready(published_identity)
             .map_err(RuntimeError::Operation)?;
+        let published_authority = authoritative_name_tree_identity(
+            &self.inner.coordination.header_state_base,
+            self.inner.configuration.network,
+        )
+        .ok();
+        self.inner
+            .coordination
+            .reconcile_observed_authority(&maintenance, published_authority)?;
 
         let mut published =
             read_sync_status(&self.inner.data_dir, self.inner.configuration.network)
@@ -3154,19 +3447,39 @@ impl BrowserRuntime {
         request: GatewayHttpRequest,
     ) -> Result<GatewayHttpResponse, RuntimeError> {
         self.validate_gateway_request(&request)?;
-        let authority_stamp = self.inner.canonical_authority.admit_direct()?;
         let _maintenance = self
             .inner
             .coordination
             .maintenance
             .read()
             .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
-        let _header_state_lock =
+        let mut header_state_lock =
             HeaderStateFileLock::shared(&self.inner.coordination.header_state_lock_path)
                 .map_err(RuntimeError::Operation)?;
-        let storage_identity =
-            read_header_sync_storage_identity(&self.inner.coordination.header_state_base)
-                .map_err(RuntimeError::Operation)?;
+        let process_peer_state = HeaderStateFileLock::shared(
+            &self
+                .inner
+                .coordination
+                .header_state_base
+                .join(".peer-state.lock"),
+        )
+        .map_err(RuntimeError::Operation)?;
+        let authority_stamp = self.inner.canonical_authority.admit_direct()?;
+        let observed = observe_ready_header_state(
+            &self.inner.coordination.header_state_base,
+            self.inner.configuration.network,
+            &mut header_state_lock,
+        )
+        .map_err(RuntimeError::Operation)?;
+        let storage_identity = observed.storage_identity;
+        let name_tree_authority = observed.name_tree_authority.ok_or_else(|| {
+            RuntimeError::Operation("authoritative name-tree root is unavailable".to_owned())
+        })?;
+        let authority_stamp =
+            authority_stamp.with_header_state(storage_identity, name_tree_authority);
+        drop(process_peer_state);
+        drop(header_state_lock);
+        drop(_maintenance);
         let header_text = self.gateway_header_text(&request.headers)?;
         let prepared = prepare_gateway_http_response_with_transport(
             GatewayHttpRequestInput {
@@ -3183,10 +3496,11 @@ impl BrowserRuntime {
                 self.inner.transport.clone(),
                 Arc::clone(&self.inner.canonical_authority),
                 authority_stamp,
-                HeaderStateLease {
-                    coordination: Arc::clone(&self.inner.coordination),
-                    identity: storage_identity,
-                },
+                HeaderStateLease::new(
+                    Arc::clone(&self.inner.coordination),
+                    storage_identity,
+                    Some(name_tree_authority),
+                ),
             ),
             self.inner.transport.clone(),
             Some(Arc::clone(&self.inner.coordination.peer_state)),
@@ -3210,19 +3524,39 @@ impl BrowserRuntime {
         body_path: impl AsRef<Path>,
     ) -> Result<Vec<u8>, RuntimeError> {
         self.validate_gateway_request(&request)?;
-        let authority_stamp = self.inner.canonical_authority.admit_direct()?;
         let _maintenance = self
             .inner
             .coordination
             .maintenance
             .read()
             .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
-        let _header_state_lock =
+        let mut header_state_lock =
             HeaderStateFileLock::shared(&self.inner.coordination.header_state_lock_path)
                 .map_err(RuntimeError::Operation)?;
-        let storage_identity =
-            read_header_sync_storage_identity(&self.inner.coordination.header_state_base)
-                .map_err(RuntimeError::Operation)?;
+        let process_peer_state = HeaderStateFileLock::shared(
+            &self
+                .inner
+                .coordination
+                .header_state_base
+                .join(".peer-state.lock"),
+        )
+        .map_err(RuntimeError::Operation)?;
+        let authority_stamp = self.inner.canonical_authority.admit_direct()?;
+        let observed = observe_ready_header_state(
+            &self.inner.coordination.header_state_base,
+            self.inner.configuration.network,
+            &mut header_state_lock,
+        )
+        .map_err(RuntimeError::Operation)?;
+        let storage_identity = observed.storage_identity;
+        let name_tree_authority = observed.name_tree_authority.ok_or_else(|| {
+            RuntimeError::Operation("authoritative name-tree root is unavailable".to_owned())
+        })?;
+        let authority_stamp =
+            authority_stamp.with_header_state(storage_identity, name_tree_authority);
+        drop(process_peer_state);
+        drop(header_state_lock);
+        drop(_maintenance);
         let header_text = self.gateway_header_text(&request.headers)?;
         let target = body_path.as_ref();
         let (staged, staged_file) =
@@ -3246,10 +3580,11 @@ impl BrowserRuntime {
                 self.inner.transport.clone(),
                 Arc::clone(&self.inner.canonical_authority),
                 authority_stamp,
-                HeaderStateLease {
-                    coordination: Arc::clone(&self.inner.coordination),
-                    identity: storage_identity,
-                },
+                HeaderStateLease::new(
+                    Arc::clone(&self.inner.coordination),
+                    storage_identity,
+                    Some(name_tree_authority),
+                ),
             ),
             self.inner.transport.clone(),
             Some(Arc::clone(&self.inner.coordination.peer_state)),
@@ -3478,22 +3813,74 @@ struct AuthorityOriginTransport {
 #[derive(Clone)]
 struct HeaderStateLease {
     coordination: Arc<RuntimeCoordination>,
-    identity: HeaderSyncStorageIdentity,
+    identity: Arc<RwLock<HeaderSyncStorageIdentity>>,
+    name_tree_authority: Option<NameTreeAuthorityIdentity>,
+}
+
+struct HeaderStateAuthorityGuard {
+    _header_state_lock: HeaderStateFileLock,
+    _process_peer_state: HeaderStateFileLock,
 }
 
 impl HeaderStateLease {
-    fn acquire(&self) -> std::io::Result<HeaderStateFileLock> {
-        let mut guard = HeaderStateFileLock::try_shared(&self.coordination.header_state_lock_path)
-            .map_err(|_| canonical_authority_publication_error())?
-            .ok_or_else(canonical_authority_publication_error)?;
-        if guard
+    fn new(
+        coordination: Arc<RuntimeCoordination>,
+        identity: HeaderSyncStorageIdentity,
+        name_tree_authority: Option<NameTreeAuthorityIdentity>,
+    ) -> Self {
+        Self {
+            coordination,
+            identity: Arc::new(RwLock::new(identity)),
+            name_tree_authority,
+        }
+    }
+
+    fn identity(&self) -> Result<HeaderSyncStorageIdentity, std::io::Error> {
+        self.identity
+            .read()
+            .map(|identity| *identity)
+            .map_err(|_| canonical_authority_publication_error())
+    }
+
+    fn acquire(&self) -> std::io::Result<HeaderStateAuthorityGuard> {
+        let mut header_state_lock =
+            HeaderStateFileLock::shared(&self.coordination.header_state_lock_path)
+                .map_err(|_| canonical_authority_publication_error())?;
+        let process_peer_state = HeaderStateFileLock::shared(
+            &self.coordination.header_state_base.join(".peer-state.lock"),
+        )
+        .map_err(|_| canonical_authority_publication_error())?;
+        let recorded_identity = header_state_lock
             .ready_identity()
-            .map_err(|_| canonical_authority_publication_error())?
-            != self.identity
+            .map_err(|_| canonical_authority_publication_error())?;
+        let live_identity = read_header_sync_storage_identity(&self.coordination.header_state_base)
+            .map_err(|_| canonical_authority_publication_error())?;
+        if recorded_identity != live_identity {
+            return Err(canonical_authority_publication_error());
+        }
+        let expected_authority = self
+            .name_tree_authority
+            .ok_or_else(canonical_authority_publication_error)?;
+        if authoritative_name_tree_identity(
+            &self.coordination.header_state_base,
+            expected_authority.network,
+        )
+        .map_err(|_| canonical_authority_publication_error())?
+            != expected_authority
         {
             return Err(canonical_authority_publication_error());
         }
-        Ok(guard)
+        let expected_identity = self.identity()?;
+        if recorded_identity != expected_identity {
+            *self
+                .identity
+                .write()
+                .map_err(|_| canonical_authority_publication_error())? = live_identity;
+        }
+        Ok(HeaderStateAuthorityGuard {
+            _header_state_lock: header_state_lock,
+            _process_peer_state: process_peer_state,
+        })
     }
 }
 
@@ -3512,9 +3899,13 @@ impl AuthorityOriginTransport {
         }
     }
 
-    fn require_current(&self) -> Result<(), TransportError> {
+    fn require_current(&self) -> Result<HeaderStateAuthorityGuard, TransportError> {
+        let header_state = self
+            .header_state
+            .acquire()
+            .map_err(|_| canonical_authority_transport_error())?;
         if self.authority.admits(self.stamp) {
-            Ok(())
+            Ok(header_state)
         } else {
             Err(canonical_authority_transport_error())
         }
@@ -3523,16 +3914,16 @@ impl AuthorityOriginTransport {
 
 impl OriginTransport for AuthorityOriginTransport {
     fn fetch(&self, request: &OriginRequest) -> Result<OriginResponse, TransportError> {
-        self.require_current()?;
+        drop(self.require_current()?);
         let response = self.inner.fetch(request)?;
-        self.require_current()?;
+        drop(self.require_current()?);
         Ok(response)
     }
 
     fn open_tunnel(&self, request: &OriginRequest) -> Result<OriginTunnel, TransportError> {
-        self.require_current()?;
+        drop(self.require_current()?);
         let tunnel = self.inner.open_tunnel(request)?;
-        self.require_current()?;
+        drop(self.require_current()?);
         Ok(OriginTunnel {
             response_head: tunnel.response_head,
             stream: Box::new(AuthorityBoundTunnel {
@@ -3550,9 +3941,9 @@ impl OriginTransport for AuthorityOriginTransport {
         &self,
         request: &OriginRequest,
     ) -> Result<OriginWebPkiPassthrough, TransportError> {
-        self.require_current()?;
+        drop(self.require_current()?);
         let passthrough = self.inner.open_webpki_passthrough(request)?;
-        self.require_current()?;
+        drop(self.require_current()?);
         let lease = Arc::new(AuthorityPassthroughLease::new(
             Arc::clone(&self.authority),
             self.stamp,
@@ -3576,12 +3967,12 @@ impl OriginTransport for AuthorityOriginTransport {
         &self,
         requests: &[OriginRequest],
     ) -> Result<SelectedOriginWebPkiPassthrough, TransportError> {
-        self.require_current()?;
-        let mut before_dial = || self.require_current();
+        drop(self.require_current()?);
+        let mut before_dial = || self.require_current().map(drop);
         let selected = self
             .inner
             .open_webpki_passthrough_candidates_with_guard(requests, &mut before_dial)?;
-        self.require_current()?;
+        drop(self.require_current()?);
         let lease = Arc::new(AuthorityPassthroughLease::new(
             Arc::clone(&self.authority),
             self.stamp,
@@ -3608,12 +3999,12 @@ impl OriginTransport for AuthorityOriginTransport {
         request: &OriginRequest,
         body: &mut dyn Write,
     ) -> Result<OriginResponseHead, TransportError> {
-        self.require_current()?;
+        drop(self.require_current()?);
         // Stage privately so a generation/policy/readiness change cannot
         // leave caller-visible partial download bytes behind.
         let mut staged = Vec::new();
         let response = self.inner.fetch_to_writer(request, &mut staged)?;
-        self.require_current()?;
+        let _header_state = self.require_current()?;
         self.authority.with_current(self.stamp, || {
             body.write_all(&staged)
                 .map_err(|error| TransportError::Io(error.to_string()))
@@ -3845,7 +4236,7 @@ fn connect_publication_guard<'a>(
     }
     let maintenance = coordination
         .maintenance
-        .try_read()
+        .read()
         .map_err(|_| canonical_authority_publication_error())?;
     if !publication_signal.load(Ordering::Acquire)
         || coordination.publication_epoch(&maintenance) != Some(maintenance_epoch)
@@ -3889,6 +4280,10 @@ impl BrowserRuntime {
             if cancellation.is_cancelled() {
                 return Err(ProxyBackendError::Cancelled);
             }
+            self.inner
+                .coordination
+                .reconcile_current_authority(self.inner.configuration.network)
+                .map_err(|_| ProxyBackendError::Internal)?;
             match self.inner.coordination.maintenance.try_read() {
                 Ok(guard) => {
                     let Some(epoch) = self.inner.coordination.publication_epoch(&guard) else {
@@ -3905,21 +4300,65 @@ impl BrowserRuntime {
                         }
                         continue;
                     };
-                    let recorded_identity = header_state_lock
-                        .ready_identity()
-                        .map_err(|_| ProxyBackendError::Internal)?;
-                    let storage_identity = read_header_sync_storage_identity(
+                    let peer_state = match self.inner.coordination.peer_state.try_lock() {
+                        Ok(peer_state) => peer_state,
+                        Err(TryLockError::Poisoned(_)) => {
+                            return Err(ProxyBackendError::Internal);
+                        }
+                        Err(TryLockError::WouldBlock) => {
+                            drop(header_state_lock);
+                            drop(guard);
+                            if cancellation.wait_cancelled_timeout(PROXY_MAINTENANCE_POLL_INTERVAL)
+                            {
+                                return Err(ProxyBackendError::Cancelled);
+                            }
+                            continue;
+                        }
+                    };
+                    let Some(process_peer_state) = HeaderStateFileLock::try_shared(
+                        &self
+                            .inner
+                            .coordination
+                            .header_state_base
+                            .join(".peer-state.lock"),
+                    )
+                    .map_err(|_| ProxyBackendError::Internal)?
+                    else {
+                        drop(peer_state);
+                        drop(header_state_lock);
+                        drop(guard);
+                        if cancellation.wait_cancelled_timeout(PROXY_MAINTENANCE_POLL_INTERVAL) {
+                            return Err(ProxyBackendError::Cancelled);
+                        }
+                        continue;
+                    };
+                    let observed = observe_ready_header_state(
                         &self.inner.coordination.header_state_base,
+                        self.inner.configuration.network,
+                        &mut header_state_lock,
                     )
                     .map_err(|_| ProxyBackendError::Internal)?;
-                    if storage_identity != recorded_identity {
+                    let Some(name_tree_authority) = observed.name_tree_authority else {
                         return Err(ProxyBackendError::Internal);
+                    };
+                    if !self
+                        .inner
+                        .coordination
+                        .remembered_authority_matches(name_tree_authority)
+                        .map_err(|_| ProxyBackendError::Internal)?
+                    {
+                        drop(header_state_lock);
+                        drop(guard);
+                        continue;
                     }
                     return Ok(ProxyMaintenanceGuard {
                         _guard: guard,
                         _header_state_lock: header_state_lock,
+                        _peer_state: peer_state,
+                        _process_peer_state: process_peer_state,
                         epoch,
-                        storage_identity,
+                        storage_identity: observed.storage_identity,
+                        name_tree_authority,
                     });
                 }
                 Err(TryLockError::Poisoned(_)) => return Err(ProxyBackendError::Internal),
@@ -3993,10 +4432,11 @@ impl BrowserRuntime {
                 self.inner.transport.clone(),
                 Arc::clone(&self.inner.canonical_authority),
                 authority_stamp,
-                HeaderStateLease {
-                    coordination: Arc::clone(&self.inner.coordination),
-                    identity: storage_identity,
-                },
+                HeaderStateLease::new(
+                    Arc::clone(&self.inner.coordination),
+                    storage_identity,
+                    authority_stamp.name_tree_authority,
+                ),
             ),
         )
         .map_err(|error| RuntimeError::Operation(format!("create gateway: {error}")))?;
@@ -4023,13 +4463,14 @@ impl ProxyBackend for RuntimeProxyBackend {
         let maintenance = self.runtime.acquire_proxy_maintenance(cancellation)?;
         let maintenance_epoch = maintenance.epoch();
         let storage_identity = maintenance.storage_identity();
+        let name_tree_authority = maintenance.name_tree_authority();
         let authority_stamp = self
             .runtime
             .inner
             .canonical_authority
             .admit(self.authority_generation)
             .map_err(runtime_error_to_proxy_backend)?
-            .with_storage_identity(storage_identity);
+            .with_header_state(storage_identity, name_tree_authority);
         drop(maintenance);
         let request = gateway_request_from_proxy(request);
         require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
@@ -4136,13 +4577,14 @@ impl ProxyBackend for RuntimeProxyBackend {
         let maintenance = self.runtime.acquire_proxy_maintenance(cancellation)?;
         let maintenance_epoch = maintenance.epoch();
         let storage_identity = maintenance.storage_identity();
+        let name_tree_authority = maintenance.name_tree_authority();
         let authority_stamp = self
             .runtime
             .inner
             .canonical_authority
             .admit(self.authority_generation)
             .map_err(runtime_error_to_proxy_backend)?
-            .with_storage_identity(storage_identity);
+            .with_header_state(storage_identity, name_tree_authority);
         drop(maintenance);
         let request = gateway_request_from_proxy(request);
         require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
@@ -4227,13 +4669,14 @@ impl ProxyBackend for RuntimeProxyBackend {
         let maintenance = self.runtime.acquire_proxy_maintenance(cancellation)?;
         let maintenance_epoch = maintenance.epoch();
         let storage_identity = maintenance.storage_identity();
+        let name_tree_authority = maintenance.name_tree_authority();
         let authority_stamp = self
             .runtime
             .inner
             .canonical_authority
             .admit(self.authority_generation)
             .map_err(runtime_error_to_proxy_backend)?
-            .with_storage_identity(storage_identity);
+            .with_header_state(storage_identity, name_tree_authority);
         drop(maintenance);
         let request = gateway_request_from_proxy(request);
         require_current_proxy_work(&self.runtime, authority_stamp, cancellation)?;
@@ -4346,14 +4789,20 @@ fn require_current_proxy_work(
     if cancellation.is_cancelled() {
         return Err(ProxyBackendError::Cancelled);
     }
-    if let Some(identity) = stamp.storage_identity {
-        HeaderStateLease {
-            coordination: Arc::clone(&runtime.inner.coordination),
+    let header_state = if let Some(identity) = stamp.storage_identity {
+        Some(HeaderStateLease::new(
+            Arc::clone(&runtime.inner.coordination),
             identity,
-        }
-        .acquire()
+            stamp.name_tree_authority,
+        ))
+    } else {
+        None
+    };
+    let _header_state_guard = header_state
+        .as_ref()
+        .map(HeaderStateLease::acquire)
+        .transpose()
         .map_err(|_| ProxyBackendError::Cancelled)?;
-    }
     if runtime.inner.canonical_authority.admits(stamp) {
         Ok(())
     } else {
@@ -12696,75 +13145,29 @@ fn target_evidence_deadline_advanced(before: Option<u64>, after: Option<u64>) ->
     }
 }
 
-fn staged_headers_match_baseline(
+fn merged_header_sync_peer_views(
+    live_base: &Path,
+    staged_base: &Path,
     staged: &PreparedHeaderSyncStage,
     network: NetworkKind,
-) -> Result<bool, String> {
-    if staged.baseline_storage_identity.header_generation
-        != staged.baseline_storage_identity.peer_generation
-    {
-        return Ok(false);
-    }
-    let staged_base = staged.network_base(network)?;
-    let staged_header_store = SqliteHeaderStore::open(staged_base.join("headers.sqlite"))
-        .map_err(|error| format!("open completed staged header store: {error}"))?;
-    let staged_generation = staged_header_store
-        .sync_generation()
-        .map_err(|error| format!("read completed staged header generation: {error}"))?;
-    Ok(
-        staged_generation == staged.baseline_storage_identity.header_generation
-            && staged_header_store.best_hash() == staged.baseline_storage_identity.best_hash,
-    )
-}
-
-fn publish_peer_only_sync_stage(
-    data_dir: &str,
-    staged: &PreparedHeaderSyncStage,
-    network: NetworkKind,
-    staged_status: NativeSyncStatus,
-) -> Result<NativeSyncStatus, String> {
-    let live_base = network_base_path(data_dir, network);
-    let live_identity = read_header_sync_storage_identity(&live_base)?;
-    if live_identity != staged.baseline_storage_identity {
-        return Err("header sync stage was superseded before peer-only publication".to_owned());
-    }
-    if !staged_headers_match_baseline(staged, network)? {
-        return Err(
-            "peer-only publication requires an unchanged, generation-matched header stage"
-                .to_owned(),
-        );
-    }
-
-    let staged_base = staged.network_base(network)?;
+) -> Result<(hns_p2p::PeerManager, hns_p2p::PeerManager), String> {
     let staged_peer_store = SqlitePeerStore::open(staged_base.join("peers.sqlite"))
         .map_err(|error| format!("open completed staged peer store: {error}"))?;
     let staged_peers = staged_peer_store
         .load_manager()
         .map_err(|error| format!("load completed staged peer store: {error}"))?;
     let live_peer_store = SqlitePeerStore::open(live_base.join("peers.sqlite"))
-        .map_err(|error| format!("open live peer store for peer refresh: {error}"))?;
+        .map_err(|error| format!("open live peer store for publication planning: {error}"))?;
     let live_peers = live_peer_store
         .load_manager()
-        .map_err(|error| format!("load live peer store for peer refresh: {error}"))?;
+        .map_err(|error| format!("load live peer store for publication planning: {error}"))?;
     let merged_peers = merge_staged_peer_manager(
         &staged.baseline_peers,
         &staged_peers,
         &live_peers,
         &network.network(),
     );
-    live_peer_store
-        .replace_manager_with_sync_generation(
-            &merged_peers,
-            staged.baseline_storage_identity.header_generation,
-        )
-        .map_err(|error| format!("publish refreshed peer evidence: {error}"))?;
-
-    let published_status = read_sync_status(data_dir, network)?;
-    Ok(apply_staged_sync_outcome(
-        published_status,
-        staged_status,
-        0,
-    ))
+    Ok((live_peers, merged_peers))
 }
 
 fn publish_header_sync_stage(
@@ -12773,27 +13176,13 @@ fn publish_header_sync_stage(
     network: NetworkKind,
     resource_cache_limit_bytes: usize,
     staged_status: NativeSyncStatus,
+    merged_peers: &hns_p2p::PeerManager,
 ) -> Result<NativeSyncStatus, String> {
     let live_base = network_base_path(data_dir, network);
     let staged_base = staged.network_base(network)?;
     let staged_header_path = staged_base.join("headers.sqlite");
-    let staged_peer_store = SqlitePeerStore::open(staged_base.join("peers.sqlite"))
-        .map_err(|error| format!("open completed staged peer store: {error}"))?;
-    let staged_peers = staged_peer_store
-        .load_manager()
-        .map_err(|error| format!("load completed staged peer store: {error}"))?;
-
     let live_peer_store = SqlitePeerStore::open(live_base.join("peers.sqlite"))
         .map_err(|error| format!("open live peer store for publication: {error}"))?;
-    let live_peers = live_peer_store
-        .load_manager()
-        .map_err(|error| format!("load live peer store for publication: {error}"))?;
-    let merged_peers = merge_staged_peer_manager(
-        &staged.baseline_peers,
-        &staged_peers,
-        &live_peers,
-        &network.network(),
-    );
 
     let mut live_header_store = SqliteHeaderStore::open(live_base.join("headers.sqlite"))
         .map_err(|error| format!("open live header store for publication: {error}"))?;
@@ -12849,7 +13238,7 @@ fn publish_header_sync_stage(
         return Err("header sync stage was superseded during conditional publication".to_owned());
     }
     live_peer_store
-        .replace_manager_with_sync_generation(&merged_peers, next_generation)
+        .replace_manager_with_sync_generation(merged_peers, next_generation)
         .map_err(|error| format!("publish staged peer store: {error}"))?;
 
     let live_chain = chain_for_network(live_header_store, network);
@@ -13185,8 +13574,11 @@ fn assess_peer_target(
     let mut by_group = HashMap::<PeerAddressGroup, (u64, u32)>::new();
     let mut evidence_expired = false;
     for peer in peers.iter().filter(|peer| {
-        !peer.is_banned(now)
-            && peer.successes > 0
+        // The corroborated height and its observation time are owned by a
+        // coordinated header-sync generation. Operational proof/relay
+        // failures may update a peer's ban state between syncs, but cannot
+        // rewrite that bounded prior height observation or its tree root.
+        peer.successes > 0
             && peer.last_height.0 > 0
             && is_allowed_peer_endpoint(network, peer.address)
     }) {
@@ -13579,6 +13971,59 @@ fn authoritative_tree_root_header(
     chain_for_network(store, network)
         .canonical_header(Height(required_height))
         .ok_or(ResolverError::LocalChainNotCurrent)
+}
+
+fn authoritative_name_tree_identity(
+    base: &Path,
+    network: NetworkKind,
+) -> Result<NameTreeAuthorityIdentity, ResolverError> {
+    let header = authoritative_tree_root_header(base, network)?;
+    Ok(NameTreeAuthorityIdentity {
+        network,
+        anchor: ResourceValueAnchor {
+            tree_root: header.header.tree_root,
+            height: header.height,
+        },
+    })
+}
+
+fn authoritative_name_tree_identity_with_peers(
+    base: &Path,
+    network: NetworkKind,
+    peers: &hns_p2p::PeerManager,
+    now: u64,
+) -> Result<NameTreeAuthorityIdentity, ResolverError> {
+    let store = SqliteHeaderStore::open(base.join("headers.sqlite"))
+        .map_err(|error| ResolverError::Storage(format!("open header store: {error}")))?;
+    let chain = chain_for_network(store, network);
+    let best_height = chain
+        .best_header()
+        .map_err(|error| ResolverError::Storage(format!("read best header: {error}")))?
+        .map(|header| header.height.0);
+    let target_height = assess_peer_target(peers, &network.network(), now).height;
+    let currentness = LocalChainCurrentness::new(
+        network,
+        best_height,
+        target_height,
+        estimated_tip_height_for_network(network, now),
+    );
+    if currentness.tree_root_ready != Some(true) {
+        return Err(ResolverError::LocalChainNotCurrent);
+    }
+    let required_height = currentness
+        .authoritative_tree_root_height
+        .or(currentness.local_tree_root_height)
+        .ok_or(ResolverError::LocalChainNotCurrent)?;
+    let header = chain
+        .canonical_header(Height(required_height))
+        .ok_or(ResolverError::LocalChainNotCurrent)?;
+    Ok(NameTreeAuthorityIdentity {
+        network,
+        anchor: ResourceValueAnchor {
+            tree_root: header.header.tree_root,
+            height: header.height,
+        },
+    })
 }
 
 fn hns_anchor_matches_authoritative_tree_root(
@@ -14134,11 +14579,21 @@ mod tests {
     use std::net::{Shutdown, TcpListener, TcpStream};
     use std::thread;
 
+    fn test_header_state_lease_for_network(
+        coordination: &Arc<RuntimeCoordination>,
+        network: NetworkKind,
+    ) -> HeaderStateLease {
+        let name_tree_authority =
+            authoritative_name_tree_identity(&coordination.header_state_base, network).unwrap();
+        HeaderStateLease::new(
+            Arc::clone(coordination),
+            read_header_sync_storage_identity(&coordination.header_state_base).unwrap(),
+            Some(name_tree_authority),
+        )
+    }
+
     fn test_header_state_lease(coordination: &Arc<RuntimeCoordination>) -> HeaderStateLease {
-        HeaderStateLease {
-            coordination: Arc::clone(coordination),
-            identity: read_header_sync_storage_identity(&coordination.header_state_base).unwrap(),
-        }
+        test_header_state_lease_for_network(coordination, NetworkKind::Mainnet)
     }
 
     struct FailingCanonicalTransportReadinessProbe;
@@ -14531,11 +14986,19 @@ mod tests {
 
         let base = data_dir.join("hns-regtest");
         SqliteResourceValueProvider::open(base.join("resources.sqlite")).unwrap();
+        let mut publication =
+            HeaderStateFileLock::exclusive(&runtime.inner.coordination.header_state_lock_path)
+                .unwrap();
+        publication.mark_updating().unwrap();
         store_best_header_for_network_with_tree_root(
             &base,
             NetworkKind::Regtest,
             Hash::new([45; 32]),
         );
+        publication
+            .mark_ready(read_header_sync_storage_identity(&base).unwrap())
+            .unwrap();
+        drop(publication);
         let stamp = authority.admit(proxy.generation()).unwrap();
         assert_eq!(
             authority.runtime.lock().unwrap().authority_state(),
@@ -14588,6 +15051,7 @@ mod tests {
         );
         SqliteResourceValueProvider::open(base.join("resources.sqlite")).unwrap();
         store_peer_height(&base, anchor_height.0);
+        let _coordination = runtime_coordination(&base, NetworkKind::Mainnet).unwrap();
         let proxy_session = ProxySessionId::generate().unwrap();
         let session = CanonicalRuntimeSessionId::new(*proxy_session.as_bytes()).unwrap();
         let policy = canonical_policy_snapshot(&RuntimePolicy::compatibility(), 1).unwrap();
@@ -14920,7 +15384,7 @@ mod tests {
     }
 
     #[test]
-    fn active_header_maintenance_never_blocks_connect_io_guards() {
+    fn connect_io_waits_for_header_maintenance_and_resumes_at_same_epoch() {
         use std::sync::atomic::AtomicUsize;
 
         struct ProbeReader(Arc<AtomicUsize>);
@@ -14959,31 +15423,42 @@ mod tests {
             maintenance_epoch: epoch,
             publication_signal: Arc::clone(&signal),
         };
+        let maintenance = runtime.inner.coordination.maintenance.write().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        let blocked_read = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            completed_tx.send(reader.read(&mut [0_u8; 1])).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            completed_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "same-root work must wait for header publication"
+        );
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+
+        drop(maintenance);
+        assert_eq!(
+            completed_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        blocked_read.join().unwrap();
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+
         let mut writer = MaintenanceBoundConnectWriter {
             inner: Box::new(ProbeWriter(Arc::clone(&calls))),
             coordination: Arc::clone(&runtime.inner.coordination),
             maintenance_epoch: epoch,
             publication_signal: signal,
         };
-        let maintenance = runtime.inner.coordination.maintenance.write().unwrap();
-        let started = Instant::now();
-
-        assert_eq!(
-            reader.read(&mut [0_u8; 1]).unwrap_err().kind(),
-            ErrorKind::ConnectionAborted
-        );
-        assert_eq!(
-            writer.write(b"blocked").unwrap_err().kind(),
-            ErrorKind::ConnectionAborted
-        );
-        assert_eq!(
-            writer.flush().unwrap_err().kind(),
-            ErrorKind::ConnectionAborted
-        );
-        assert!(started.elapsed() < Duration::from_millis(50));
-        assert_eq!(calls.load(Ordering::Acquire), 0);
-
-        drop(maintenance);
+        assert_eq!(writer.write(b"resumed").unwrap(), 7);
+        writer.flush().unwrap();
+        assert_eq!(calls.load(Ordering::Acquire), 3);
         cleanup_dir(&data_dir);
     }
 
@@ -15178,18 +15653,26 @@ mod tests {
         let (data_dir, runtime, _anchor_height) =
             runtime_with_current_mainnet_authority("canonical-publication-lock");
         let proxy = runtime.start_proxy("welcome").unwrap();
+        let storage_identity = test_header_state_lease(&runtime.inner.coordination)
+            .identity()
+            .unwrap();
+        let name_tree_authority = authoritative_name_tree_identity(
+            &runtime.inner.coordination.header_state_base,
+            NetworkKind::Mainnet,
+        )
+        .unwrap();
         let stamp = runtime
             .inner
             .canonical_authority
             .admit(proxy.generation())
-            .unwrap();
+            .unwrap()
+            .with_header_state(storage_identity, name_tree_authority);
         let maintenance = runtime.inner.coordination.maintenance.read().unwrap();
         let maintenance_epoch = runtime
             .inner
             .coordination
             .publication_epoch(&maintenance)
             .unwrap();
-        let storage_identity = test_header_state_lease(&runtime.inner.coordination).identity;
         let permit = canonical_proxy_publication_permit(
             &runtime.inner.canonical_authority,
             &runtime.inner.coordination,
@@ -15333,7 +15816,10 @@ mod tests {
         .unwrap();
 
         let initial_epoch = runtime.security_maintenance_epoch();
-        let initial_identity = test_header_state_lease(&runtime.inner.coordination).identity;
+        let initial_identity =
+            test_header_state_lease_for_network(&runtime.inner.coordination, NetworkKind::Regtest)
+                .identity()
+                .unwrap();
         let status = runtime.sync_once().unwrap();
         let base = data_dir.join("hns-regtest");
         let header_store = SqliteHeaderStore::open(base.join("headers.sqlite")).unwrap();
@@ -15344,7 +15830,9 @@ mod tests {
         assert_eq!(peer_store.sync_generation().unwrap(), 1);
         assert_ne!(runtime.security_maintenance_epoch(), initial_epoch);
         assert_ne!(
-            test_header_state_lease(&runtime.inner.coordination).identity,
+            test_header_state_lease_for_network(&runtime.inner.coordination, NetworkKind::Regtest,)
+                .identity()
+                .unwrap(),
             initial_identity
         );
         assert!(
@@ -15411,7 +15899,7 @@ mod tests {
         assert!(
             readiness_error
                 .to_string()
-                .contains("sync generations do not match")
+                .contains("header publication state")
         );
 
         runtime.sync_once().unwrap();
@@ -15419,7 +15907,10 @@ mod tests {
         let repaired_peer_store = SqlitePeerStore::open(base.join("peers.sqlite")).unwrap();
         assert_eq!(repaired_header_store.sync_generation().unwrap(), 3);
         assert_eq!(repaired_peer_store.sync_generation().unwrap(), 3);
-        let repaired_identity = test_header_state_lease(&runtime.inner.coordination).identity;
+        let repaired_identity =
+            test_header_state_lease_for_network(&runtime.inner.coordination, NetworkKind::Regtest)
+                .identity()
+                .unwrap();
         assert_eq!(repaired_identity.header_generation, 3);
         assert_eq!(repaired_identity.peer_generation, 3);
         cleanup_dir(&data_dir);
@@ -15481,11 +15972,18 @@ mod tests {
     }
 
     #[test]
-    fn peer_only_sync_does_not_interrupt_response_or_tunnel_head_publication() {
+    fn same_root_sync_waits_for_publication_and_preserves_existing_permits() {
         let exercise_race = |label: &str, boundary: &str, namespace_publication: bool| {
             let (data_dir, runtime, _anchor_height) = runtime_with_current_mainnet_authority(label);
             let initial_epoch = runtime.security_maintenance_epoch();
-            let initial_identity = test_header_state_lease(&runtime.inner.coordination).identity;
+            let initial_identity = test_header_state_lease(&runtime.inner.coordination)
+                .identity()
+                .unwrap();
+            let initial_authority = authoritative_name_tree_identity(
+                &runtime.inner.coordination.header_state_base,
+                NetworkKind::Mainnet,
+            )
+            .unwrap();
             let sync_runtime = BrowserRuntime::open(
                 RuntimeConfiguration::new(&data_dir, NetworkKind::Mainnet).with_sync_options(
                     SyncOptions {
@@ -15496,14 +15994,21 @@ mod tests {
                 ),
             )
             .unwrap();
-            let stamp = runtime.inner.canonical_authority.admit_direct().unwrap();
+            let stamp = runtime
+                .inner
+                .canonical_authority
+                .admit_direct()
+                .unwrap()
+                .with_header_state(initial_identity, initial_authority);
             let maintenance = runtime.inner.coordination.maintenance.read().unwrap();
             let epoch = runtime
                 .inner
                 .coordination
                 .publication_epoch(&maintenance)
                 .unwrap();
-            let storage_identity = test_header_state_lease(&runtime.inner.coordination).identity;
+            let storage_identity = test_header_state_lease(&runtime.inner.coordination)
+                .identity()
+                .unwrap();
             let permit = if namespace_publication {
                 canonical_proxy_publication_permit_with_namespace(
                     &runtime.inner.canonical_authority,
@@ -15542,20 +16047,33 @@ mod tests {
                 sent.send(sync_runtime.sync_once()).unwrap();
             });
             assert!(
-                received
-                    .recv_timeout(Duration::from_secs(2))
-                    .unwrap()
-                    .is_ok(),
-                "peer-only sync did not finish alongside {boundary} publication"
+                received.recv_timeout(Duration::from_millis(50)).is_err(),
+                "same-root sync must wait for {boundary} publication"
             );
 
             release_tx.send(()).unwrap();
             publisher.join().unwrap().unwrap();
+            assert!(
+                received
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .is_ok(),
+                "same-root sync did not resume after {boundary} publication"
+            );
             sync.join().unwrap();
             assert_eq!(runtime.security_maintenance_epoch(), initial_epoch);
+            let published_identity = test_header_state_lease(&runtime.inner.coordination)
+                .identity()
+                .unwrap();
+            assert_ne!(published_identity, initial_identity);
+            assert_eq!(published_identity.best_hash, initial_identity.best_hash);
             assert_eq!(
-                test_header_state_lease(&runtime.inner.coordination).identity,
-                initial_identity
+                authoritative_name_tree_identity(
+                    &runtime.inner.coordination.header_state_base,
+                    NetworkKind::Mainnet,
+                )
+                .unwrap(),
+                initial_authority
             );
 
             let mut current_operation_called = false;
@@ -15566,7 +16084,7 @@ mod tests {
                         Ok(())
                     })
                     .is_ok(),
-                "peer-only sync invalidated a current {boundary} permit"
+                "same-root sync invalidated a current {boundary} permit"
             );
             assert!(current_operation_called);
             cleanup_dir(&data_dir);
@@ -15610,7 +16128,9 @@ mod tests {
         .unwrap();
         let status = repair_runtime.sync_once().unwrap();
         assert_eq!(status.freshness, "current");
-        let repaired = test_header_state_lease(&repair_runtime.inner.coordination).identity;
+        let repaired = test_header_state_lease(&repair_runtime.inner.coordination)
+            .identity()
+            .unwrap();
         assert_eq!(repaired.header_generation, baseline.header_generation + 1);
         assert_eq!(repaired.header_generation, repaired.peer_generation);
         assert_eq!(repaired.best_hash, baseline.best_hash);
@@ -15643,9 +16163,10 @@ mod tests {
         let runtime =
             BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
                 .unwrap();
-        let lease = test_header_state_lease(&runtime.inner.coordination);
+        let lease =
+            test_header_state_lease_for_network(&runtime.inner.coordination, NetworkKind::Regtest);
         assert!(
-            lease.identity.best_hash.is_some(),
+            lease.identity().unwrap().best_hash.is_some(),
             "the token must be initialized after the genesis header exists"
         );
         assert!(lease.acquire().is_ok());
@@ -15674,9 +16195,185 @@ mod tests {
         let mut repair =
             HeaderStateFileLock::exclusive(&runtime.inner.coordination.header_state_lock_path)
                 .unwrap();
-        repair.mark_ready(lease.identity).unwrap();
+        repair.mark_ready(lease.identity().unwrap()).unwrap();
         drop(repair);
         assert!(lease.acquire().is_ok());
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn retained_name_tree_lease_accepts_same_root_generation_and_rejects_new_root() {
+        let (data_dir, runtime, _anchor_height) =
+            runtime_with_current_mainnet_authority("retained-name-tree-lease");
+        let base = runtime.inner.coordination.header_state_base.clone();
+        let initial_identity = read_header_sync_storage_identity(&base).unwrap();
+        let name_tree_authority =
+            authoritative_name_tree_identity(&base, NetworkKind::Mainnet).unwrap();
+        let stamp = runtime
+            .inner
+            .canonical_authority
+            .admit_direct()
+            .unwrap()
+            .with_header_state(initial_identity, name_tree_authority);
+        let lease = HeaderStateLease::new(
+            Arc::clone(&runtime.inner.coordination),
+            initial_identity,
+            Some(name_tree_authority),
+        );
+        drop(lease.acquire().unwrap());
+
+        let same_root_generation = initial_identity
+            .header_generation
+            .max(initial_identity.peer_generation)
+            + 1;
+        let mut publication =
+            HeaderStateFileLock::exclusive(&runtime.inner.coordination.header_state_lock_path)
+                .unwrap();
+        let same_root_identity = publish_test_header_generation(
+            &base,
+            NetworkKind::Mainnet,
+            &[Hash::new([44; 32]), Hash::new([46; 32])],
+            same_root_generation,
+            &mut publication,
+        );
+        drop(publication);
+
+        assert_ne!(same_root_identity.best_hash, initial_identity.best_hash);
+        assert_eq!(
+            authoritative_name_tree_identity(&base, NetworkKind::Mainnet).unwrap(),
+            name_tree_authority
+        );
+        drop(lease.acquire().unwrap());
+        assert_eq!(lease.identity().unwrap(), same_root_identity);
+        assert!(runtime.inner.canonical_authority.admits(stamp));
+
+        let changed_root_generation = same_root_generation + 1;
+        let mut publication =
+            HeaderStateFileLock::exclusive(&runtime.inner.coordination.header_state_lock_path)
+                .unwrap();
+        let mut roots = vec![Hash::new([44; 32]); 37];
+        roots[36] = Hash::new([45; 32]);
+        publish_test_header_generation(
+            &base,
+            NetworkKind::Mainnet,
+            &roots,
+            changed_root_generation,
+            &mut publication,
+        );
+        drop(publication);
+
+        assert_eq!(
+            lease.acquire().err().unwrap().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert!(!runtime.inner.canonical_authority.admits(stamp));
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn external_root_publication_reconciles_epoch_once_and_same_root_does_not() {
+        let (data_dir, runtime, _anchor_height) =
+            runtime_with_current_mainnet_authority("external-root-epoch-reconciliation");
+        let base = runtime.inner.coordination.header_state_base.clone();
+        let initial_epoch = runtime.security_maintenance_epoch().unwrap();
+        let initial_identity = read_header_sync_storage_identity(&base).unwrap();
+        let initial_authority =
+            authoritative_name_tree_identity(&base, NetworkKind::Mainnet).unwrap();
+        let initial_stamp = runtime
+            .inner
+            .canonical_authority
+            .admit_direct()
+            .unwrap()
+            .with_header_state(initial_identity, initial_authority);
+
+        let same_root_generation = initial_identity
+            .header_generation
+            .max(initial_identity.peer_generation)
+            + 1;
+        let mut publication =
+            HeaderStateFileLock::exclusive(&runtime.inner.coordination.header_state_lock_path)
+                .unwrap();
+        let same_root_identity = publish_test_header_generation(
+            &base,
+            NetworkKind::Mainnet,
+            &[Hash::new([44; 32]), Hash::new([46; 32])],
+            same_root_generation,
+            &mut publication,
+        );
+        drop(publication);
+        assert_ne!(same_root_identity.best_hash, initial_identity.best_hash);
+        let (same_root_status, same_root_epoch) =
+            runtime.sync_status_with_security_epoch().unwrap();
+        assert_eq!(same_root_status.best_height, Some(2));
+        assert_eq!(same_root_epoch, Some(initial_epoch));
+        assert_eq!(runtime.security_maintenance_epoch(), Some(initial_epoch));
+        assert!(runtime.inner.canonical_authority.admits(initial_stamp));
+
+        let changed_root_generation = same_root_generation + 1;
+        let mut changed_roots = vec![Hash::new([44; 32]); 37];
+        changed_roots[36] = Hash::new([45; 32]);
+        let mut publication =
+            HeaderStateFileLock::exclusive(&runtime.inner.coordination.header_state_lock_path)
+                .unwrap();
+        publish_test_header_generation(
+            &base,
+            NetworkKind::Mainnet,
+            &changed_roots,
+            changed_root_generation,
+            &mut publication,
+        );
+        drop(publication);
+        assert_eq!(runtime.security_maintenance_epoch(), Some(initial_epoch));
+
+        let maintenance = runtime
+            .acquire_proxy_maintenance(&ProxyCancellationToken::new())
+            .unwrap();
+        assert_eq!(maintenance.epoch().0, initial_epoch + 1);
+        drop(maintenance);
+        let (_, changed_epoch) = runtime.sync_status_with_security_epoch().unwrap();
+        assert_eq!(changed_epoch, Some(initial_epoch + 1));
+        assert_eq!(
+            runtime.sync_status_with_security_epoch().unwrap().1,
+            Some(initial_epoch + 1)
+        );
+        assert!(!runtime.inner.canonical_authority.admits(initial_stamp));
+
+        let locally_changed_generation = changed_root_generation + 1;
+        let mut locally_changed_roots = changed_roots;
+        locally_changed_roots[36] = Hash::new([47; 32]);
+        let maintenance = runtime.inner.coordination.maintenance.write().unwrap();
+        let mut publication =
+            HeaderStateFileLock::exclusive(&runtime.inner.coordination.header_state_lock_path)
+                .unwrap();
+        runtime
+            .inner
+            .coordination
+            .begin_maintenance(&maintenance)
+            .unwrap();
+        publish_test_header_generation(
+            &base,
+            NetworkKind::Mainnet,
+            &locally_changed_roots,
+            locally_changed_generation,
+            &mut publication,
+        );
+        let locally_changed_authority =
+            authoritative_name_tree_identity(&base, NetworkKind::Mainnet).ok();
+        runtime
+            .inner
+            .coordination
+            .reconcile_observed_authority(&maintenance, locally_changed_authority)
+            .unwrap();
+        drop(publication);
+        drop(maintenance);
+        assert_eq!(
+            runtime.security_maintenance_epoch(),
+            Some(initial_epoch + 2)
+        );
+        assert_eq!(
+            runtime.sync_status_with_security_epoch().unwrap().1,
+            Some(initial_epoch + 2)
+        );
         cleanup_dir(&data_dir);
     }
 
@@ -15801,7 +16498,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_runtime_status_remains_available_while_peer_state_is_busy() {
+    fn browser_runtime_status_waits_for_atomic_peer_state_snapshot() {
         let data_dir = temp_dir_path("browser-runtime-concurrent-status");
         let runtime =
             BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
@@ -15813,11 +16510,15 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         let call = thread::spawn(move || sender.send(call_runtime.sync_status()).unwrap());
 
-        let status = receiver.recv_timeout(Duration::from_secs(2));
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
         drop(peer_state_guard);
+        let status = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
         call.join().unwrap();
 
-        assert!(status.unwrap().is_ok());
+        assert!(status.is_ok());
         cleanup_dir(&data_dir);
     }
 
@@ -16760,7 +17461,9 @@ mod tests {
             .coordination
             .publication_epoch(&maintenance)
             .unwrap();
-        let storage_identity = test_header_state_lease(&runtime.inner.coordination).identity;
+        let storage_identity = test_header_state_lease(&runtime.inner.coordination)
+            .identity()
+            .unwrap();
         let response = proxy_error_response_from_gateway(
             &runtime,
             stamp,
@@ -16831,7 +17534,9 @@ mod tests {
             .coordination
             .publication_epoch(&maintenance)
             .unwrap();
-        let storage_identity = test_header_state_lease(&runtime.inner.coordination).identity;
+        let storage_identity = test_header_state_lease(&runtime.inner.coordination)
+            .identity()
+            .unwrap();
         let response = proxy_error_response_from_gateway(
             &runtime,
             stamp,
@@ -17649,12 +18354,17 @@ mod tests {
     }
 
     #[test]
-    fn peer_target_requires_recent_diverse_median_and_ignores_one_high_outlier() {
+    fn peer_target_requires_recent_diverse_median_and_retains_banned_sync_evidence() {
         let now = 10_000;
         let mut peers = PeerManager::default();
         peers.record_success("1.1.1.1:12038".parse().unwrap(), Height(100), now - 10);
         peers.record_success("8.8.8.8:12038".parse().unwrap(), Height(101), now - 9);
-        peers.record_success("9.9.9.9:12038".parse().unwrap(), Height(u32::MAX), now - 8);
+        let high_outlier = "9.9.9.9:12038".parse().unwrap();
+        peers.record_success(high_outlier, Height(u32::MAX), now - 8);
+        for _ in 0..32 {
+            peers.record_transient_failure(high_outlier);
+        }
+        assert!(peers.get(high_outlier).unwrap().is_banned(now));
 
         let target = assess_peer_target(&peers, &hns_core::network::mainnet(), now);
 
@@ -24364,6 +25074,30 @@ mod tests {
             peers.record_success(address, Height(height), now_unix_seconds());
         }
         peer_store.save_manager(&peers).unwrap();
+    }
+
+    fn publish_test_header_generation(
+        base: &Path,
+        network: NetworkKind,
+        tree_roots: &[Hash],
+        generation: u64,
+        publication: &mut HeaderStateFileLock,
+    ) -> HeaderSyncStorageIdentity {
+        publication.mark_updating().unwrap();
+        let heights =
+            store_canonical_headers_for_network_with_tree_roots(base, network, tree_roots);
+        store_peer_height(base, heights.last().unwrap().0);
+        let mut headers = SqliteHeaderStore::open(base.join("headers.sqlite")).unwrap();
+        headers.set_sync_generation(generation).unwrap();
+        headers.flush().unwrap();
+        let peers = SqlitePeerStore::open(base.join("peers.sqlite")).unwrap();
+        let manager = peers.load_manager().unwrap();
+        peers
+            .replace_manager_with_sync_generation(&manager, generation)
+            .unwrap();
+        let identity = read_header_sync_storage_identity(base).unwrap();
+        publication.mark_ready(identity).unwrap();
+        identity
     }
 
     fn store_canonical_headers_with_tree_roots(

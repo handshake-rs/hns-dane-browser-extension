@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HNS DANE Browser — Waiting for secure proxy</title>
+    <link rel="stylesheet" href="proxy-wait.css">
+  </head>
+  <body>
+    <main>
+      <img src="../assets/icons/icon-128.png" width="64" height="64" alt="">
+      <h1>Waiting for the secure proxy</h1>
+      <p id="message">The browser will continue automatically when the local proxy and authoritative name-tree root are ready.</p>
+      <p id="target" class="target"></p>
+      <button id="retry" type="button" hidden>Retry now</button>
+    </main>
+    <script type="module" src="proxy-wait.js"></script>
+  </body>
+</html>
