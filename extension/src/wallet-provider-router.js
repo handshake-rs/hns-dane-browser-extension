@@ -166,7 +166,10 @@ export class WalletProviderRouter {
         },
         request: pageRequest
       });
-      return await this.extractEvents(rawResponse, operation);
+      return await this.extractEvents(rawResponse, operation, {
+        allowApprovalRoute: true,
+        resultMethod: pageRequest.method
+      });
     } finally {
       document.pending.delete(pageRequest.requestId);
     }
@@ -240,7 +243,8 @@ export class WalletProviderRouter {
         walletSession: capabilities.walletSession,
         permissionGeneration: capabilities.permissionGeneration
       }),
-      operation
+      operation,
+      resultMethod: context.request.method
     });
   }
 
@@ -248,7 +252,9 @@ export class WalletProviderRouter {
     if (!isRecord(dispatch) || !isRecord(dispatch.operation)) {
       throw protocolError("staleContext", "approval dispatch context is unavailable");
     }
-    return this.extractEvents(response, dispatch.operation);
+    return this.extractEvents(response, dispatch.operation, {
+      resultMethod: dispatch.resultMethod
+    });
   }
 
   async deliverNativeEvent(candidate) {
@@ -273,15 +279,9 @@ export class WalletProviderRouter {
     }
   }
 
-  async extractEvents(response, operation) {
+  async extractEvents(response, operation, options = {}) {
     await this.revalidateOperation(operation);
-    response = validateNativeResult(response);
-    if (isRecord(response) && Object.hasOwn(response, "events")) {
-      throw protocolError(
-        "invalidEvent",
-        "wallet events require the versioned native event channel"
-      );
-    }
+    response = validateNativeResult(response, options);
     return response;
   }
 

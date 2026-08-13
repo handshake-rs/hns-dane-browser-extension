@@ -79,7 +79,10 @@ export function validateApprovalPrompt(
   now = Date.now()
 ) {
   try {
-    validateNativeResult(candidate);
+    validateNativeResult(
+      { approvalRequired: candidate },
+      { allowApprovalRoute: true }
+    );
   } catch {
     throw invalidApproval();
   }

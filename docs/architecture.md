@@ -236,6 +236,14 @@ verified pool value reaches JavaScript. A future adapter must preserve the
 canonical chainwork/currency/name/network/resource guarantees and commit the complete
 state atomically before returning the minimized snapshot.
 
+The display-only popup already collects the expected exact lowercase HNS label
+separately from the public HTTP endpoint, validates the verifier core's label
+grammar, and derives the SHA3-256 Handshake name hash before any request. It
+does not infer an endpoint from the active tab. The selection remains local
+presentation state until a native request binds it to proof authority and the
+authenticated rollback-resistant verifier store; neither the endpoint nor its
+response can supply trusted identity.
+
 ## Setup and runtime separation
 
 Each released setup target embeds the native host and canonical height-300,000

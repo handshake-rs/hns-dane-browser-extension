@@ -82,6 +82,19 @@ extension retains that deadline across worker restarts and retries at most
 once per minute through two minutes after expiry. Opening the popup does not
 contact peers.
 
+## Display-only MeshMine pool statistics
+
+The optional popup panel requires two independent user inputs: the exact
+lowercase canonical HNS pool label and the operator's HTTP(S) endpoint. It
+validates and hashes the label before contacting the endpoint, never derives
+or probes an endpoint from the active tab, and stores the pair only after an
+explicit successful load. A failed load clears earlier displayed values.
+
+This is preparation for the native verifier boundary, not verification. The
+current browser path does not bind that name to proof-backed HNSA authority or
+an authenticated rollback-resistant state commit. The endpoint, its claimed
+identity, and every displayed value therefore remain explicitly unverified.
+
 ## Security-result boundary
 
 The native host owns synchronization, Handshake proof validation, delegated

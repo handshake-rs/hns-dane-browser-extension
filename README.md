@@ -130,8 +130,12 @@ chainwork and currency authority; there is no safe conversion or constructor.
 No authenticated rollback-resistant state store or native-message admission
 has been joined either. The native hello capability therefore reports verifier
 core schema 1 but `meshmineVerifiedPoolStats: false`, and the popup continues
-to label every feed unverified. The HTTP endpoint, operator response, and
-JavaScript parser advance none of the native state.
+to label every feed unverified. Before making a display-only request, the
+popup now requires the expected exact lowercase HNS label as input independent
+of the HTTP endpoint and derives its SHA3-256 name hash locally. It never
+infers or probes an endpoint from the active tab. This prepares a bounded
+future verifier input but does not authenticate the label: the HTTP endpoint,
+operator response, and JavaScript parser advance none of the native state.
 
 ## Optional wallet provider
 

@@ -117,8 +117,12 @@ existing cache type lacks the private chainwork/currency constructor required
 by `VerifiedHnsResource`, so treating it as equivalent would fabricate trust.
 The native protocol reports `meshmineVerifiedPoolStats: false`; the popup's
 bounded JavaScript decoder remains explicitly unverified and advances no
-native state. HNSR, private/admin feeds, wallet/value operations, provider
-roles, settlement, and marketplaces remain unavailable.
+native state. The popup requires an independently entered canonical HNS label,
+hashes it locally before contacting the separately entered endpoint, and never
+probes the active tab as a pool endpoint. This is identity-selection input,
+not proof: no displayed identity or value becomes verified until the native
+authority and store join exists. HNSR, private/admin feeds, wallet/value
+operations, provider roles, settlement, and marketplaces remain unavailable.
 
 Direct authoritative UDP/TCP 53 remains first when usable. A positive matching
 TEST-NET canary reply stops futile TCP and remaining direct-server attempts

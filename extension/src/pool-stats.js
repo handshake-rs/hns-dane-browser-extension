@@ -1,11 +1,18 @@
+import { hnsNameHash } from "./hns-name-hash.js";
+
 const MAX_RESPONSE_BYTES = 16 * 1024;
 const MAX_HNSA_HEX_LENGTH = 2 * 1024;
 const MAX_SNAPSHOT_HEX_LENGTH = 2 * 512;
 const REQUEST_TIMEOUT_MS = 5_000;
 const PROFILE_ID = 0xff00;
 const MODES = ["Bootstrapping", "Mining", "Degraded", "Fallback", "Draining", "Stopped"];
+const CANONICAL_HNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
-export async function fetchPoolStats(endpoint, fetchImpl = fetch) {
+export async function fetchPoolStats(endpoint, expectedName, fetchImpl = fetch) {
+  // Validate the independently selected identity before contacting an operator.
+  // The current JavaScript path remains display-only; this selection is the
+  // future native verifier input and is never inferred from the HTTP endpoint.
+  const expectedAuthority = expectedPoolAuthority(expectedName);
   const url = poolStatsUrl(endpoint);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -25,11 +32,24 @@ export async function fetchPoolStats(endpoint, fetchImpl = fetch) {
     const bytes = await readBoundedBody(response, MAX_RESPONSE_BYTES);
     return {
       endpoint: url.origin,
+      expectedAuthority,
       snapshot: parsePoolStatsDocument(JSON.parse(new TextDecoder().decode(bytes)))
     };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function expectedPoolAuthority(name) {
+  if (typeof name !== "string" || !CANONICAL_HNS_LABEL.test(name)) {
+    throw new Error(
+      "Enter the exact lowercase Handshake pool name (letters, numbers, and interior hyphens only)"
+    );
+  }
+  return Object.freeze({
+    name,
+    nameHash: hnsNameHash(name)
+  });
 }
 
 export function parsePoolStatsDocument(document) {

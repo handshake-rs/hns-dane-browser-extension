@@ -107,8 +107,26 @@ const MAX_STRING_LENGTH = 16 * 1024;
 const MAX_CONTAINER_ENTRIES = 128;
 const MAX_NESTING_DEPTH = 12;
 const SENSITIVE_RESULT_FIELDS = new Set([
+  "protocolversion",
+  "requestnonce",
+  "walletsession",
   "authorityhandle",
   "authorityrevision",
+  "hostsessionid",
+  "servicesessionid",
+  "runtimesessionid",
+  "browserruntimesessionid",
+  "browserauthoritysession",
+  "restartgeneration",
+  "channelsequence",
+  "eventsequence",
+  "runtimegeneration",
+  "policygeneration",
+  "navigationgeneration",
+  "decisionfingerprint",
+  "validuntilunixms",
+  "enginecontext",
+  "approvalrequired",
   "recoveryphrase",
   "mnemonic",
   "seed",
@@ -122,6 +140,23 @@ const SENSITIVE_RESULT_FIELDS = new Set([
   "providercapabilitysecret",
   "sessionauthorizationtoken"
 ]);
+const PRIVATE_RESULT_ROUTING_FIELDS = new Set([
+  "event",
+  "events",
+  "approvalrequired"
+]);
+const PRIVATE_APPROVAL_ROUTING_FIELDS = Object.freeze([
+  "approvalid",
+  "expiresatunixms",
+  "summary"
+]);
+const PERMISSION_GENERATION_RESULT_METHODS = new Set([
+  "wallet_getPermissions",
+  "wallet_revokePermissions",
+  "wallet_requestPermissions",
+  "hns_requestAccounts"
+]);
+const PERMISSION_GENERATION_EVENTS = new Set(["connect", "permissionsChanged"]);
 
 export class WalletProviderProtocolError extends Error {
   constructor(code, message) {
@@ -172,8 +207,31 @@ export function validatePageRequest(candidate) {
   });
 }
 
-export function validateNativeResult(candidate) {
-  validateBoundedJson(candidate, MAX_RESULT_BYTES, true);
+export function validateNativeResult(candidate, options = {}) {
+  const allowApprovalRoute = options?.allowApprovalRoute === true;
+  const allowPermissionGenerationAtRoot =
+    PERMISSION_GENERATION_RESULT_METHODS.has(options?.resultMethod);
+  const approvalRoute = isRecord(candidate) && Object.hasOwn(candidate, "approvalRequired");
+  if (approvalRoute) {
+    if (
+      !allowApprovalRoute ||
+      Object.keys(candidate).length !== 1 ||
+      !isRecord(candidate.approvalRequired)
+    ) {
+      throw protocolError(
+        "invalidResult",
+        "native wallet approval handoff is invalid"
+      );
+    }
+    validateBoundedJson(candidate, MAX_RESULT_BYTES);
+  } else {
+    validateBoundedJson(
+      candidate,
+      MAX_RESULT_BYTES,
+      true,
+      allowPermissionGenerationAtRoot
+    );
+  }
   return candidate;
 }
 
@@ -233,7 +291,20 @@ export function validateProviderEvent(candidate) {
   if (!EVENT_SET.has(candidate.event)) {
     throw protocolError("invalidEvent", "unsupported provider event");
   }
-  validateBoundedJson(candidate, MAX_MESSAGE_BYTES, true);
+  validateBoundedJson(candidate, MAX_MESSAGE_BYTES);
+  if (
+    Object.keys(candidate).some(
+      (field) => !["providerAbiVersion", "binding", "event", "payload"].includes(field)
+    )
+  ) {
+    throw protocolError("invalidResult", "native wallet event envelope is invalid");
+  }
+  validateBoundedJson(
+    candidate.payload ?? null,
+    MAX_MESSAGE_BYTES,
+    true,
+    PERMISSION_GENERATION_EVENTS.has(candidate.event)
+  );
   return Object.freeze({ event: candidate.event, payload: candidate.payload ?? null });
 }
 
@@ -275,8 +346,19 @@ function validateMethodParameters(method, params) {
   }
 }
 
-function validateBoundedJson(value, maximumBytes, rejectSensitiveFields = false) {
-  walkBoundedJson(value, 0, new Set(), rejectSensitiveFields);
+function validateBoundedJson(
+  value,
+  maximumBytes,
+  rejectSensitiveFields = false,
+  allowPermissionGenerationAtRoot = false
+) {
+  walkBoundedJson(
+    value,
+    0,
+    new Set(),
+    rejectSensitiveFields,
+    allowPermissionGenerationAtRoot
+  );
   let encoded;
   try {
     encoded = JSON.stringify(value);
@@ -288,7 +370,13 @@ function validateBoundedJson(value, maximumBytes, rejectSensitiveFields = false)
   }
 }
 
-function walkBoundedJson(value, depth, ancestors, rejectSensitiveFields) {
+function walkBoundedJson(
+  value,
+  depth,
+  ancestors,
+  rejectSensitiveFields,
+  allowPermissionGenerationAtRoot
+) {
   if (depth > MAX_NESTING_DEPTH) {
     throw protocolError("requestTooLarge", "provider payload is nested too deeply");
   }
@@ -319,19 +407,48 @@ function walkBoundedJson(value, depth, ancestors, rejectSensitiveFields) {
     throw protocolError("requestTooLarge", "provider object has too many entries");
   }
   ancestors.add(value);
+  if (
+    rejectSensitiveFields &&
+    !Array.isArray(value) &&
+    containsPrivateResultRoute(value)
+  ) {
+    throw protocolError(
+      "invalidResult",
+      "native wallet result contains a private routing field"
+    );
+  }
   for (const [key, child] of entries) {
     if (["__proto__", "prototype", "constructor"].includes(String(key))) {
       throw protocolError("invalidRequest", "provider payload contains a forbidden key");
     }
+    const normalizedKey = normalizedResultField(key);
     if (
       rejectSensitiveFields &&
-      SENSITIVE_RESULT_FIELDS.has(String(key).toLowerCase().replace(/[^a-z0-9]/g, ""))
+      (SENSITIVE_RESULT_FIELDS.has(normalizedKey) ||
+        (normalizedKey === "permissiongeneration" &&
+          (!allowPermissionGenerationAtRoot || depth !== 0)))
     ) {
       throw protocolError("invalidResult", "native wallet result contains a secret field");
     }
-    walkBoundedJson(child, depth + 1, ancestors, rejectSensitiveFields);
+    walkBoundedJson(
+      child,
+      depth + 1,
+      ancestors,
+      rejectSensitiveFields,
+      allowPermissionGenerationAtRoot
+    );
   }
   ancestors.delete(value);
+}
+
+function containsPrivateResultRoute(value) {
+  const fields = new Set(Object.keys(value).map(normalizedResultField));
+  if ([...fields].some((field) => PRIVATE_RESULT_ROUTING_FIELDS.has(field))) return true;
+  return PRIVATE_APPROVAL_ROUTING_FIELDS.every((field) => fields.has(field));
+}
+
+function normalizedResultField(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function requireRecord(value, code, message) {

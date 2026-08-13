@@ -16,8 +16,8 @@
 
 The Chromium adapter now consumes the consolidated engine source through one
 exact reviewed Git revision,
-`2b23bd55d14d36fe60073606869d75b4796c54f7`, for both private browser adapters
-and the five canonical `0.2.0` contracts:
+`65c397e8347f37085ea67d2c9c745ce896328e64`, for both private browser adapters
+and the five canonical `0.2.1` contracts:
 
 - runtime request authority;
 - checked browser observability;
@@ -143,6 +143,10 @@ change.
   remains required; `welcome` was only a synthetic routing hostname and failed
   closed against unavailable authority. Exact hashes and observations are in
   [installed-browser qualification](installed-browser-qualification.md#current-056-exact-artifact-evidence-partial).
+- Local `0.6.1` and the current Unreleased source changes are not covered by
+  those historical runs. They require fresh exact-head CI and CodeQL, an
+  exact-artifact installed-browser rerun, and the release/signing gates below
+  before they can be described as qualified or published.
 - Native install, browsing, restart, upgrade, and complete removal on supported
   Windows and macOS versions;
 - a current stable matrix for Chrome, Chromium, Edge, Brave, Vivaldi, and Opera;
@@ -178,16 +182,21 @@ Passing portable source gates is not a substitute for those release gates.
 
 ## Next engineering milestone
 
+The popup now obtains the expected exact lowercase HNS label through a
+separate explicit field, validates and hashes it before network I/O, and never
+derives an endpoint from the active tab. That local selection is not yet a
+native authority input and does not authenticate a feed.
+
 Join the existing Chromium proof/sync runtime to the verifier without
 fabricating `hns-light-chain::VerifiedHnsResource`. This requires either one
 canonical proof authority shared by browsing and HNSA or a new engine-reviewed
 adapter that preserves the private chainwork, current-anchor, exact-name, and
-resource guarantees. The product must then obtain the expected canonical HNS
-name through an independent user/discovery input, add a serialized atomic and
-authenticated rollback-resistant state store for the verifier's canonical
-blob, and expose one native request that returns only the minimized committed
-snapshot. The configured HTTP endpoint and proof objects served by it remain
-untrusted transport input, never identity or state authority.
+resource guarantees. The product must bind the independently selected name to
+that native authority, add a serialized atomic and authenticated
+rollback-resistant state store for the verifier's canonical blob, and expose
+one native request that returns only the minimized committed snapshot. The
+configured HTTP endpoint and proof objects served by it remain untrusted
+transport input, never identity or state authority.
 
 Installed-browser qualification must cover valid admission, malformed and
 expired objects, identity mismatch, clock rollback, serial/sequence rollback,

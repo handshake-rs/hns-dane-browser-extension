@@ -2,10 +2,29 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  expectedPoolAuthority,
   fetchPoolStats,
   parsePoolStatsDocument,
   poolStatsUrl
 } from "../src/pool-stats.js";
+
+test("expected pool authority is an independent exact canonical HNS label", () => {
+  assert.deepEqual(expectedPoolAuthority("pool-1"), {
+    name: "pool-1",
+    nameHash: "073bfbaf6b85e537a1b109e2367c4198787b4c564944b04c1bb455516052587a"
+  });
+  for (const name of [
+    "",
+    "Pool",
+    "-pool",
+    "pool-",
+    "pool_name",
+    "pool.name",
+    "a".repeat(64)
+  ]) {
+    assert.throws(() => expectedPoolAuthority(name), /exact lowercase Handshake pool name/);
+  }
+});
 
 test("pool statistics parser accepts the bounded profile and exposes display fields", () => {
   const snapshot = parsePoolStatsDocument(documentFixture());
@@ -43,18 +62,33 @@ test("pool endpoint normalization strips paths and rejects credentials", () => {
   assert.throws(() => poolStatsUrl("file:///tmp/feed"), /HTTP or HTTPS/);
 });
 
-test("pool fetch omits credentials and parses a bounded response", async () => {
+test("pool fetch fixes expected identity before contacting the endpoint", async () => {
   let request;
-  const result = await fetchPoolStats("https://pool.example", async (url, options) => {
-    request = { url, options };
-    return new Response(JSON.stringify(documentFixture()), {
-      headers: { "content-type": "application/json" }
-    });
-  });
+  const result = await fetchPoolStats(
+    "https://pool.example",
+    "pool-1",
+    async (url, options) => {
+      request = { url, options };
+      return new Response(JSON.stringify(documentFixture()), {
+        headers: { "content-type": "application/json" }
+      });
+    }
+  );
   assert.equal(request.url.href, "https://pool.example/api/v1/pool-stats");
   assert.equal(request.options.credentials, "omit");
   assert.equal(request.options.redirect, "error");
+  assert.equal(result.expectedAuthority.name, "pool-1");
   assert.equal(result.snapshot.tipHeight, 100);
+
+  let contacted = false;
+  await assert.rejects(
+    fetchPoolStats("https://pool.example", "Pool-1", async () => {
+      contacted = true;
+      throw new Error("must not be reached");
+    }),
+    /exact lowercase Handshake pool name/
+  );
+  assert.equal(contacted, false);
 });
 
 function documentFixture() {

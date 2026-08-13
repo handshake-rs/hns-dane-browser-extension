@@ -87,7 +87,7 @@ test("router binds every typed request to browser, wallet, permission, and navig
   );
 });
 
-test("router rejects inline result events without delivering them", async () => {
+test("router rejects inline result routing without delivering it", async () => {
   const events = [];
   const router = new WalletProviderRouter({
     authorityForSender: async () => authority(),
@@ -111,9 +111,84 @@ test("router rejects inline result events without delivering them", async () => 
       bridgeRequest(initialized.binding, 1, "wallet_getStatus", null),
       sender
     ),
-    (error) => error.code === "invalidEvent"
+    (error) => error.code === "invalidResult"
   );
   assert.equal(events.length, 0);
+});
+
+test("router preserves only the exact root approval handoff", async () => {
+  const approval = {
+    approvalRequired: {
+      schemaVersion: 3,
+      approvalId: "AQIDBAUGBwgJCgsMDQ4PEA",
+      method: "wallet_lock",
+      origin: "https://welcome",
+      expiresAtUnixMs: 2_000_000_000_000,
+      summary: { kind: "permissions" }
+    }
+  };
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => authority(),
+    nativeRequest: async (command) => command === "walletProviderCapabilities"
+      ? {
+          abiVersion: 2,
+          available: true,
+          walletSession: "wallet-a",
+          permissionGeneration: 1,
+          methods: ["wallet_lock"]
+        }
+      : approval,
+    deliverEvent: async () => {}
+  });
+  const initialized = await router.initialize({ origin: "https://welcome" }, sender);
+  assert.equal(
+    await router.request(
+      bridgeRequest(initialized.binding, 1, "wallet_lock", null),
+      sender
+    ),
+    approval
+  );
+
+  const dispatch = await router.revalidateApproval({
+    sender,
+    binding: initialized.binding,
+    request: { method: "wallet_lock" }
+  });
+  await assert.rejects(
+    router.completeApproval(dispatch, approval),
+    (error) => error.code === "invalidResult"
+  );
+});
+
+test("router permits a root permission generation only for permission results", async () => {
+  const router = new WalletProviderRouter({
+    authorityForSender: async () => authority(),
+    nativeRequest: async (command, fields) => command === "walletProviderCapabilities"
+      ? {
+          abiVersion: 2,
+          available: true,
+          walletSession: "wallet-a",
+          permissionGeneration: 1,
+          methods: ["wallet_getPermissions", "wallet_getStatus"]
+        }
+      : { permissionGeneration: 2, method: fields.request.method },
+    deliverEvent: async () => {}
+  });
+  const initialized = await router.initialize({ origin: "https://welcome" }, sender);
+  assert.deepEqual(
+    await router.request(
+      bridgeRequest(initialized.binding, 1, "wallet_getPermissions", null),
+      sender
+    ),
+    { permissionGeneration: 2, method: "wallet_getPermissions" }
+  );
+  await assert.rejects(
+    router.request(
+      bridgeRequest(initialized.binding, 2, "wallet_getStatus", null),
+      sender
+    ),
+    (error) => error.code === "invalidResult"
+  );
 });
 
 test("router rejects origin, navigation, and forbidden-method substitution before native dispatch", async () => {

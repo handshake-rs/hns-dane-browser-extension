@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- Require an independently entered canonical HNS name before the popup contacts
+  a MeshMine public-statistics endpoint. The extension validates the exact
+  lowercase label, derives its SHA3-256 name hash locally, and persists it only
+  with an explicitly submitted endpoint.
+
+### Security
+
+- Stop deriving or probing a MeshMine endpoint from the active browser tab.
+  Invalid expected names now fail before network I/O, and a failed or changed
+  selection clears earlier display-only values instead of leaving stale pool
+  statistics visible.
+- Align the Chromium wallet result boundary with the mobile provider contract:
+  private service/browser sessions, routing fields, generation stamps,
+  decision fingerprints, engine contexts, and approval internals cannot cross
+  into page results or event payloads. The public `permissionGeneration`
+  projection remains admissible only at the exact root for four permission
+  methods and two permission events; the exact browser-owned root
+  `approvalRequired` handoff is the only approval route admitted for
+  trusted-window validation.
+
 ## 0.6.1 - 2026-08-13
 
 ### Fixed

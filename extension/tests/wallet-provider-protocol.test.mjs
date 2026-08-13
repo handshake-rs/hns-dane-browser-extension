@@ -30,7 +30,7 @@ test("the Handshake provider exposes the complete narrow method and event surfac
   assert.ok(WALLET_PROVIDER_EVENTS.includes("walletLocked"));
 });
 
-test("native results and events reject secret-bearing fields", () => {
+test("native results and events reject secret and private envelope fields", () => {
   assert.throws(
     () => validateNativeResult({ account: "hs1qpublic", privateKey: "secret" }),
     (error) => error.code === "invalidResult"
@@ -60,6 +60,118 @@ test("native results and events reject secret-bearing fields", () => {
       payload: null
     }),
     (error) => error.code === "invalidResult"
+  );
+  const privateEnvelopeFields = [
+    "protocolVersion",
+    "requestNonce",
+    "walletSession",
+    "authorityHandle",
+    "authorityRevision",
+    "hostSessionId",
+    "serviceSessionId",
+    "runtimeSessionId",
+    "browserRuntimeSessionId",
+    "browserAuthoritySession",
+    "restartGeneration",
+    "channelSequence",
+    "eventSequence",
+    "runtimeGeneration",
+    "policyGeneration",
+    "navigationGeneration",
+    "decisionFingerprint",
+    "validUntilUnixMs",
+    "engineContext"
+  ];
+  for (const field of privateEnvelopeFields) {
+    assert.throws(
+      () => validateNativeResult({ public: { [field]: "private-native-state" } }),
+      (error) => error.code === "invalidResult",
+      field
+    );
+    assert.throws(
+      () => validateProviderEvent({ event: "walletLocked", payload: { [field]: 1 } }),
+      (error) => error.code === "invalidResult",
+      `event ${field}`
+    );
+  }
+});
+
+test("native result routing stays private except the exact root approval handoff", () => {
+  for (const result of [
+    { event: "walletLocked" },
+    { nested: [{ events: [] }] },
+    { nested: { approvalRequired: true } },
+    {
+      nested: {
+        approvalId: "AQIDBAUGBwgJCgsMDQ4PEA",
+        expiresAtUnixMs: 1,
+        summary: {}
+      }
+    }
+  ]) {
+    assert.throws(
+      () => validateNativeResult(result),
+      (error) => error.code === "invalidResult"
+    );
+  }
+
+  const handoff = {
+    approvalRequired: {
+      schemaVersion: 3,
+      approvalId: "AQIDBAUGBwgJCgsMDQ4PEA",
+      method: "wallet_lock",
+      origin: "https://welcome",
+      expiresAtUnixMs: 2_000_000_000_000,
+      summary: { kind: "permissions" }
+    }
+  };
+  assert.equal(
+    validateNativeResult(handoff, { allowApprovalRoute: true }),
+    handoff
+  );
+  for (const invalid of [
+    { ...handoff, publicResult: true },
+    { nested: handoff },
+    { approvalRequired: handoff.approvalRequired, events: [] },
+    { approvalRequired: null }
+  ]) {
+    assert.throws(
+      () => validateNativeResult(invalid, { allowApprovalRoute: true }),
+      (error) => error.code === "invalidResult"
+    );
+  }
+});
+
+test("permission generations have the same exact public projection as mobile", () => {
+  const result = { permissionGeneration: 7, capabilities: [] };
+  assert.equal(
+    validateNativeResult(result, { resultMethod: "wallet_getPermissions" }),
+    result
+  );
+  for (const invalid of [
+    () => validateNativeResult(result),
+    () => validateNativeResult(result, { resultMethod: "wallet_getStatus" }),
+    () => validateNativeResult(
+      { nested: { permissionGeneration: 7 } },
+      { resultMethod: "wallet_getPermissions" }
+    ),
+    () => validateProviderEvent({
+      event: "walletLocked",
+      payload: { permissionGeneration: 7 }
+    }),
+    () => validateProviderEvent({
+      event: "connect",
+      payload: { nested: { permissionGeneration: 7 } }
+    })
+  ]) {
+    assert.throws(invalid, (error) => error.code === "invalidResult");
+  }
+  assert.deepEqual(
+    validateProviderEvent({
+      event: "connect",
+      payload: { permissionGeneration: 7 }
+    }),
+    { event: "connect", payload: { permissionGeneration: 7 } }
   );
 });
 

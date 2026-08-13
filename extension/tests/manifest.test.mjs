@@ -292,6 +292,27 @@ test("popup security status is scoped to the active Chromium tab", () => {
   assert.match(popupScript, /Chromium owns end-to-end WebPKI for this document/);
 });
 
+test("MeshMine selection changes clear stale display-only values before submission", () => {
+  assert.match(popup, /id="pool-name"/);
+  assert.match(popup, /id="pool-endpoint"/);
+  assert.match(
+    popupScript,
+    /\["#pool-name", "#pool-endpoint"\][\s\S]*?addEventListener\("input", markPoolSelectionChanged\)/
+  );
+  assert.match(
+    popupScript,
+    /function markPoolSelectionChanged\(\) \{[\s\S]*?\+\+poolOperationGeneration;[\s\S]*?resetPoolStatsDisplay\("Selection pending \/ unverified"\)/
+  );
+  assert.match(
+    popupScript,
+    /const operationGeneration = \+\+poolOperationGeneration;[\s\S]*?await fetchPoolStats\(endpoint, expectedName\);[\s\S]*?if \(operationGeneration !== poolOperationGeneration\) return;/
+  );
+  assert.match(
+    popupScript,
+    /async function clearPoolStats\(\) \{[\s\S]*?await chrome\.storage\.local\.remove\([\s\S]*?input\.value = "";[\s\S]*?resetPoolStatsDisplay\(\);[\s\S]*?Could not clear the saved pool selection:/
+  );
+});
+
 test("the unpacked Chromium build carries the generated dependency notices", () => {
   assert.match(
     buildScript,

@@ -11,6 +11,8 @@ import { headerChainView, pageProofAnchor } from "./header-status.js";
 import { fetchPoolStats } from "./pool-stats.js";
 
 const POOL_ENDPOINT_STORAGE_KEY = "meshminePublicPoolEndpoint";
+const POOL_NAME_STORAGE_KEY = "meshmineExpectedHnsName";
+let poolOperationGeneration = 0;
 
 document.querySelector("#retry").addEventListener("click", () => void retry());
 document
@@ -30,6 +32,9 @@ document.querySelector("#pool-form").addEventListener("submit", (event) => {
   event.preventDefault();
   void refreshPoolStats(true);
 });
+for (const selector of ["#pool-name", "#pool-endpoint"]) {
+  document.querySelector(selector).addEventListener("input", markPoolSelectionChanged);
+}
 document.querySelector("#clear-pool").addEventListener("click", () => void clearPoolStats());
 void refresh();
 void initializePoolStats();
@@ -292,58 +297,96 @@ async function activeTabId() {
 }
 
 async function initializePoolStats() {
-  const stored = await chrome.storage.local.get(POOL_ENDPOINT_STORAGE_KEY);
-  let endpoint = stored?.[POOL_ENDPOINT_STORAGE_KEY];
-  if (typeof endpoint !== "string" || endpoint.length === 0) {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    try {
-      const active = new URL(tabs?.[0]?.url ?? "");
-      endpoint = ['http:', 'https:'].includes(active.protocol) ? active.origin : "";
-    } catch {
-      endpoint = "";
-    }
-  }
+  const operationGeneration = ++poolOperationGeneration;
+  const stored = await chrome.storage.local.get([
+    POOL_ENDPOINT_STORAGE_KEY,
+    POOL_NAME_STORAGE_KEY
+  ]);
+  if (operationGeneration !== poolOperationGeneration) return;
+  const endpoint =
+    typeof stored?.[POOL_ENDPOINT_STORAGE_KEY] === "string"
+      ? stored[POOL_ENDPOINT_STORAGE_KEY]
+      : "";
+  const expectedName =
+    typeof stored?.[POOL_NAME_STORAGE_KEY] === "string"
+      ? stored[POOL_NAME_STORAGE_KEY]
+      : "";
   document.querySelector("#pool-endpoint").value = endpoint;
-  if (endpoint) await refreshPoolStats(false);
+  document.querySelector("#pool-name").value = expectedName;
+  if (endpoint && expectedName) {
+    await refreshPoolStats(false);
+  } else if (endpoint) {
+    document.querySelector("#pool-detail").textContent =
+      "Enter the expected canonical HNS pool name. The endpoint cannot select its own identity.";
+  }
 }
 
 async function refreshPoolStats(persist) {
+  const operationGeneration = ++poolOperationGeneration;
   const input = document.querySelector("#pool-endpoint");
+  const nameInput = document.querySelector("#pool-name");
   const button = document.querySelector("#load-pool");
+  const clearButton = document.querySelector("#clear-pool");
   const detail = document.querySelector("#pool-detail");
   const endpoint = input.value.trim();
-  if (!endpoint) {
-    detail.textContent = "Enter an HTTP or HTTPS MeshMine public endpoint.";
+  const expectedName = nameInput.value.trim();
+  if (!expectedName || !endpoint) {
+    resetPoolStatsDisplay();
+    detail.textContent =
+      "Enter both an exact lowercase HNS pool name and its HTTP or HTTPS public endpoint.";
     return;
   }
+  resetPoolStatsDisplay("Loading / unverified");
   button.disabled = true;
   button.textContent = "Loading…";
   detail.textContent = "Loading a bounded public snapshot…";
   try {
-    const result = await fetchPoolStats(endpoint);
-    input.value = result.endpoint;
+    const result = await fetchPoolStats(endpoint, expectedName);
+    if (operationGeneration !== poolOperationGeneration) return;
     if (persist) {
-      await chrome.storage.local.set({ [POOL_ENDPOINT_STORAGE_KEY]: result.endpoint });
+      // Freeze the selection during the storage write. Until this point the
+      // fields remain editable and any input event invalidates this result.
+      input.disabled = true;
+      nameInput.disabled = true;
+      clearButton.disabled = true;
+      await chrome.storage.local.set({
+        [POOL_ENDPOINT_STORAGE_KEY]: result.endpoint,
+        [POOL_NAME_STORAGE_KEY]: result.expectedAuthority.name
+      });
+      if (operationGeneration !== poolOperationGeneration) return;
     }
-    renderPoolStats(result.snapshot);
+    input.value = result.endpoint;
+    nameInput.value = result.expectedAuthority.name;
+    renderPoolStats(result.snapshot, result.expectedAuthority);
   } catch (error) {
+    if (operationGeneration !== poolOperationGeneration) return;
+    resetPoolStatsDisplay("Unavailable / unverified");
     detail.textContent = `Pool statistics unavailable: ${String(
       error instanceof Error ? error.message : error
     ).slice(0, 512)}`;
   } finally {
-    button.disabled = false;
-    button.textContent = "Load pool statistics";
+    if (operationGeneration === poolOperationGeneration) {
+      input.disabled = false;
+      nameInput.disabled = false;
+      clearButton.disabled = false;
+      button.disabled = false;
+      button.textContent = "Load pool statistics";
+    }
   }
 }
 
-function renderPoolStats(snapshot) {
+function renderPoolStats(snapshot, expectedAuthority) {
   const expired = BigInt(Math.floor(Date.now() / 1000)) >= snapshot.expiresAt;
   document.querySelector("#pool-detail").textContent = expired
-    ? "The bounded snapshot is expired. Values are display-only and unverified."
-    : "Verifier core is not joined to native proof and durable state. Values remain unverified.";
+    ? `The bounded snapshot for expected HNS name ${expectedAuthority.name} is expired. Values are display-only and unverified.`
+    : `Expected HNS name ${expectedAuthority.name} was selected independently, but the verifier core is not joined to native proof and durable state. Values remain unverified.`;
   document.querySelector("#pool-trust").textContent = expired
     ? "Expired / unverified"
     : "Unverified";
+  document.querySelector("#pool-expected-name").textContent =
+    expectedAuthority.name;
+  document.querySelector("#pool-name-hash").textContent =
+    expectedAuthority.nameHash;
   document.querySelector("#pool-mode").textContent = snapshot.mode;
   document.querySelector("#pool-miners").textContent = snapshot.connectedMiners;
   document.querySelector("#pool-peers").textContent = snapshot.connectedMeshPeers;
@@ -357,11 +400,58 @@ function renderPoolStats(snapshot) {
 }
 
 async function clearPoolStats() {
-  await chrome.storage.local.remove(POOL_ENDPOINT_STORAGE_KEY);
-  document.querySelector("#pool-endpoint").value = "";
+  const operationGeneration = ++poolOperationGeneration;
+  const input = document.querySelector("#pool-endpoint");
+  const nameInput = document.querySelector("#pool-name");
+  const button = document.querySelector("#load-pool");
+  const clearButton = document.querySelector("#clear-pool");
+  const detail = document.querySelector("#pool-detail");
+  input.disabled = true;
+  nameInput.disabled = true;
+  button.disabled = true;
+  clearButton.disabled = true;
+  button.textContent = "Clearing…";
+  detail.textContent = "Clearing the saved pool selection…";
+  try {
+    await chrome.storage.local.remove([
+      POOL_ENDPOINT_STORAGE_KEY,
+      POOL_NAME_STORAGE_KEY
+    ]);
+    if (operationGeneration !== poolOperationGeneration) return;
+    input.value = "";
+    nameInput.value = "";
+    detail.textContent =
+      "Enter an expected HNS pool name and that operator's public endpoint. Pool membership is not required.";
+    resetPoolStatsDisplay();
+  } catch (error) {
+    if (operationGeneration !== poolOperationGeneration) return;
+    detail.textContent = `Could not clear the saved pool selection: ${String(
+      error instanceof Error ? error.message : error
+    ).slice(0, 512)}`;
+  } finally {
+    if (operationGeneration === poolOperationGeneration) {
+      input.disabled = false;
+      nameInput.disabled = false;
+      button.disabled = false;
+      clearButton.disabled = false;
+      button.textContent = "Load pool statistics";
+    }
+  }
+}
+
+function markPoolSelectionChanged() {
+  ++poolOperationGeneration;
+  document.querySelector("#load-pool").disabled = false;
+  document.querySelector("#load-pool").textContent = "Load pool statistics";
+  resetPoolStatsDisplay("Selection pending / unverified");
   document.querySelector("#pool-detail").textContent =
-    "Enter any operator's public endpoint. Pool membership is not required.";
+    "Pool selection changed. Load statistics to display the new unverified snapshot.";
+}
+
+function resetPoolStatsDisplay(trust = "Display-only") {
   for (const id of [
+    "pool-expected-name",
+    "pool-name-hash",
     "pool-mode",
     "pool-miners",
     "pool-peers",
@@ -373,5 +463,5 @@ async function clearPoolStats() {
   ]) {
     document.querySelector(`#${id}`).textContent = "—";
   }
-  document.querySelector("#pool-trust").textContent = "Display-only";
+  document.querySelector("#pool-trust").textContent = trust;
 }

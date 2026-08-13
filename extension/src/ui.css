@@ -93,6 +93,7 @@ dl div {
 }
 
 select,
+input[type="text"],
 input[type="url"],
 button {
   border: 1px solid #3a6654;
@@ -111,6 +112,19 @@ button {
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
+}
+
+.field-stack label {
+  margin-top: 4px;
+  color: #aec4ba;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.field-help {
+  color: #aec4ba;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .field-stack button {

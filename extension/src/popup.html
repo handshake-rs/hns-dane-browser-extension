@@ -71,11 +71,21 @@
       </div>
       <h2>MeshMine public pool</h2>
       <p id="pool-detail" class="section-detail" aria-live="polite">
-        Enter any operator's public endpoint. Pool membership is not required.
+        Enter an expected HNS pool name and that operator's public endpoint. Pool membership is
+        not required.
       </p>
       <form id="pool-form" class="field-stack">
+        <label for="pool-name">Expected canonical HNS name</label>
+        <input id="pool-name" type="text" inputmode="text" autocomplete="off"
+          autocapitalize="none" spellcheck="false" required
+          minlength="1" maxlength="63" pattern="[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+          placeholder="poolname" aria-describedby="pool-name-help">
+        <span id="pool-name-help" class="field-help">
+          Enter this identity independently. The HTTP endpoint and its response cannot choose it.
+        </span>
+        <label for="pool-endpoint">Public statistics endpoint</label>
         <input id="pool-endpoint" type="url" inputmode="url" autocomplete="off"
-          placeholder="https://pool.example" aria-label="MeshMine public endpoint">
+          required placeholder="https://pool.example" aria-label="MeshMine public endpoint">
         <div class="actions section-actions">
           <button id="load-pool" type="submit">Load pool statistics</button>
           <button id="clear-pool" type="button" class="secondary">Clear</button>
@@ -83,6 +93,8 @@
       </form>
       <dl>
         <div><dt>Trust state</dt><dd id="pool-trust">Display-only</dd></div>
+        <div><dt>Expected HNS name</dt><dd id="pool-expected-name">—</dd></div>
+        <div><dt>Expected name hash</dt><dd id="pool-name-hash">—</dd></div>
         <div><dt>Mode</dt><dd id="pool-mode">—</dd></div>
         <div><dt>Connected miners</dt><dd id="pool-miners">—</dd></div>
         <div><dt>Mesh peers</dt><dd id="pool-peers">—</dd></div>
@@ -93,8 +105,9 @@
         <div><dt>Expires</dt><dd id="pool-expires">—</dd></div>
       </dl>
       <p class="warning">
-        This panel safely bounds and decodes the signed feed, but has no joined native proof and
-        durable-state authority. The endpoint and displayed values remain unverified.
+        This panel locally fixes the expected name before it contacts the endpoint and safely
+        bounds and decodes the signed feed, but has no joined native proof and durable-state
+        authority. The endpoint, claimed identity, and displayed values remain unverified.
       </p>
     </main>
     <script type="module" src="popup.js"></script>

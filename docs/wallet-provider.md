@@ -96,10 +96,19 @@ are 1–63 lowercase ASCII letters or digits with `-` and `_` allowed only
 internally, subject to the pinned `hns-covenants` reserved-name exclusions. The trusted window
 renders every disclosed name/hash pair and rejects missing, malformed,
 mismatched, duplicated, or reordered disclosures. Private `authorityHandle` and
-`authorityRevision` fields remain native-only and are forbidden in page results
-and event payloads. A future native adapter must decode ABI-v2 frames, retain
-those fields behind the native boundary, and construct the exact public
-projection; that adapter is not implemented or enabled in this release.
+`authorityRevision` fields, service/browser session IDs, native routing and
+sequence fields, private generation stamps, decision fingerprints, engine
+contexts, and approval internals remain native-only and are forbidden
+recursively in page results and event payloads. As on mobile, the public
+permission projection may carry `permissionGeneration` only at the result root
+for the four permission methods, or at the payload root for `connect` and
+`permissionsChanged`; every nested or misplaced spelling fails closed. The
+other sole exception is the exact root-level
+`approvalRequired` handoff consumed by the service worker and then validated as
+the closed public approval projection; it cannot be nested or combined with a
+public result. A future native adapter must decode ABI-v2 frames, retain those
+fields behind the native boundary, and construct the exact public projection;
+that adapter is not implemented or enabled in this release.
 
 Only the validated public prompt is placed in `chrome.storage.session`; the
 exact tab, document, authority generations, provider request, and native
