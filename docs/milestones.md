@@ -177,6 +177,13 @@ change.
   roots, release pins, and floors remain empty, and macOS/Windows execution,
   private transport, opaque engine authority, provider projection, and product
   qualification remain release blockers.
+- The Chromium popup now renders a strictly sanitized, display-only projection
+  of native wallet artifact admission. It accepts the exact ABI-v2 status
+  contract and internally consistent stage/reason/metadata combinations, while
+  any malformed status or asserted transport/runtime/provider availability
+  becomes unavailable. This adds no native request or process launch: lock
+  state, active wallet, and modules remain unavailable, and provider, value,
+  and settlement remain disabled.
 
 Passing portable source gates is not a substitute for those release gates.
 
@@ -212,3 +219,7 @@ wallet trust roots, native approval rendering, and installed-browser
 qualification must land before provider installation. HNSR transport,
 discovery and persistence, value movement, settlement, and P2P marketplace
 controls are separate later gates and remain disabled.
+
+The current wallet-readiness panel completes only pre-transport artifact-status
+presentation. Actual lock and module status requires joining a qualified wallet
+release to the private read-only transport and remains a separate gated tranche.

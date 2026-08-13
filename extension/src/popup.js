@@ -9,6 +9,7 @@ import {
 } from "./security-result.js";
 import { headerChainView, pageProofAnchor } from "./header-status.js";
 import { fetchPoolStats } from "./pool-stats.js";
+import { walletReadinessView } from "./wallet-status.js";
 
 const POOL_ENDPOINT_STORAGE_KEY = "meshminePublicPoolEndpoint";
 const POOL_NAME_STORAGE_KEY = "meshmineExpectedHnsName";
@@ -92,6 +93,7 @@ function renderStatus(status) {
   const connectDecision = connectDecisionForStatus(status);
   const displayedSecurity = security ?? connectDecision;
   renderHeaderStatus(status);
+  renderWalletReadiness(status.walletAbi);
   document.querySelector("#state-title").textContent = nativeUpdateRequired
     ? "Native component update required"
     : active
@@ -166,6 +168,19 @@ function renderStatus(status) {
     : "—";
   document.querySelector("#security-event").textContent =
     displayedSecurity?.eventSequence ?? "—";
+}
+
+function renderWalletReadiness(walletAbi) {
+  const view = walletReadinessView(walletAbi);
+  document.querySelector("#wallet-detail").textContent = view.detail;
+  document.querySelector("#wallet-artifact").textContent = view.artifact;
+  document.querySelector("#wallet-release").textContent = view.release;
+  document.querySelector("#wallet-service").textContent = view.service;
+  document.querySelector("#wallet-lock-state").textContent = view.lockState;
+  document.querySelector("#wallet-active").textContent = view.activeWallet;
+  document.querySelector("#wallet-modules").textContent = view.modules;
+  document.querySelector("#wallet-provider").textContent = view.provider;
+  document.querySelector("#wallet-value").textContent = view.value;
 }
 
 function nativeComponentUpdateSummary(status) {

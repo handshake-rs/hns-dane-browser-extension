@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Add a display-only Chromium wallet-readiness panel. The service worker
+  projects the native `walletAbi` status through an exact closed schema, and
+  the popup reports staged-artifact admission while clearly marking wallet
+  service, lock state, active wallet, modules, provider, value, and settlement
+  unavailable or disabled.
 - Add a dormant Linux Chromium wallet-service transport/controller foundation.
   It negotiates ABI-v2 sessions and exposes only correlated, deadline-bounded
   read-only status calls. It is deliberately not joined to artifact launch or
@@ -18,6 +23,10 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+- Reject malformed or extended wallet-readiness status, inconsistent admission
+  stages, unbounded release metadata, and any asserted transport, runtime, or
+  provider availability before status reaches the popup. The panel adds no
+  native command, launch, storage, provider, approval, unlock, or value path.
 - Stop deriving or probing a MeshMine endpoint from the active browser tab.
   Invalid expected names now fail before network I/O, and a failed or changed
   selection clears earlier display-only values instead of leaving stale pool

@@ -32,6 +32,10 @@ import {
 } from "./wallet-provider-protocol.js";
 import { WalletProviderRouter } from "./wallet-provider-router.js";
 import {
+  projectWalletAbiStatus,
+  unavailableWalletAbiStatus
+} from "./wallet-status.js";
+import {
   approvalStorageKey,
   validateApprovalDecision,
   validateApprovalId,
@@ -167,6 +171,7 @@ let publicStatus = {
   headerSync: null,
   headerSyncInProgress: false,
   headerSyncError: null,
+  walletAbi: unavailableWalletAbiStatus(),
   latestMainFrameSecurity: null,
   latestMainFrameSecurityUnavailableReason: null,
   recentConnectSecurityDecisions: []
@@ -423,6 +428,7 @@ function handleNativeDisconnect(disconnectedConnectionEpoch) {
     proxyActive: credentials != null,
     headerSyncInProgress: false,
     headerSyncError: "Native host disconnected",
+    walletAbi: unavailableWalletAbiStatus("walletNativeHostDisconnected"),
     securityMaintenanceEpoch: null,
     latestMainFrameSecurity: null,
     latestMainFrameSecurityUnavailableReason: null,
@@ -642,6 +648,7 @@ async function startRuntime(policyOverride) {
       priorStatus.proxyActive === true && priorCredentials != null,
     headerSyncInProgress: false,
     headerSyncError: null,
+    walletAbi: unavailableWalletAbiStatus("walletStatusChecking"),
     latestMainFrameSecurity: null,
     latestMainFrameSecurityUnavailableReason: null,
     recentConnectSecurityDecisions: []
@@ -697,7 +704,8 @@ async function startRuntime(policyOverride) {
     setStatus({
       extensionVersion: nativeComponent.extensionVersion,
       nativeHostVersion: nativeComponent.nativeHostVersion,
-      nativeComponentState: nativeComponent.state
+      nativeComponentState: nativeComponent.state,
+      walletAbi: projectWalletAbiStatus(hello?.walletAbi)
     });
     if (nativeComponent.state !== "ready") {
       const failure = new Error(
@@ -717,6 +725,7 @@ async function startRuntime(policyOverride) {
       activationConnectionEpoch
     );
     validateStartResult(result);
+    setStatus({ walletAbi: projectWalletAbiStatus(result.walletAbi) });
 
     if (result.ca.state !== "installed") {
       throw new Error("local CA installation is required before the HNS PAC can activate");
@@ -752,6 +761,7 @@ async function startRuntime(policyOverride) {
             headerSync: currentHeaderSync(result.headerSync),
             headerSyncInProgress: true,
             headerSyncError: null,
+            walletAbi: projectWalletAbiStatus(result.walletAbi),
             recentConnectSecurityDecisions: []
           });
         }
@@ -820,6 +830,7 @@ async function startRuntime(policyOverride) {
       headerSync: currentHeaderSync(activationStatus.headerSync),
       headerSyncInProgress: false,
       headerSyncError: null,
+      walletAbi: projectWalletAbiStatus(activationStatus.walletAbi),
       latestMainFrameSecurity: null,
       latestMainFrameSecurityUnavailableReason: null,
       recentConnectSecurityDecisions: []
@@ -987,6 +998,9 @@ async function startRuntime(policyOverride) {
     ) {
       client.disconnectIfCurrent(replacedConnectionEpoch);
     }
+    const disconnectedWalletAbi = unavailableWalletAbiStatus(
+      "walletNativeHostDisconnected"
+    );
     const localCaRequired =
       failure instanceof Error &&
       failure.message.includes("local CA installation is required");
@@ -1003,6 +1017,7 @@ async function startRuntime(policyOverride) {
         reason: failure.code,
         extensionVersion: EXTENSION_VERSION,
         nativeComponentState,
+        walletAbi: disconnectedWalletAbi,
         proxyActive: false,
         caReady: false,
         headerSync: null,
@@ -1019,7 +1034,8 @@ async function startRuntime(policyOverride) {
         state: "blocked",
         reason: "localCaRequired",
         proxyActive: false,
-        caReady: false
+        caReady: false,
+        walletAbi: disconnectedWalletAbi
       });
     } else {
       setStatus({
@@ -1030,6 +1046,7 @@ async function startRuntime(policyOverride) {
             ? "unavailable"
             : publicStatus.nativeComponentState,
         proxyActive: false,
+        walletAbi: disconnectedWalletAbi,
         headerSyncInProgress: false,
         headerSyncError: "Proxy activation requires current validated headers",
         securityMaintenanceEpoch: null,
@@ -1064,7 +1081,8 @@ async function establishStartupHeaderReadiness(
     caReady: true,
     headerSync: currentHeaderSync(startResult.headerSync),
     headerSyncInProgress: true,
-    headerSyncError: null
+    headerSyncError: null,
+    walletAbi: projectWalletAbiStatus(startResult.walletAbi)
   });
   await recordHeaderSyncAttempt(Date.now());
   requireRuntimeControl(
@@ -1752,6 +1770,7 @@ async function refreshNativeStatus(allowDuringHeaderSync = false) {
         typeof result.latestMainFrameSecurityUnavailableReason === "string"
           ? result.latestMainFrameSecurityUnavailableReason
           : null,
+      walletAbi: projectWalletAbiStatus(result.walletAbi),
       recentConnectSecurityDecisions
     };
     validatedNativeStatus = true;

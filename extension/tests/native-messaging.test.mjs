@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { projectWalletAbiStatus } from "../src/wallet-status.js";
 
 const cargoTargetDir = resolve(
   process.env.CARGO_TARGET_DIR ??
@@ -72,6 +73,18 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     assert.equal(responses[0].result.capabilities.handshakeWalletProvider, false);
     assert.equal(responses[0].result.walletAbi.available, false);
     assert.equal(responses[0].result.walletAbi.runtimeNegotiated, false);
+    assert.equal(
+      responses[0].result.walletAbi.serviceTransportAvailable,
+      false
+    );
+    assert.equal(
+      responses[0].result.walletAbi.providerAuthorityContextAvailable,
+      false
+    );
+    assert.notEqual(
+      projectWalletAbiStatus(responses[0].result.walletAbi).reason,
+      "walletStatusInvalid"
+    );
     assert.equal(responses[1].requestId, "status-1");
     assert.equal(responses[1].eventSequence, 2);
     assert.equal(responses[1].result.headerSync.network, "regtest");
@@ -82,6 +95,19 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     );
     assert.equal(responses[1].result.headerSyncUnavailableReason, null);
     assert.equal(responses[1].result.walletAbi.available, false);
+    assert.equal(
+      responses[1].result.walletAbi.serviceTransportAvailable,
+      false
+    );
+    assert.equal(responses[1].result.walletAbi.runtimeNegotiated, false);
+    assert.equal(
+      responses[1].result.walletAbi.providerAuthorityContextAvailable,
+      false
+    );
+    assert.notEqual(
+      projectWalletAbiStatus(responses[1].result.walletAbi).reason,
+      "walletStatusInvalid"
+    );
     assert.equal(responses[2].requestId, "wallet-1");
     assert.equal(responses[2].ok, false);
     assert.equal(responses[2].error.code, missingWalletArtifactCode);

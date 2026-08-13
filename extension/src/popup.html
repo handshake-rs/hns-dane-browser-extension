@@ -69,6 +69,24 @@
       <div class="actions section-actions">
         <button id="sync-headers" type="button">Sync headers now</button>
       </div>
+      <h2>Wallet readiness</h2>
+      <p id="wallet-detail" class="section-detail" aria-live="polite">
+        Reading the native wallet admission boundary…
+      </p>
+      <dl>
+        <div><dt>Artifact admission</dt><dd id="wallet-artifact">—</dd></div>
+        <div><dt>Staged release</dt><dd id="wallet-release">—</dd></div>
+        <div><dt>Wallet service</dt><dd id="wallet-service">Not connected</dd></div>
+        <div><dt>Lock state</dt><dd id="wallet-lock-state">Unavailable</dd></div>
+        <div><dt>Active wallet</dt><dd id="wallet-active">Not exposed</dd></div>
+        <div><dt>Enabled modules</dt><dd id="wallet-modules">Unavailable</dd></div>
+        <div><dt>Website provider</dt><dd id="wallet-provider">Disabled</dd></div>
+        <div><dt>Value and settlement</dt><dd id="wallet-value">Disabled</dd></div>
+      </dl>
+      <p class="warning">
+        Readiness is display-only. This build does not launch or query a wallet process, install a
+        website provider, unlock a wallet, or enable value movement.
+      </p>
       <h2>MeshMine public pool</h2>
       <p id="pool-detail" class="section-detail" aria-live="polite">
         Enter an expected HNS pool name and that operator's public endpoint. Pool membership is

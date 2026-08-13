@@ -51,3 +51,13 @@ current production verifier has no wallet trust root, release pin, or floor,
 the controller launches no wallet artifact, and it exports no wallet result.
 The browser-owned anti-rollback record contains only release line/sequence/ID,
 signer ID, and manifest/artifact digests; it contains no wallet state or secret.
+
+The Chromium popup's wallet-readiness panel is a privileged, display-only view
+of that bounded admission status. The service worker accepts only the exact
+known contract and internally consistent admission stages; unknown fields,
+malformed metadata, or any claim that transport, runtime negotiation, provider
+authority, or provider availability is enabled collapse to a fixed unavailable
+view. The panel does not issue a wallet native command, start or connect to a
+wallet process, persist wallet status, or expose it to a website. Consequently,
+lock state, active wallet, and enabled modules are explicitly unavailable, and
+provider, value, and settlement remain disabled.
