@@ -42,6 +42,10 @@ import {
   currentSecurityResult
 } from "./security-result.js";
 import {
+  inspectNativeComponent,
+  nativeSetupPromptRequired
+} from "./native-component.js";
+import {
   authoritativeHeaderSync,
   currentHeaderSync,
   headerSyncRefreshError,
@@ -61,6 +65,8 @@ import {
 } from "./proxy-lifecycle.js";
 
 const NATIVE_HOST = "com.denuoweb.hns_dane_browser";
+const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+const NATIVE_SETUP_PROMPTED_VERSION_KEY = "nativeSetupPromptedVersion";
 const HEALTH_ALARM = "hns-runtime-health";
 const RECONNECT_ALARM = "hns-runtime-reconnect";
 const HEADER_SYNC_DEADLINE_ALARM = "hns-header-sync-deadline";
@@ -141,6 +147,7 @@ let retainedHeaderSyncUrgentRetryWindow = null;
 let retainedHeaderSyncUrgentRetryWindowLoaded = false;
 let navigationReceiptStore = null;
 let navigationReceiptQueue = Promise.resolve();
+let nativeSetupPromptedVersion = null;
 const walletApprovalContexts = new Map();
 const walletApprovalClaims = new Set();
 const walletApprovalWindows = new Map();
@@ -148,6 +155,9 @@ let credentials = null;
 let publicStatus = {
   state: "starting",
   reason: null,
+  extensionVersion: EXTENSION_VERSION,
+  nativeHostVersion: null,
+  nativeComponentState: "checking",
   runtimeSession: null,
   runtimeGeneration: null,
   policyGeneration: 0,
@@ -561,6 +571,12 @@ function recover() {
         if (error?.code === "navigationGateTransitionFailed") {
           return publicStatus;
         }
+        if (
+          error?.code === "nativeComponentUpdateRequired" ||
+          error?.code === "nativeComponentIncompatible"
+        ) {
+          return publicStatus;
+        }
         setStatus({
           state: publicStatus.state === "blocked" ? "blocked" : "degraded",
           reason: error instanceof Error ? error.message : String(error),
@@ -614,9 +630,14 @@ async function startRuntime(policyOverride) {
   let livePacConfirmed = false;
   let navigationGateClosed = false;
   let replacedConnectionDisconnected = false;
+  let nativeHelloAttempted = false;
+  let nativeHelloReceived = false;
   setStatus({
     state: "starting",
     reason: null,
+    extensionVersion: EXTENSION_VERSION,
+    nativeHostVersion: null,
+    nativeComponentState: "checking",
     proxyActive:
       priorStatus.proxyActive === true && priorCredentials != null,
     headerSyncInProgress: false,
@@ -663,13 +684,33 @@ async function startRuntime(policyOverride) {
     const policy = normalizePolicy(
       policyOverride ?? stored.policy ?? DEFAULT_POLICY
     );
-    await client.request("hello");
+    nativeHelloAttempted = true;
+    const hello = await client.request("hello");
+    nativeHelloReceived = true;
     requireControlGeneration(startControlEpoch);
     activationConnectionEpoch = client.currentConnectionEpoch();
     requireRuntimeControl(
       startControlEpoch,
       activationConnectionEpoch
     );
+    const nativeComponent = inspectNativeComponent(hello, EXTENSION_VERSION);
+    setStatus({
+      extensionVersion: nativeComponent.extensionVersion,
+      nativeHostVersion: nativeComponent.nativeHostVersion,
+      nativeComponentState: nativeComponent.state
+    });
+    if (nativeComponent.state !== "ready") {
+      const failure = new Error(
+        nativeComponent.state === "versionMismatch"
+          ? `native component ${nativeComponent.nativeHostVersion} does not match extension ${EXTENSION_VERSION}`
+          : `native component did not report a compatible version for extension ${EXTENSION_VERSION}`
+      );
+      failure.code =
+        nativeComponent.state === "versionMismatch"
+          ? "nativeComponentUpdateRequired"
+          : "nativeComponentIncompatible";
+      throw failure;
+    }
     const result = await client.request("start", { policy });
     requireRuntimeControl(
       startControlEpoch,
@@ -949,7 +990,31 @@ async function startRuntime(policyOverride) {
     const localCaRequired =
       failure instanceof Error &&
       failure.message.includes("local CA installation is required");
-    if (localCaRequired) {
+    const nativeComponentFailure =
+      failure?.code === "nativeComponentUpdateRequired" ||
+      failure?.code === "nativeComponentIncompatible";
+    if (nativeComponentFailure) {
+      const nativeComponentState =
+        failure.code === "nativeComponentUpdateRequired"
+          ? "versionMismatch"
+          : "incompatible";
+      setStatus({
+        state: "blocked",
+        reason: failure.code,
+        extensionVersion: EXTENSION_VERSION,
+        nativeComponentState,
+        proxyActive: false,
+        caReady: false,
+        headerSync: null,
+        headerSyncInProgress: false,
+        headerSyncError: boundedError(failure),
+        securityMaintenanceEpoch: null,
+        latestMainFrameSecurity: null,
+        latestMainFrameSecurityUnavailableReason: null,
+        recentConnectSecurityDecisions: []
+      });
+      await promptForNativeSetupOnce();
+    } else if (localCaRequired) {
       setStatus({
         state: "blocked",
         reason: "localCaRequired",
@@ -960,6 +1025,10 @@ async function startRuntime(policyOverride) {
       setStatus({
         state: "degraded",
         reason: boundedError(failure),
+        nativeComponentState:
+          nativeHelloAttempted && !nativeHelloReceived
+            ? "unavailable"
+            : publicStatus.nativeComponentState,
         proxyActive: false,
         headerSyncInProgress: false,
         headerSyncError: "Proxy activation requires current validated headers",
@@ -2588,8 +2657,11 @@ function setStatus(update) {
   publicStatus = Object.freeze({ ...publicStatus, ...update });
   const proxyReady =
     publicStatus.state === "active" && publicStatus.proxyActive === true;
+  const nativeUpdateRequired =
+    publicStatus.nativeComponentState === "versionMismatch" ||
+    publicStatus.nativeComponentState === "incompatible";
   void chrome.action.setBadgeText({
-    text: proxyReady ? "HNS" : "!"
+    text: proxyReady ? "HNS" : nativeUpdateRequired ? "UP" : "!"
   });
   void chrome.action.setBadgeBackgroundColor({
     color: proxyReady ? "#177245" : "#9b2c2c"
@@ -2612,6 +2684,54 @@ function storageSet(values) {
 function storageRemove(keys) {
   const boundedKeys = keys.filter((key) => LEGACY_HNS_DOH_KEYS.includes(key));
   return chromeCall(chrome.storage.local.remove, chrome.storage.local, boundedKeys);
+}
+
+async function promptForNativeSetupOnce() {
+  if (
+    !nativeSetupPromptRequired(
+      nativeSetupPromptedVersion,
+      EXTENSION_VERSION
+    )
+  ) {
+    return;
+  }
+  try {
+    const stored = await chromeCall(
+      chrome.storage.session.get,
+      chrome.storage.session,
+      [NATIVE_SETUP_PROMPTED_VERSION_KEY]
+    );
+    if (
+      !nativeSetupPromptRequired(
+        stored?.[NATIVE_SETUP_PROMPTED_VERSION_KEY],
+        EXTENSION_VERSION
+      )
+    ) {
+      nativeSetupPromptedVersion = EXTENSION_VERSION;
+      return;
+    }
+    await chromeCall(
+      chrome.storage.session.set,
+      chrome.storage.session,
+      { [NATIVE_SETUP_PROMPTED_VERSION_KEY]: EXTENSION_VERSION }
+    );
+  } catch {
+    // The in-memory marker still prevents a prompt loop in this worker.
+  }
+  nativeSetupPromptedVersion = EXTENSION_VERSION;
+  const setupUrl = new URL(chrome.runtime.getURL("src/setup.html"));
+  setupUrl.searchParams.set("reason", "native-component-update");
+  if (typeof publicStatus.nativeHostVersion === "string") {
+    setupUrl.searchParams.set("installed", publicStatus.nativeHostVersion);
+  }
+  setupUrl.hash = "install";
+  try {
+    await chromeCall(chrome.tabs.create, chrome.tabs, {
+      url: setupUrl.href
+    });
+  } catch {
+    // The popup continues to expose the same Setup action if tab creation fails.
+  }
 }
 
 async function captureCompletedMainFrame(details) {

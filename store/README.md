@@ -18,12 +18,15 @@ Extension store submissions.
 - **Chromium:** use the canonical-ID `-mv3.zip` GitHub Release asset in
   developer/managed deployment together with the matching native-host bundle.
 
-Both ZIPs contain the same JavaScript. The first-submission `-mv3-store.zip`
+Both ZIPs contain the same JavaScript and all six finalized Setup archives.
+The first-submission `-mv3-store.zip`
 omits the manifest `key` so each catalog can assign its own extension ID. The
 GitHub/unpacked `-mv3.zip` includes only the committed public key—never the
 private key—so it derives the canonical development ID. The user must pass
-every exact installed catalog ID to the native-host installer so its
-`allowed_origins` list stays exact.
+no ID in the normal flow: the release build bakes the canonical and configured
+Chrome, Edge, and Opera IDs into Setup so its `allowed_origins` list stays
+exact. A dashboard-assigned ID must be configured and a new release candidate
+built before submission or review; it is never inferred from browser profiles.
 
 ## Files
 
@@ -41,14 +44,20 @@ every exact installed catalog ID to the native-host installer so its
 
 Run `scripts/generate-chromium-store-assets.sh` to regenerate every derivative.
 Run the release packaging script to create both ZIPs with `manifest.json` at
-their root. Never use the canonical-ID `-mv3.zip` for a first catalog
-submission; use the explicitly keyless `-mv3-store.zip`.
+their root. Packaging accepts only the six final platform archives, verifies
+their hashes/signing state and snapshot metadata, writes
+`installers/index.json`, and embeds them below `installers/`. Never use the
+canonical-ID `-mv3.zip` for a first catalog submission; use the explicitly
+keyless `-mv3-store.zip`.
 
 ## Public URLs
 
-- Homepage/source: <https://github.com/handshake-rs/hns-dane-browser-extension>
+- Homepage: <https://denuoweb.com/work/hns-dane-browser-extension>
+- Source: <https://github.com/handshake-rs/hns-dane-browser-extension>
 - Privacy policy:
-  <https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md>
+  <https://denuoweb.com/work/hns-dane-browser-extension/privacy>
+- License and user agreement:
+  <https://denuoweb.com/work/hns-dane-browser-extension/legal>
 - Support: <https://github.com/handshake-rs/hns-dane-browser-extension/issues>
 - License:
   <https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/LICENSE>
@@ -58,9 +67,8 @@ submission; use the explicitly keyless `-mv3-store.zip`.
 - HNS donation:
   `handshake:hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh`
 
-The older hosted Denuo Web privacy page describes the mobile applications and
-must not be used for the desktop listing until it is replaced with the current
-desktop policy.
+The desktop extension and mobile applications have separate product-specific
+privacy and legal pages. Use the extension URLs above for every desktop store.
 
 ## Dashboard-only blockers
 
@@ -70,11 +78,13 @@ verification, dashboard privacy declarations, and store review remain
 credentialed external steps. Chrome's current listing checklist also calls for
 a YouTube feature-video URL; recording approval, upload, and the final URL
 remain a Denuo Web account step and are intentionally not fabricated here.
-The published v0.5.5 macOS native-host and Setup assets are Developer ID
-signed and Apple-notarized (Setup tickets are stapled; standalone native hosts
-use Apple's online ticket). Windows v0.5.5 assets remain unsigned because
-Authenticode credentials are not configured. A future tag's initial macOS
-output is unsigned until its credentialed replacement workflow completes, so
-each release must retain its own accurate signing labels. The signing jobs use
-the protected `macos-signing` environment; the write-enabled `release`
-environment still needs protection rules.
+Store submission is blocked until the exact Windows installers embedded in the
+ZIP carry the pinned project self-signed Authenticode identity and RFC 3161
+SHA-256 timestamp, the exact macOS installers are Developer ID-signed,
+notarized, and stapled, and the exact Linux archives have GitHub
+build-provenance attestations. The Windows certificate is not publicly trusted,
+so listing and Setup copy must disclose possible SmartScreen/**Unknown
+Publisher** warnings and provide both the archive SHA-256 and publisher
+certificate fingerprint. The final extension ZIP is assembled only after
+those platform jobs; later asset replacement cannot create a different
+installer than the one reviewers and users receive.

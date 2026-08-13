@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Privacy and legal · HNS DANE Browser</title>
+    <link rel="stylesheet" href="ui.css">
+  </head>
+  <body>
+    <main class="panel wide">
+      <p class="eyebrow">ABOUT, LEGAL, AND SUPPORT</p>
+      <h1>Privacy and legal</h1>
+      <p class="lede">
+        These disclosures and notices are packaged with HNS DANE Browser
+        <span id="legal-version">for this installed version</span>, so the exact release
+        documents remain readable offline.
+      </p>
+
+      <nav class="legal-nav" aria-label="Legal documents">
+        <a href="#privacy">Privacy policy</a>
+        <a href="#license">License</a>
+        <a href="#agreement">User agreement</a>
+        <a href="#notices">Third-party notices</a>
+      </nav>
+
+      <section id="privacy" class="setup-card legal-section">
+        <h2>Privacy policy</h2>
+        <p>
+          HNS DANE Browser has no developer-operated telemetry, analytics, advertising,
+          account, or browsing-history service. Resolution necessarily discloses queries and
+          connection metadata to the network operators identified in the full policy. Optional
+          P2P relay use is off by default, and recursive HNS DoH is not contacted unless you
+          enter and apply its URL in Settings.
+        </p>
+        <p class="link-stack">
+          <a href="https://denuoweb.com/work/hns-dane-browser-extension/privacy" target="_blank" rel="noopener noreferrer">Current public privacy policy</a>
+          <a href="../PRIVACY.md" target="_blank">Open this build's bundled policy as a file</a>
+        </p>
+        <details data-legal-document="privacy">
+          <summary>Read this build's bundled privacy policy</summary>
+          <pre id="privacy-document" class="legal-document" role="document">Loading bundled privacy policy…</pre>
+        </details>
+      </section>
+
+      <section id="license" class="setup-card legal-section">
+        <h2>License</h2>
+        <p>
+          HNS DANE Browser is source-available under the PolyForm Noncommercial License 1.0.0.
+          Noncommercial use, study, modification, and redistribution are allowed under the
+          license. Commercial use requires separate written permission from Denuo Web, LLC.
+        </p>
+        <p>
+          <a href="../LICENSE" target="_blank">Open this build's bundled license as a file</a>
+        </p>
+        <details data-legal-document="license">
+          <summary>Read the bundled license</summary>
+          <pre id="license-document" class="legal-document" role="document">Loading bundled license…</pre>
+        </details>
+      </section>
+
+      <section id="agreement" class="setup-card legal-section">
+        <h2>User agreement</h2>
+        <p>
+          This is experimental Handshake-first browser software. Its extension and matching
+          local native component perform dual-root resolution, local Handshake proof and DNSSEC
+          validation, TLSA/DANE enforcement, and authenticated loopback proxying. Resolution,
+          validation, proxy operation, optional relay or recovery transports, setup, and header
+          synchronization may fail closed or be incomplete.
+        </p>
+        <p>
+          Handshake WebPKI fallback is prohibited. Optional relay and recovery answers never
+          bypass local DNSSEC, TLSA, or DANE validation. Where the native policy selects defined
+          ICANN WebPKI fallback, Chromium owns the end-to-end public-certificate connection.
+          The requester-only P2P relay does not make this device an output node.
+        </p>
+        <p>
+          This release's Setup does not contain or install a wallet service. Current provider
+          and value operations remain unavailable unless a separately released wallet service passes
+          its native authenticity, version, and browser-authority gates. Any future qualified
+          wallet service would remain separate and opt-in, and each value-bearing website request
+          would remain approval-gated. HNS DANE Browser does not guarantee assets, name ownership,
+          transaction settlement, website availability, or network availability, and is not a
+          financial service. The software is provided without warranties except where applicable
+          law requires otherwise. The bundled license contains the controlling license terms.
+        </p>
+      </section>
+
+      <section id="notices" class="setup-card legal-section">
+        <h2>Third-party notices</h2>
+        <p>
+          The release includes third-party software under the licenses and attribution notices
+          reproduced in the bundled notice file.
+        </p>
+        <p>
+          <a href="../THIRD_PARTY_NOTICES.txt" target="_blank">Open bundled third-party notices as a file</a>
+        </p>
+        <details data-legal-document="notices">
+          <summary>Read bundled third-party notices</summary>
+          <pre id="notices-document" class="legal-document" role="document">Loading bundled third-party notices…</pre>
+        </details>
+      </section>
+
+      <section class="project-links">
+        <h2>Project and support</h2>
+        <p>
+          <a href="https://denuoweb.com/work/hns-dane-browser-extension" target="_blank" rel="noopener noreferrer">Product page</a>
+          <a href="https://denuoweb.com/work/hns-dane-browser-extension/legal" target="_blank" rel="noopener noreferrer">Current public legal page</a>
+          <a href="https://github.com/handshake-rs/hns-dane-browser-extension" target="_blank" rel="noopener noreferrer">Source code</a>
+          <a href="https://github.com/handshake-rs/hns-dane-browser-extension/issues" target="_blank" rel="noopener noreferrer">Support and bug reports</a>
+          <a href="setup.html">Setup and Complete Uninstall</a>
+        </p>
+      </section>
+    </main>
+    <script type="module" src="legal.js"></script>
+  </body>
+</html>

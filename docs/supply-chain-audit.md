@@ -32,9 +32,10 @@ desktop notices. Mobile build and release evidence is maintained in
 - External GitHub Actions are pinned to full commit SHAs. Normal policy,
   build, test, and packaging jobs have read-only permissions; only the
   final release publishers receive the narrowly required release-write
-  permission. The macOS signing jobs themselves run behind the
-  default-branch-restricted `macos-signing` environment; the final asset
-  replacement job uses the separate `release` environment described below.
+  permission. The macOS signing jobs themselves run behind the `macos-signing`
+  environment restricted to `main` and `v*` tags; the final publisher and
+  historical replacement job use the separate `release` environment described
+  below.
 - Dependabot watches GitHub Actions and Cargo.
 
 The default-branch-only macOS replacement workflow normalizes a modern OpenSSL
@@ -45,13 +46,13 @@ Setup notarization submissions are queued together and conservatively polled
 through transient Apple status-network failures. Submission IDs, status, and
 logs are retained even when a signing job fails.
 
-The `macos-signing` environment is branch-restricted. The final `replace` job
-has `contents: write` and uses the `release` environment, which currently has
-no environment protection rules or branch policy. Workflow validation still
-requires an explicit replacement confirmation, the canonical repository,
-current default branch, exact tag/source/version identity, and bounded asset
-replacement. Protect and default-branch-restrict the `release` environment to
-make publisher approval enforcement match the signing-job boundary.
+The `macos-signing` environment permits only `main` and `v*` tags. The final
+publisher and historical `replace` jobs have `contents: write` and use the
+separate `release` environment, which has the same branch/tag restriction.
+Workflow validation additionally requires the canonical repository, exact
+tag/source/version identity, and bounded publication; historical replacement
+also requires an explicit confirmation. No required reviewer is configured,
+so administrators can add one if a second human approval is desired.
 
 ## Notices
 
@@ -87,6 +88,7 @@ cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
 cargo +1.92.0 build --locked --release \
   --manifest-path rust/Cargo.toml -p hns-chromium-native-host
 HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
+HNS_HEADER_SNAPSHOT_PATH="$PWD/release/hns_headers_300000.snapshot.gzip" \
   cargo +1.92.0 build --locked --release \
     --manifest-path rust/Cargo.toml -p hns-browser-setup \
     --features embedded-host
@@ -149,8 +151,13 @@ See the exact hashes and retained boundary in
   x64, Windows, macOS, or store distribution until the corresponding target
   gates are run.
 - Store signing and review require external credentials and policy decisions;
-  source CI must not fabricate their completion. The published v0.5.5 macOS
-  native-host and Setup assets completed Developer ID signing and Apple
-  notarization on 2026-07-29; Windows artifacts remain unsigned.
+  source CI must not fabricate their completion. The release workflow now
+  fails closed unless the exact pinned self-signed Windows Authenticode/RFC
+  3161 identity, macOS Developer ID and notarization/stapling, and Linux
+  keyless provenance all complete before the six exact Setup archives are
+  embedded in the extension ZIP. Self-signing proves continuity with the
+  published project key but does not create Windows public trust or suppress
+  SmartScreen. Historical v0.5.5 Windows assets remain unsigned and are not
+  valid inputs to this gate.
 - An immutable Git revision is stronger than a branch selector but still
   requires deliberate review before changing either pinned HNS source commit.

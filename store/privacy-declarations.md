@@ -65,4 +65,4 @@ with the exact release before submission.
 - No developer account or server-side user profile exists.
 
 Privacy URL:
-`https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md`
+`https://denuoweb.com/work/hns-dane-browser-extension/privacy`

@@ -12,6 +12,10 @@ body {
     #0b1512;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .panel {
   box-sizing: border-box;
   padding: 24px;
@@ -139,6 +143,17 @@ button.secondary {
   background: transparent;
 }
 
+.button-link {
+  display: inline-block;
+  border: 1px solid #3a6654;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #177245;
+  color: #eef8f3;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -210,6 +225,35 @@ dd {
   margin-top: 0;
 }
 
+.setup-card:target {
+  border-color: #69d6a5;
+  box-shadow: 0 0 0 2px rgba(105, 214, 165, 0.2);
+}
+
+.uninstall-card {
+  margin: 22px 0;
+}
+
+.installer-details dd {
+  max-width: 60%;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.signing-warning {
+  margin-top: 18px;
+}
+
+.signing-warning p {
+  color: inherit;
+}
+
+.verification-values dd {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
 .setup-card p,
 .setup-card li,
 .project-links p {
@@ -231,6 +275,34 @@ dd {
 .link-stack {
   display: grid;
   gap: 6px;
+}
+
+.legal-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 22px 0;
+  padding: 14px 16px;
+  border: 1px solid #274238;
+  border-radius: 10px;
+  background: rgba(8, 16, 13, 0.72);
+}
+
+.legal-section {
+  margin: 16px 0;
+  scroll-margin-top: 16px;
+}
+
+.legal-section summary {
+  cursor: pointer;
+  color: #69d6a5;
+  font-weight: 700;
+}
+
+.legal-document {
+  max-height: 560px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 a {

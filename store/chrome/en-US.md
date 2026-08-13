@@ -4,11 +4,11 @@
 - Manifest summary: `Routes web DNS names through a local Rust dual-root DNSSEC and DANE runtime.`
 - Category: `Productivity`
 - Language: `English (United States)`
-- Homepage: `https://github.com/handshake-rs/hns-dane-browser-extension`
+- Homepage: `https://denuoweb.com/work/hns-dane-browser-extension`
 - Support: `https://github.com/handshake-rs/hns-dane-browser-extension/issues`
-- Privacy policy: `https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md`
-- Official URL: leave unset until a current desktop product page is published
-  on a verified Denuo Web domain.
+- Privacy policy: `https://denuoweb.com/work/hns-dane-browser-extension/privacy`
+- License and user agreement: `https://denuoweb.com/work/hns-dane-browser-extension/legal`
+- Official URL: `https://denuoweb.com/work/hns-dane-browser-extension`
 - Mature content: `No`
 - First-submission package:
   `hns-dane-browser-extension-v<version>-mv3-store.zip` (keyless)
@@ -43,12 +43,20 @@ Key capabilities:
   to local proof, DNSSEC, TLSA, and DANE verification.
 
 The extension requires the source-available HNS DANE Browser Setup application.
-Its version-matched Linux, macOS, and Windows packages contain the matching
-Rust native host, required non-system dependencies, and install one per-user
-local CA. The extension's first-install page links to the matching setup
-release and shows the exact catalog-specific extension ID that Setup must
-register. ChromeOS and mobile Chromium cannot use this native host. Android
-and iOS are separate products.
+The submitted extension ZIP contains signed/attested, version-matched Linux,
+macOS, and Windows Setup packages. The first-install page selects the one for
+the current computer and lets the user save it; the extension cannot launch
+it. Setup contains the matching Rust native host, a validated Handshake header
+bootstrap through height 300,000, required non-system dependencies, and the
+release-baked catalog IDs, and installs one per-user local CA. Its Complete
+Uninstall action is also reachable from the extension dropdown. ChromeOS and
+mobile Chromium cannot use this native host. Android and iOS are separate
+products.
+
+Windows executables use a project self-signed Authenticode certificate and an
+RFC 3161 SHA-256 timestamp. That publisher is not publicly trusted, so Windows
+SmartScreen or **Unknown Publisher** may warn; Setup displays the archive
+SHA-256 and published certificate fingerprint for verification.
 
 The project runs no advertising, analytics, telemetry, developer account, or
 browsing-history service. See the linked privacy policy for the DNS operators
@@ -58,7 +66,7 @@ Source:
 https://github.com/handshake-rs/hns-dane-browser-extension
 
 License:
-https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/LICENSE
+https://denuoweb.com/work/hns-dane-browser-extension/legal
 
 Optional donation:
 https://github.com/sponsors/denuoweb

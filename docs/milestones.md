@@ -85,9 +85,13 @@ change.
 - The published v0.5.5 macOS native-host and Setup packages completed
   Developer ID signing and Apple notarization on 2026-07-29. Credentialed jobs
   used the protected `macos-signing` environment; the separate write-enabled
-  `release` environment still needs protection rules. Setup tickets are
-  stapled; standalone native hosts use Apple's online ticket.
-- Windows release packages remain accurately labeled unsigned.
+  `release` environment now permits only `main` and `v*` tags. Setup tickets
+  are stapled; standalone native hosts use Apple's online ticket.
+- The 0.6.0 release path signs Windows packages with the persistent project
+  self-signed Authenticode certificate and RFC 3161 SHA-256 timestamps. The
+  certificate remains outside Windows public trust, so release and Setup copy
+  must preserve the SmartScreen/**Unknown Publisher** warning and publish both
+  archive and certificate fingerprints.
 
 ### Staged header maintenance and mandatory proxy lifecycle
 

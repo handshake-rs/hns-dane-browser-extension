@@ -42,10 +42,14 @@ writeFileSync(
       version: manifest.version,
       sourceRepository:
         "https://github.com/handshake-rs/hns-dane-browser-extension",
+      productHomepage:
+        "https://denuoweb.com/work/hns-dane-browser-extension",
       license: "PolyForm-Noncommercial-1.0.0",
       licenseFile: "LICENSE",
       privacyPolicy:
-        "https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md",
+        "https://denuoweb.com/work/hns-dane-browser-extension/privacy",
+      legal:
+        "https://denuoweb.com/work/hns-dane-browser-extension/legal",
       support:
         "https://github.com/handshake-rs/hns-dane-browser-extension/issues",
       donations: "https://github.com/sponsors/denuoweb",

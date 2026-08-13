@@ -238,11 +238,13 @@ state atomically before returning the minimized snapshot.
 
 ## Setup and runtime separation
 
-Each released setup target embeds the native host built for the same tag,
-operating system, and CPU. Setup accepts exact extension IDs and explicit
-browser selections, performs user-level registration and CA trust, and writes
-a bounded pre-trust ownership transaction followed by a completed receipt for
-repair and exact removal. It downloads no executable payload.
+Each released setup target embeds the native host and canonical height-300,000
+mainnet header snapshot built for the same tag, operating system, and CPU.
+Setup starts with the exact canonical and catalog extension IDs baked into the
+release, accepts explicit advanced additions and browser selections, performs
+user-level registration and CA trust, and writes a bounded pre-trust ownership
+transaction followed by a completed receipt for repair and exact removal. It
+downloads no executable or bootstrap payload.
 
 Browser selections are compatibility intent rather than storage isolation.
 Opera's published native-messaging contract includes a Chrome registration
@@ -256,6 +258,13 @@ successful security result, authorize a namespace decision, or weaken the
 runtime fail-closed policy. The extension still requires the native host's
 current session, policy generation, CA marker, and checked status on every
 active runtime.
+
+The extension and native host share one release version. The worker validates
+the `hello` response before requesting runtime activation. An absent,
+malformed, older, or newer native component leaves the fixed blocking gate in
+place, publishes a structured update-required status, and opens the embedded
+Setup handoff at most once per browser session for that required version. It
+never treats an incompatible host as a degraded-but-routable runtime.
 
 ## Wallet ABI boundary
 

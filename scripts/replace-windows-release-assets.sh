@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+windows_signer_metadata="$source_root/release/windows-self-signed-code-signing.json"
+windows_signer_certificate="$source_root/release/windows-self-signed-code-signing.cer"
+if [[ ! -f "$windows_signer_metadata" ||
+      ! -f "$windows_signer_certificate" ]]; then
+  echo "::error::Pinned Windows self-signed certificate evidence is missing."
+  exit 1
+fi
+windows_signer_subject="$(jq -er '.subject' "$windows_signer_metadata")"
+windows_signer_sha256="$(jq -er '.certificateSha256' "$windows_signer_metadata")"
+actual_windows_signer_sha256="$(
+  sha256sum "$windows_signer_certificate" | cut -d ' ' -f1
+)"
+if [[ ! "$windows_signer_sha256" =~ ^[a-f0-9]{64}$ ||
+      "$actual_windows_signer_sha256" != "$windows_signer_sha256" ]]; then
+  echo "::error::Pinned Windows self-signed certificate evidence is invalid."
+  exit 1
+fi
+
 required_environment=(
   ASSET_DIR
   BACKUP_DIR
@@ -125,12 +144,22 @@ for architecture in x64 arm64; do
       "${setup_archive%.zip}/RELEASE-METADATA.json"
   )"
   jq -e \
-    '.nativeHost.codeSigningStatus == "authenticodeSigned" and
-     .nativeHost.timestampStatus == "rfc3161Sha256"' \
+    --arg subject "$windows_signer_subject" \
+    --arg fingerprint "$windows_signer_sha256" \
+    '.nativeHost.codeSigningStatus == "selfSignedAuthenticode" and
+     .nativeHost.certificateTrust == "notPubliclyTrusted" and
+     .nativeHost.timestampStatus == "rfc3161Sha256" and
+     .nativeHost.signerSubject == $subject and
+     .nativeHost.signerCertificateSha256 == $fingerprint' \
     <<<"$native_metadata" >/dev/null
   jq -e \
-    '.setup.codeSigningStatus == "authenticodeSigned" and
-     .setup.timestampStatus == "rfc3161Sha256"' \
+    --arg subject "$windows_signer_subject" \
+    --arg fingerprint "$windows_signer_sha256" \
+    '.setup.codeSigningStatus == "selfSignedAuthenticode" and
+     .setup.certificateTrust == "notPubliclyTrusted" and
+     .setup.timestampStatus == "rfc3161Sha256" and
+     .setup.signerSubject == $subject and
+     .setup.signerCertificateSha256 == $fingerprint' \
     <<<"$setup_metadata" >/dev/null
 done
 
@@ -238,16 +267,20 @@ done
 
 notes_file="$workspace/release-notes.md"
 jq -r '.body // ""' "$release_json" >"$notes_file"
-python3 - "$notes_file" <<'PY'
+python3 - "$notes_file" "$windows_signer_sha256" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
+fingerprint = sys.argv[2]
 text = path.read_text(encoding="utf-8")
 old = "Automated Windows bundles are unsigned."
 new = (
-    "Windows native hosts and setup executables are Authenticode signed by "
-    "the project publisher and carry RFC 3161 SHA-256 timestamps."
+    "Windows native hosts and setup executables carry the project's "
+    "self-signed Authenticode signature and RFC 3161 SHA-256 timestamps. "
+    "The certificate is not publicly trusted, so SmartScreen or Unknown "
+    "Publisher warnings may appear. Verify the archive SHA-256 and published "
+    f"certificate fingerprint {fingerprint}."
 )
 if old not in text:
     raise SystemExit("published release notes lack the expected Windows signing disclosure")
@@ -261,7 +294,7 @@ gh api \
 gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" \
   >"$BACKUP_DIR/release-after-windows-signing.json"
 if ! jq -er '.body' "$BACKUP_DIR/release-after-windows-signing.json" |
-  grep -Fq "Authenticode signed by the project publisher"; then
+  grep -Fq "self-signed Authenticode signature"; then
   echo "::error::The final release notes do not disclose Windows signing."
   exit 1
 fi

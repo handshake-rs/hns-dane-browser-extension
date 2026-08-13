@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import gzip
 import hashlib
+import importlib.util
+import io
 import json
 from pathlib import Path
 import stat
@@ -21,7 +23,25 @@ EPOCH = "1700000000"
 IDENTITY = json.loads(
     (ROOT / "release/extension-identity.json").read_text(encoding="utf-8")
 )
+WINDOWS_SIGNING_IDENTITY = json.loads(
+    (ROOT / "release/windows-self-signed-code-signing.json").read_text(
+        encoding="utf-8"
+    )
+)
+WINDOWS_SIGNER_SUBJECT = WINDOWS_SIGNING_IDENTITY["subject"]
+WINDOWS_SIGNER_SHA256 = WINDOWS_SIGNING_IDENTITY["certificateSha256"]
+WINDOWS_TIMESTAMP_CERTIFICATE_SHA256 = "1" * 64
 CANONICAL_ID = IDENTITY["canonicalId"]
+HEADER_SNAPSHOT = {
+    "format": "HNSHDRSNAP1",
+    "height": 300000,
+    "headerCount": 300001,
+    "sha256": "0ff3484e1dede5bc34ce41206b70934b809791927b5ad82a4dac08412ec1fdd1",
+    "size": 35030894,
+    "uncompressedSha256": "ff7c042b2f5d6dd035e0e083f0f31dd4dafb279288c0e929e092b71ce288d388",
+    "uncompressedSize": 70800287,
+    "tipHash": "000000000000000c346b203c4dd866a6881a829c9dca10be1f597bb38e132ba9",
+}
 
 
 def fake_native_binary(platform: str, architecture: str) -> bytes:
@@ -43,6 +63,41 @@ def fake_native_binary(platform: str, architecture: str) -> bytes:
         machine = 0x01000007 if architecture == "x64" else 0x0100000C
         binary[4:8] = machine.to_bytes(4, "little")
     return bytes(binary)
+
+
+def write_windows_signing_evidence(
+    destination: Path,
+    binary: Path,
+    *,
+    files: list[dict[str, object]] | None = None,
+    top_level_overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        "schemaVersion": 1,
+        "codeSigningStatus": "selfSignedAuthenticode",
+        "certificateTrust": "notPubliclyTrusted",
+        "timestampStatus": "rfc3161Sha256",
+        "signerSubject": WINDOWS_SIGNER_SUBJECT,
+        "signerCertificateSha256": WINDOWS_SIGNER_SHA256,
+        "files": files
+        if files is not None
+        else [
+            {
+                "fileName": binary.name,
+                "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                "signatureType": "Authenticode",
+                "timestampCertificateSha256": (
+                    WINDOWS_TIMESTAMP_CERTIFICATE_SHA256
+                ),
+            }
+        ],
+    }
+    evidence.update(top_level_overrides or {})
+    destination.write_text(
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return evidence
 
 
 LINUX_RUNTIME_LIBRARIES = (
@@ -87,10 +142,13 @@ def fake_setup_binary(
     architecture: str,
     native_host: bytes,
 ) -> bytes:
+    snapshot = (ROOT / "release/hns_headers_300000.snapshot.gzip").read_bytes()
     return (
         fake_native_binary(platform, architecture)
         + b"\0embedded-native-host\0"
         + native_host
+        + b"\0embedded-header-snapshot\0"
+        + snapshot
     )
 
 
@@ -140,6 +198,96 @@ def write_fake_linux_runtime(directory: Path) -> None:
     )
 
 
+def write_fake_setup_archives(
+    directory: Path,
+    version: str,
+    *,
+    source_tag: str | None,
+    unsigned_platform: str | None = None,
+    windows_metadata_overrides: dict[str, object | None] | None = None,
+) -> None:
+    directory.mkdir(parents=True)
+    source: dict[str, object] = {"commit": COMMIT}
+    if source_tag is None:
+        source["qualificationCandidate"] = True
+    else:
+        source["tag"] = source_tag
+    for platform in ("linux", "macos", "windows"):
+        suffix = ".zip" if platform == "windows" else ".tar.gz"
+        for architecture in ("x64", "arm64"):
+            stem = (
+                f"hns-dane-browser-setup-v{version}-{platform}-{architecture}"
+            )
+            setup = {
+                "architecture": architecture,
+                "bootstrapSnapshot": HEADER_SNAPSHOT,
+                "codeSigningStatus": (
+                    "developerIdSigned"
+                    if platform == "macos"
+                    else (
+                        "selfSignedAuthenticode"
+                        if platform == "windows"
+                        else "notApplicable"
+                    )
+                ),
+                "notarizationStatus": (
+                    "acceptedAndStapled" if platform == "macos" else "notApplicable"
+                ),
+                "platform": platform,
+                "timestampStatus": (
+                    "rfc3161Sha256" if platform == "windows" else "notApplicable"
+                ),
+            }
+            if platform == "windows":
+                setup.update(
+                    {
+                        "certificateTrust": "notPubliclyTrusted",
+                        "signerSubject": WINDOWS_SIGNER_SUBJECT,
+                        "signerCertificateSha256": WINDOWS_SIGNER_SHA256,
+                    }
+                )
+                for key, value in (windows_metadata_overrides or {}).items():
+                    if value is None:
+                        setup.pop(key, None)
+                    else:
+                        setup[key] = value
+            if platform == unsigned_platform:
+                setup["codeSigningStatus"] = "unsigned"
+                if platform == "macos":
+                    setup["notarizationStatus"] = "notNotarized"
+                if platform == "windows":
+                    setup["timestampStatus"] = "notApplicable"
+                    setup["certificateTrust"] = "notApplicable"
+                    setup.pop("signerSubject", None)
+                    setup.pop("signerCertificateSha256", None)
+            metadata = json.dumps(
+                {
+                    "version": version,
+                    "source": source,
+                    "extension": {
+                        "nativeRegistrationIds": [CANONICAL_ID, EXTENSION_ID]
+                    },
+                    "setup": setup,
+                },
+                indent=2,
+                sort_keys=True,
+            ).encode()
+            destination = directory / f"{stem}{suffix}"
+            if platform == "windows":
+                with zipfile.ZipFile(destination, "w") as archive:
+                    archive.writestr(f"{stem}/RELEASE-METADATA.json", metadata)
+            else:
+                with tarfile.open(destination, "w:gz") as archive:
+                    info = tarfile.TarInfo(f"{stem}/RELEASE-METADATA.json")
+                    info.size = len(metadata)
+                    archive.addfile(info, io.BytesIO(metadata))
+            digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+            (directory / f"{destination.name}.sha256").write_text(
+                f"{digest}  {destination.name}\n",
+                encoding="ascii",
+            )
+
+
 class ReleasePackagingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -178,6 +326,152 @@ class ReleasePackagingTests(unittest.TestCase):
             EXTENSION_ID,
         ]
 
+    def test_windows_self_signed_identity_is_hash_pinned(self) -> None:
+        certificate = (
+            ROOT / "release/windows-self-signed-code-signing.cer"
+        ).read_bytes()
+        self.assertEqual(
+            hashlib.sha256(certificate).hexdigest(),
+            WINDOWS_SIGNER_SHA256,
+        )
+        specification = importlib.util.spec_from_file_location(
+            "hns_release_packager",
+            PACKAGER,
+        )
+        self.assertIsNotNone(specification)
+        self.assertIsNotNone(specification.loader)
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release = root / "release"
+            release.mkdir()
+            metadata_path = release / "windows-self-signed-code-signing.json"
+            certificate_path = release / "windows-self-signed-code-signing.cer"
+            metadata_path.write_text(
+                json.dumps(WINDOWS_SIGNING_IDENTITY),
+                encoding="utf-8",
+            )
+            certificate_path.write_bytes(certificate)
+            identity = module.load_windows_self_signed_identity(root)
+            self.assertEqual(identity["signerSubject"], WINDOWS_SIGNER_SUBJECT)
+            self.assertEqual(
+                identity["signerCertificateSha256"],
+                WINDOWS_SIGNER_SHA256,
+            )
+
+            certificate_path.write_bytes(certificate + b"corrupt")
+            with self.assertRaisesRegex(
+                module.PackagingError,
+                "public certificate SHA-256 does not match",
+            ):
+                module.load_windows_self_signed_identity(root)
+
+            certificate_path.write_bytes(certificate)
+            invalid_metadata = dict(WINDOWS_SIGNING_IDENTITY)
+            invalid_metadata["certificateSha256"] = "0" * 64
+            metadata_path.write_text(
+                json.dumps(invalid_metadata),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                module.PackagingError,
+                "public certificate SHA-256 does not match",
+            ):
+                module.load_windows_self_signed_identity(root)
+
+    def test_windows_signing_evidence_is_exactly_hash_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            binary = base / "hns-chromium-native-host.exe"
+            binary.write_bytes(fake_native_binary("windows", "x64"))
+            valid_path = base / "valid-evidence.json"
+            valid = write_windows_signing_evidence(valid_path, binary)
+            valid_file = dict(valid["files"][0])
+            invalid_cases = {
+                "hash mismatch": (
+                    [dict(valid_file, sha256="0" * 64)],
+                    None,
+                    "file does not match the current binary",
+                ),
+                "duplicate file": (
+                    [dict(valid_file), dict(valid_file)],
+                    None,
+                    "must describe exactly one file",
+                ),
+                "unlisted file": (
+                    [dict(valid_file, fileName="different.exe")],
+                    None,
+                    "file does not match the current binary",
+                ),
+                "generic signing state": (
+                    [dict(valid_file)],
+                    {"codeSigningStatus": "authenticodeSigned"},
+                    "does not match the exact project self-signed signing policy",
+                ),
+            }
+            for label, (files, overrides, expected_error) in invalid_cases.items():
+                with self.subTest(label=label):
+                    evidence = base / f"{label.replace(' ', '-')}.json"
+                    write_windows_signing_evidence(
+                        evidence,
+                        binary,
+                        files=files,
+                        top_level_overrides=overrides,
+                    )
+                    result = subprocess.run(
+                        [
+                            "python3",
+                            str(PACKAGER),
+                            "native",
+                            *self.common_arguments(base / "output"),
+                            "--platform",
+                            "windows",
+                            "--architecture",
+                            "x64",
+                            "--rust-target",
+                            "x86_64-pc-windows-msvc",
+                            "--native-host",
+                            str(binary),
+                            "--windows-signing-evidence",
+                            str(evidence),
+                        ],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(expected_error, result.stderr)
+
+            for obsolete_switch in (
+                "--windows-self-signed-authenticode",
+                "--windows-authenticode-signed",
+            ):
+                with self.subTest(obsolete_switch=obsolete_switch):
+                    result = subprocess.run(
+                        [
+                            "python3",
+                            str(PACKAGER),
+                            "native",
+                            *self.common_arguments(base / "old-switch-output"),
+                            "--platform",
+                            "windows",
+                            "--architecture",
+                            "x64",
+                            "--rust-target",
+                            "x86_64-pc-windows-msvc",
+                            "--native-host",
+                            str(binary),
+                            obsolete_switch,
+                        ],
+                        cwd=ROOT,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("unrecognized arguments", result.stderr)
+
     def test_extension_zip_is_deterministic_and_store_ready(self) -> None:
         public_key = base64.b64decode(
             IDENTITY["publicKeyDerBase64"],
@@ -190,10 +484,29 @@ class ReleasePackagingTests(unittest.TestCase):
         )
         self.assertEqual(CANONICAL_ID, derived_id)
         with tempfile.TemporaryDirectory() as temporary:
-            first = Path(temporary) / "first"
-            second = Path(temporary) / "second"
-            self.run_packager("extension", *self.common_arguments(first))
-            self.run_packager("extension", *self.common_arguments(second))
+            base = Path(temporary)
+            first = base / "first"
+            second = base / "second"
+            setup_dir = base / "setup"
+            write_fake_setup_archives(
+                setup_dir,
+                self.version,
+                source_tag=self.tag,
+            )
+            self.run_packager(
+                "extension",
+                *self.common_arguments(first),
+                "--setup-dir",
+                str(setup_dir),
+                "--linux-attestations-verified",
+            )
+            self.run_packager(
+                "extension",
+                *self.common_arguments(second),
+                "--setup-dir",
+                str(setup_dir),
+                "--linux-attestations-verified",
+            )
             name = f"hns-dane-browser-extension-v{self.version}-mv3.zip"
             first_archive = first / name
             second_archive = second / name
@@ -216,6 +529,43 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("LICENSE", names)
                 self.assertIn("RELEASE-METADATA.json", names)
                 self.assertIn("manifest.json", names)
+                self.assertIn("installers/index.json", names)
+                installer_index = json.loads(archive.read("installers/index.json"))
+                self.assertEqual(installer_index["schemaVersion"], 1)
+                self.assertEqual(installer_index["version"], self.version)
+                self.assertEqual(installer_index["snapshot"], HEADER_SNAPSHOT)
+                self.assertEqual(len(installer_index["installers"]), 6)
+                self.assertEqual(
+                    {entry["architecture"] for entry in installer_index["installers"]},
+                    {"x86_64", "aarch64"},
+                )
+                for installer in installer_index["installers"]:
+                    self.assertIn(installer["path"], names)
+                    payload = archive.read(installer["path"])
+                    self.assertEqual(len(payload), installer["size"])
+                    self.assertEqual(
+                        hashlib.sha256(payload).hexdigest(),
+                        installer["sha256"],
+                    )
+                    if installer["platform"] == "windows":
+                        self.assertEqual(
+                            installer["signingStatus"],
+                            "selfSignedAuthenticodeAndTimestamped",
+                        )
+                        self.assertEqual(
+                            installer["certificateTrust"],
+                            "notPubliclyTrusted",
+                        )
+                        self.assertEqual(
+                            installer["signerCertificateSha256"],
+                            WINDOWS_SIGNER_SHA256,
+                        )
+                    else:
+                        self.assertNotIn("certificateTrust", installer)
+                        self.assertNotIn(
+                            "signerCertificateSha256",
+                            installer,
+                        )
                 self.assertNotIn("key.pem", names)
                 manifest = json.loads(archive.read("manifest.json"))
                 metadata = json.loads(archive.read("RELEASE-METADATA.json"))
@@ -261,7 +611,14 @@ class ReleasePackagingTests(unittest.TestCase):
 
     def test_candidate_extension_metadata_claims_only_its_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary) / "candidate"
+            base = Path(temporary)
+            output = base / "candidate"
+            setup_dir = base / "setup"
+            write_fake_setup_archives(
+                setup_dir,
+                self.version,
+                source_tag=None,
+            )
             self.run_packager(
                 "extension",
                 "--output-dir",
@@ -273,6 +630,9 @@ class ReleasePackagingTests(unittest.TestCase):
                 "--candidate-source",
                 "--extension-id",
                 EXTENSION_ID,
+                "--setup-dir",
+                str(setup_dir),
+                "--linux-attestations-verified",
             )
             archive_path = (
                 output
@@ -291,6 +651,109 @@ class ReleasePackagingTests(unittest.TestCase):
                 f"hns-dane-browser-extension/blob/{COMMIT}/LICENSE",
             )
             self.assertNotIn("sourceTag", build_metadata)
+
+    def test_extension_packaging_rejects_unsigned_platform_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            setup_dir = base / "setup"
+            write_fake_setup_archives(
+                setup_dir,
+                self.version,
+                source_tag=self.tag,
+                unsigned_platform="windows",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PACKAGER),
+                    "extension",
+                    *self.common_arguments(base / "output"),
+                    "--setup-dir",
+                    str(setup_dir),
+                    "--linux-attestations-verified",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "Windows setup does not have the exact project self-signed "
+                "Authenticode identity",
+                result.stderr,
+            )
+
+    def test_extension_rejects_ambiguous_windows_signing_metadata(self) -> None:
+        invalid_states = {
+            "generic Authenticode": {
+                "codeSigningStatus": "authenticodeSigned"
+            },
+            "unsigned": {"codeSigningStatus": "unsigned"},
+            "missing timestamp": {"timestampStatus": None},
+            "missing trust": {"certificateTrust": None},
+            "missing fingerprint": {"signerCertificateSha256": None},
+            "different fingerprint": {
+                "signerCertificateSha256": "0" * 64
+            },
+        }
+        for label, overrides in invalid_states.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                base = Path(temporary)
+                setup_dir = base / "setup"
+                write_fake_setup_archives(
+                    setup_dir,
+                    self.version,
+                    source_tag=self.tag,
+                    windows_metadata_overrides=overrides,
+                )
+                result = subprocess.run(
+                    [
+                        "python3",
+                        str(PACKAGER),
+                        "extension",
+                        *self.common_arguments(base / "output"),
+                        "--setup-dir",
+                        str(setup_dir),
+                        "--linux-attestations-verified",
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "Windows setup does not have the exact project self-signed "
+                    "Authenticode identity",
+                    result.stderr,
+                )
+
+    def test_tagged_extension_requires_verified_linux_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            setup_dir = base / "setup"
+            write_fake_setup_archives(
+                setup_dir,
+                self.version,
+                source_tag=self.tag,
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PACKAGER),
+                    "extension",
+                    *self.common_arguments(base / "output"),
+                    "--setup-dir",
+                    str(setup_dir),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "Linux setup provenance must be verified",
+                result.stderr,
+            )
 
     def test_candidate_native_metadata_and_readme_are_commit_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -465,6 +928,8 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertIn("Windows bundle is unsigned", readme)
 
             signed_output = base / "signed-output"
+            signing_evidence = base / "native-signing-evidence.json"
+            write_windows_signing_evidence(signing_evidence, binary)
             self.run_packager(
                 "native",
                 *self.common_arguments(signed_output),
@@ -476,7 +941,8 @@ class ReleasePackagingTests(unittest.TestCase):
                 "aarch64-pc-windows-msvc",
                 "--native-host",
                 str(binary),
-                "--windows-authenticode-signed",
+                "--windows-signing-evidence",
+                str(signing_evidence),
             )
             with zipfile.ZipFile(
                 signed_output / f"{stem}.zip",
@@ -487,13 +953,29 @@ class ReleasePackagingTests(unittest.TestCase):
                 readme = archive.read(f"{stem}/README.md").decode()
                 self.assertEqual(
                     metadata["nativeHost"]["codeSigningStatus"],
-                    "authenticodeSigned",
+                    "selfSignedAuthenticode",
+                )
+                self.assertEqual(
+                    metadata["nativeHost"]["certificateTrust"],
+                    "notPubliclyTrusted",
                 )
                 self.assertEqual(
                     metadata["nativeHost"]["timestampStatus"],
                     "rfc3161Sha256",
                 )
-                self.assertIn("RFC 3161 SHA-256 timestamps", readme)
+                self.assertEqual(
+                    metadata["nativeHost"]["signerSubject"],
+                    WINDOWS_SIGNER_SUBJECT,
+                )
+                self.assertEqual(
+                    metadata["nativeHost"]["signerCertificateSha256"],
+                    WINDOWS_SIGNER_SHA256,
+                )
+                self.assertIn("self-signed Authenticode", readme)
+                self.assertIn("SmartScreen", readme)
+                self.assertIn("Unknown Publisher", readme)
+                self.assertIn("Verify the archive SHA-256", readme)
+                self.assertIn(WINDOWS_SIGNER_SHA256, readme)
                 self.assertNotIn("Windows bundle is unsigned", readme)
 
     def test_macos_bundle_discloses_signing_and_notarization_status(self) -> None:
@@ -751,6 +1233,8 @@ class ReleasePackagingTests(unittest.TestCase):
                 self.assertNotIn("Bundled Linux runtime licenses", readme)
 
             signed_output = base / "signed-output"
+            signing_evidence = base / "setup-signing-evidence.json"
+            write_windows_signing_evidence(signing_evidence, setup)
             self.run_packager(
                 "setup",
                 *self.common_arguments(signed_output),
@@ -766,7 +1250,8 @@ class ReleasePackagingTests(unittest.TestCase):
                 str(setup),
                 "--embedded-native-host",
                 str(native_host),
-                "--windows-authenticode-signed",
+                "--windows-signing-evidence",
+                str(signing_evidence),
             )
             with zipfile.ZipFile(
                 signed_output / f"{stem}.zip",
@@ -777,14 +1262,29 @@ class ReleasePackagingTests(unittest.TestCase):
                 readme = archive.read(f"{stem}/README.md").decode()
                 self.assertEqual(
                     metadata["setup"]["codeSigningStatus"],
-                    "authenticodeSigned",
+                    "selfSignedAuthenticode",
+                )
+                self.assertEqual(
+                    metadata["setup"]["certificateTrust"],
+                    "notPubliclyTrusted",
                 )
                 self.assertEqual(
                     metadata["setup"]["timestampStatus"],
                     "rfc3161Sha256",
                 )
-                self.assertIn("RFC 3161 SHA-256 timestamp", readme)
-                self.assertNotIn("SmartScreen may warn", readme)
+                self.assertEqual(
+                    metadata["setup"]["signerSubject"],
+                    WINDOWS_SIGNER_SUBJECT,
+                )
+                self.assertEqual(
+                    metadata["setup"]["signerCertificateSha256"],
+                    WINDOWS_SIGNER_SHA256,
+                )
+                self.assertIn("self-signed Authenticode", readme)
+                self.assertIn("SmartScreen", readme)
+                self.assertIn("Unknown Publisher", readme)
+                self.assertIn("Verify the archive SHA-256", readme)
+                self.assertIn(WINDOWS_SIGNER_SHA256, readme)
 
     def test_macos_setup_is_an_unsigned_system_framework_app(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -994,6 +1494,47 @@ class ReleasePackagingTests(unittest.TestCase):
                 result.stderr,
             )
 
+    def test_setup_rejects_a_missing_snapshot_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            native_bytes = fake_native_binary("windows", "x64")
+            native_host = base / "hns-chromium-native-host.exe"
+            native_host.write_bytes(native_bytes)
+            setup = base / "hns-dane-browser-setup.exe"
+            setup.write_bytes(
+                fake_native_binary("windows", "x64")
+                + b"\0embedded-native-host\0"
+                + native_bytes
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PACKAGER),
+                    "setup",
+                    *self.common_arguments(base / "output"),
+                    "--platform",
+                    "windows",
+                    "--architecture",
+                    "x64",
+                    "--native-rust-target",
+                    "x86_64-pc-windows-msvc",
+                    "--setup-rust-target",
+                    "x86_64-pc-windows-msvc",
+                    "--setup-executable",
+                    str(setup),
+                    "--embedded-native-host",
+                    str(native_host),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "does not contain the exact bootstrap snapshot payload",
+                result.stderr,
+            )
+
     def test_rejects_a_binary_whose_format_or_architecture_is_mislabeled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -1024,7 +1565,8 @@ class ReleasePackagingTests(unittest.TestCase):
 
     def test_rejects_placeholder_or_mismatched_extension_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            output = Path(temporary) / "output"
+            base = Path(temporary)
+            output = base / "output"
             result = subprocess.run(
                 [
                     "python3",
@@ -1040,6 +1582,9 @@ class ReleasePackagingTests(unittest.TestCase):
                     self.tag,
                     "--extension-id",
                     "replace-with-store-id",
+                    "--setup-dir",
+                    str(base / "missing-setup"),
+                    "--linux-attestations-verified",
                 ],
                 cwd=ROOT,
                 capture_output=True,

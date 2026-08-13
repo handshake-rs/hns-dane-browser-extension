@@ -22,6 +22,7 @@ jobs:
     outputs:
       canonical-extension-id: ${{ steps.validate.outputs.canonical-extension-id }}
       extension-id: ${{ steps.validate.outputs.extension-id }}
+      extension-ids: ${{ steps.validate.outputs.extension-ids }}
       release-state: ${{ steps.release.outputs.state }}
       version: ${{ steps.validate.outputs.version }}
       source-date-epoch: ${{ steps.validate.outputs.source-date-epoch }}
@@ -36,6 +37,9 @@ jobs:
         id: validate
         env:
           CONFIGURED_CATALOG_ID: ${{ vars.CHROMIUM_EXTENSION_ID }}
+          CHROME_CATALOG_ID: ${{ vars.CHROME_EXTENSION_ID }}
+          EDGE_CATALOG_ID: ${{ vars.EDGE_EXTENSION_ID }}
+          OPERA_CATALOG_ID: ${{ vars.OPERA_EXTENSION_ID }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RELEASE_TAG: ${{ github.ref_name }}
           SOURCE_COMMIT: ${{ github.sha }}
@@ -44,12 +48,35 @@ jobs:
           canonical_extension_id="$(
             jq -er '.canonicalId' release/extension-identity.json
           )"
-          extension_id="${CONFIGURED_CATALOG_ID:-$canonical_extension_id}"
-          if [[ ! "$canonical_extension_id" =~ ^[a-p]{32}$ ||
-                ! "$extension_id" =~ ^[a-p]{32}$ ]]; then
-            echo "::error::CHROMIUM_EXTENSION_ID, when set, must be the exact 32-character catalog ID."
+          if [[ ! "$canonical_extension_id" =~ ^[a-p]{32}$ ]]; then
+            echo "::error::The canonical extension ID is invalid."
             exit 1
           fi
+          catalog_ids=()
+          for extension_id in \
+            "$CONFIGURED_CATALOG_ID" \
+            "$CHROME_CATALOG_ID" \
+            "$EDGE_CATALOG_ID" \
+            "$OPERA_CATALOG_ID"; do
+            if [[ -z "$extension_id" ]]; then
+              continue
+            fi
+            if [[ ! "$extension_id" =~ ^[a-p]{32}$ ]]; then
+              echo "::error::Every configured catalog extension ID must contain exactly 32 characters from a through p."
+              exit 1
+            fi
+            if [[ " ${catalog_ids[*]-} " != *" $extension_id "* ]]; then
+              catalog_ids+=("$extension_id")
+            fi
+          done
+          extension_id="${catalog_ids[0]:-$canonical_extension_id}"
+          extension_ids=("$canonical_extension_id")
+          for candidate in "${catalog_ids[@]}"; do
+            if [[ "$candidate" != "$canonical_extension_id" ]]; then
+              extension_ids+=("$candidate")
+            fi
+          done
+          extension_ids_csv="$(IFS=,; echo "${extension_ids[*]}")"
           if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::GitHub supplied an invalid source commit."
             exit 1
@@ -85,6 +112,7 @@ jobs:
           {
             echo "canonical-extension-id=$canonical_extension_id"
             echo "extension-id=$extension_id"
+            echo "extension-ids=$extension_ids_csv"
             echo "version=$version"
             echo "source-date-epoch=$source_date_epoch"
           } >>"$GITHUB_OUTPUT"
@@ -163,12 +191,13 @@ jobs:
         run: bash scripts/check.sh
 
   extension:
-    name: Package browser-neutral MV3 extension
-    needs: prepare
+    name: Bundle finalized setup applications into the MV3 extension
+    needs: [prepare, native, signed_macos, signed_windows]
     if: ${{ needs.prepare.outputs.release-state != 'published' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
+      attestations: read
       contents: read
     steps:
       - name: Check out the tagged source
@@ -181,19 +210,35 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Build and validate deterministic release packaging
+      - name: Retrieve all finalized platform archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-platform-*
+          path: dist/platform-assets
+          merge-multiple: true
+
+      - name: Build the browser-neutral extension
         run: |
           set -euo pipefail
           npm run lint:extension
           npm run build:extension
-          python3 -m unittest -v \
-            tests/test_release_packaging.py \
-            tests/test_release_workflow.py \
-            tests/test_resign_windows_workflow.py
+
+      - name: Verify Linux keyless build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          for architecture in x64 arm64; do
+            gh attestation verify \
+              "dist/platform-assets/hns-dane-browser-setup-v${VERSION}-linux-${architecture}.tar.gz" \
+              --repo "$GITHUB_REPOSITORY"
+          done
 
       - name: Package the MV3 extension
         env:
           EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
           RELEASE_TAG: ${{ github.ref_name }}
           SOURCE_COMMIT: ${{ github.sha }}
           SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source-date-epoch }}
@@ -205,7 +250,10 @@ jobs:
             --source-date-epoch "$SOURCE_DATE_EPOCH" \
             --source-commit "$SOURCE_COMMIT" \
             --source-tag "$RELEASE_TAG" \
-            --extension-id "$EXTENSION_ID"
+            --extension-id "$EXTENSION_ID" \
+            --extension-ids "$EXTENSION_IDS" \
+            --setup-dir dist/platform-assets \
+            --linux-attestations-verified
           asset="dist/release/hns-dane-browser-extension-v${VERSION}-mv3.zip"
           store_asset="dist/release/hns-dane-browser-extension-v${VERSION}-mv3-store.zip"
           test -s "$asset"
@@ -246,40 +294,12 @@ jobs:
             musl-cc: aarch64-linux-musl-gcc
             binary-suffix: ""
             python: python3
-          - platform: windows
-            architecture: x64
-            runner: windows-2025
-            native-rust-target: x86_64-pc-windows-msvc
-            setup-rust-target: x86_64-pc-windows-msvc
-            binary-suffix: ".exe"
-            python: python
-          - platform: windows
-            architecture: arm64
-            runner: windows-11-arm
-            native-rust-target: aarch64-pc-windows-msvc
-            setup-rust-target: aarch64-pc-windows-msvc
-            binary-suffix: ".exe"
-            python: python
-          - platform: macos
-            architecture: x64
-            runner: macos-15-intel
-            native-rust-target: x86_64-apple-darwin
-            setup-rust-target: x86_64-apple-darwin
-            macos-deployment-target: "11.0"
-            binary-suffix: ""
-            python: python3
-          - platform: macos
-            architecture: arm64
-            runner: macos-15
-            native-rust-target: aarch64-apple-darwin
-            setup-rust-target: aarch64-apple-darwin
-            macos-deployment-target: "11.0"
-            binary-suffix: ""
-            python: python3
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     permissions:
+      attestations: write
       contents: read
+      id-token: write
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -340,6 +360,8 @@ jobs:
         shell: pwsh
         env:
           BINARY_SUFFIX: ${{ matrix.binary-suffix }}
+          HNS_EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
+          HNS_HEADER_SNAPSHOT_PATH: ${{ github.workspace }}/release/hns_headers_300000.snapshot.gzip
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos-deployment-target }}
           MUSL_CC: ${{ matrix.musl-cc }}
           NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
@@ -498,6 +520,7 @@ jobs:
           ARCHITECTURE: ${{ matrix.architecture }}
           BINARY_SUFFIX: ${{ matrix.binary-suffix }}
           EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
           NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
           PLATFORM: ${{ matrix.platform }}
           PYTHON_COMMAND: ${{ matrix.python }}
@@ -516,6 +539,7 @@ jobs:
             --source-commit $env:SOURCE_COMMIT `
             --source-tag $env:RELEASE_TAG `
             --extension-id $env:EXTENSION_ID `
+            --extension-ids $env:EXTENSION_IDS `
             --platform $env:PLATFORM `
             --architecture $env:ARCHITECTURE `
             --rust-target $env:NATIVE_RUST_TARGET `
@@ -531,6 +555,7 @@ jobs:
             '--source-commit', $env:SOURCE_COMMIT,
             '--source-tag', $env:RELEASE_TAG,
             '--extension-id', $env:EXTENSION_ID,
+            '--extension-ids', $env:EXTENSION_IDS,
             '--platform', $env:PLATFORM,
             '--architecture', $env:ARCHITECTURE,
             '--native-rust-target', $env:NATIVE_RUST_TARGET,
@@ -646,6 +671,12 @@ jobs:
             -n "release-smoke"
           "$app/AppRun" --status >/dev/null
 
+      - name: Attest the finalized Linux archives with GitHub OIDC
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/release/*.tar.gz
+          show-summary: false
+
       - name: Retain the platform release artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -655,9 +686,301 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+  signed_macos:
+    name: Sign, notarize, and staple macOS (${{ matrix.architecture }})
+    needs: [prepare, quality]
+    if: ${{ needs.prepare.outputs.release-state != 'published' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: macos-15-intel
+            native-rust-target: x86_64-apple-darwin
+            setup-rust-target: x86_64-apple-darwin
+          - architecture: arm64
+            runner: macos-15
+            native-rust-target: aarch64-apple-darwin
+            setup-rust-target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    environment: macos-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Build, sign, notarize, staple, and verify
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_NAME: ${{ vars.APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_NAME }}
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          APPLE_CERTIFICATE_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          APPLE_CERTIFICATE_SHA256: ${{ vars.APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_SHA256 }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ vars.APPLE_NOTARY_API_ISSUER_ID }}
+          APPLE_NOTARY_API_KEY_ID: ${{ vars.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_PRIVATE_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_PRIVATE_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+          EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
+          HNS_EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
+          HNS_HEADER_SNAPSHOT_PATH: ${{ github.workspace }}/release/hns_headers_300000.snapshot.gzip
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
+          OUTPUT_DIR: ${{ github.workspace }}/dist/signed
+          RELEASE_TAG: ${{ github.ref_name }}
+          SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source-date-epoch }}
+          SOURCE_ROOT: ${{ github.workspace }}
+          TOOLS_ROOT: ${{ github.workspace }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/build-signed-macos-release.sh
+
+      - name: Retain finalized macOS release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-platform-macos-${{ matrix.architecture }}
+          path: |
+            dist/signed/*.tar.gz
+            dist/signed/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Retain Apple notarization evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-notary-evidence-${{ matrix.architecture }}
+          path: dist/signed/notary-reports/*.json
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
+
+  signed_windows:
+    name: Self-sign and timestamp Windows (${{ matrix.architecture }})
+    needs: [prepare, quality]
+    if: ${{ needs.prepare.outputs.release-state != 'published' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            rust-target: x86_64-pc-windows-msvc
+          - architecture: arm64
+            rust-target: aarch64-pc-windows-msvc
+    runs-on: windows-2025
+    timeout-minutes: 120
+    environment: windows-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Build the static-CRT native host
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/import-msvc-environment.ps1 -Architecture $env:ARCHITECTURE
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup target add --toolchain 1.92.0 $env:RUST_TARGET
+          $env:RUSTFLAGS = (
+            "$env:RUSTFLAGS -C target-feature=+crt-static"
+          ).Trim()
+          cargo +1.92.0 build --locked --release `
+            --manifest-path rust/Cargo.toml `
+            -p hns-chromium-native-host `
+            --target $env:RUST_TARGET
+
+      - name: Self-sign and RFC 3161 timestamp the native host
+        shell: pwsh
+        env:
+          WINDOWS_AUTHENTICODE_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          WINDOWS_SELF_SIGNED_PFX_BASE64: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_BASE64 }}
+          WINDOWS_SELF_SIGNED_PFX_PASSWORD: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nativeHost = (
+            Resolve-Path "rust/target/${{ matrix.rust-target }}/release/hns-chromium-native-host.exe"
+          ).Path
+          & ./scripts/sign-self-signed-windows.ps1 `
+            -Path @($nativeHost) `
+            -PinnedCertificate 'release/windows-self-signed-code-signing.cer'
+
+      - name: Verify the signed host and build the embedded setup
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          HNS_EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
+          HNS_HEADER_SNAPSHOT_PATH: ${{ github.workspace }}\release\hns_headers_300000.snapshot.gzip
+          RUST_TARGET: ${{ matrix.rust-target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/import-msvc-environment.ps1 -Architecture $env:ARCHITECTURE
+          $nativeHost = (
+            Resolve-Path "rust/target/$env:RUST_TARGET/release/hns-chromium-native-host.exe"
+          ).Path
+          & ./scripts/verify-windows-binaries.ps1 `
+            -Path @($nativeHost) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+            -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer'
+          $env:RUSTFLAGS = (
+            "$env:RUSTFLAGS -C target-feature=+crt-static"
+          ).Trim()
+          $env:HNS_NATIVE_HOST_PATH = $nativeHost
+          cargo +1.92.0 build --locked --release `
+            --manifest-path rust/Cargo.toml `
+            -p hns-browser-setup `
+            --bin hns-dane-browser-setup `
+            --features embedded-host `
+            --target $env:RUST_TARGET
+
+      - name: Self-sign and RFC 3161 timestamp Setup
+        shell: pwsh
+        env:
+          WINDOWS_AUTHENTICODE_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          WINDOWS_SELF_SIGNED_PFX_BASE64: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_BASE64 }}
+          WINDOWS_SELF_SIGNED_PFX_PASSWORD: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = (
+            Resolve-Path "rust/target/${{ matrix.rust-target }}/release/hns-dane-browser-setup.exe"
+          ).Path
+          & ./scripts/sign-self-signed-windows.ps1 `
+            -Path @($setup) `
+            -PinnedCertificate 'release/windows-self-signed-code-signing.cer'
+
+      - name: Verify, smoke test, and package finalized Windows assets
+        shell: pwsh
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RUST_TARGET: ${{ matrix.rust-target }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source-date-epoch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nativeHost = (
+            Resolve-Path "rust/target/$env:RUST_TARGET/release/hns-chromium-native-host.exe"
+          ).Path
+          $setup = (
+            Resolve-Path "rust/target/$env:RUST_TARGET/release/hns-dane-browser-setup.exe"
+          ).Path
+          $output = "$env:GITHUB_WORKSPACE/dist/signed"
+          [void](New-Item -ItemType Directory -Path $output -Force)
+          $nativeEvidence = Join-Path `
+            $output `
+            "windows-native-host-signing-evidence-$env:ARCHITECTURE.json"
+          $setupEvidence = Join-Path `
+            $output `
+            "windows-setup-signing-evidence-$env:ARCHITECTURE.json"
+          & ./scripts/verify-windows-binaries.ps1 `
+            -Path @($nativeHost) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+            -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer' `
+            -EvidenceOutput $nativeEvidence
+          & ./scripts/verify-windows-binaries.ps1 `
+            -Path @($setup) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+            -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer' `
+            -EvidenceOutput $setupEvidence
+          if ($env:ARCHITECTURE -eq 'x64') {
+            & $setup --status | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw 'The signed Windows setup status check failed.'
+            }
+            $process = Start-Process `
+              -FilePath $setup `
+              -ArgumentList '--gui-smoke-test' `
+              -PassThru
+            try {
+              if (-not $process.WaitForExit(30000)) {
+                throw 'The signed Windows setup GUI smoke check timed out.'
+              }
+              if ($process.ExitCode -ne 0) {
+                throw "The signed Windows setup GUI smoke check failed: $($process.ExitCode)."
+              }
+            } finally {
+              if (-not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force
+              }
+            }
+          }
+          python scripts/package-release.py native `
+            --output-dir $output `
+            --source-date-epoch $env:SOURCE_DATE_EPOCH `
+            --source-commit $env:SOURCE_COMMIT `
+            --source-tag $env:RELEASE_TAG `
+            --extension-id $env:EXTENSION_ID `
+            --extension-ids $env:EXTENSION_IDS `
+            --platform windows `
+            --architecture $env:ARCHITECTURE `
+            --rust-target $env:RUST_TARGET `
+            --native-host $nativeHost `
+            --windows-signing-evidence $nativeEvidence
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Signed Windows native-host packaging failed.'
+          }
+          python scripts/package-release.py setup `
+            --output-dir $output `
+            --source-date-epoch $env:SOURCE_DATE_EPOCH `
+            --source-commit $env:SOURCE_COMMIT `
+            --source-tag $env:RELEASE_TAG `
+            --extension-id $env:EXTENSION_ID `
+            --extension-ids $env:EXTENSION_IDS `
+            --platform windows `
+            --architecture $env:ARCHITECTURE `
+            --native-rust-target $env:RUST_TARGET `
+            --setup-rust-target $env:RUST_TARGET `
+            --setup-executable $setup `
+            --embedded-native-host $nativeHost `
+            --windows-signing-evidence $setupEvidence
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Signed Windows setup packaging failed.'
+          }
+
+      - name: Retain finalized Windows release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-platform-windows-${{ matrix.architecture }}
+          path: |
+            dist/signed/*.zip
+            dist/signed/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
   publish:
     name: Verify assets and publish release
-    needs: [prepare, quality, extension, native]
+    needs: [prepare, quality, extension, native, signed_macos, signed_windows]
     if: ${{ always() && needs.prepare.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -670,6 +993,8 @@ jobs:
           EXTENSION_RESULT: ${{ needs.extension.result }}
           NATIVE_RESULT: ${{ needs.native.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
+          SIGNED_MACOS_RESULT: ${{ needs.signed_macos.result }}
+          SIGNED_WINDOWS_RESULT: ${{ needs.signed_windows.result }}
           RELEASE_STATE: ${{ needs.prepare.outputs.release-state }}
         run: |
           set -euo pipefail
@@ -678,10 +1003,17 @@ jobs:
           fi
           if [[ "$QUALITY_RESULT" != success ||
                 "$EXTENSION_RESULT" != success ||
-                "$NATIVE_RESULT" != success ]]; then
+                "$NATIVE_RESULT" != success ||
+                "$SIGNED_MACOS_RESULT" != success ||
+                "$SIGNED_WINDOWS_RESULT" != success ]]; then
             echo "::error::Release was not published because one or more packaging jobs did not succeed."
             exit 1
           fi
+
+      - name: Check out the tagged signing disclosure
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Retrieve the read-only build artifacts
         if: ${{ needs.prepare.outputs.release-state != 'published' }}
@@ -695,6 +1027,7 @@ jobs:
         env:
           CANONICAL_EXTENSION_ID: ${{ needs.prepare.outputs.canonical-extension-id }}
           EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_STATE: ${{ needs.prepare.outputs.release-state }}
@@ -840,6 +1173,15 @@ jobs:
             sha256sum "${archives[@]}" >SHA256SUMS
           )
 
+          windows_certificate_fingerprint="$(
+            jq -er '.certificateSha256' \
+              release/windows-self-signed-code-signing.json
+          )"
+          if [[ ! "$windows_certificate_fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::The committed Windows signing certificate fingerprint is invalid."
+            exit 1
+          fi
+
           notes_file="$(mktemp)"
           trap 'rm -f -- "$notes_file"' EXIT
           cat >"$notes_file" <<EOF
@@ -850,14 +1192,15 @@ jobs:
 
           Canonical release/default extension ID: \`${CANONICAL_EXTENSION_ID}\`.
           Native registration ID selected for this release: \`${EXTENSION_ID}\`.
-          Store catalogs can assign a different ID; verify the catalog ID in the
-          browser before registering it. The installers accept repeated exact IDs.
+          Exact IDs compiled into Setup: `${EXTENSION_IDS}`.
 
           Source commit: https://github.com/${REPOSITORY}/commit/${SOURCE_COMMIT}
           License: https://github.com/${REPOSITORY}/blob/${RELEASE_TAG}/LICENSE
           Installation: each native-host archive contains platform-specific
           manual install/uninstall scripts. Each setup archive contains a graphical
-          per-user setup application with the version-matched native host embedded.
+          per-user setup application with the version-matched native host and
+          validated mainnet headers through height 300,000 embedded. Both extension
+          ZIPs embed all six finalized Setup archives and select locally by OS/CPU.
           Linux setup AppDirs bundle an isolated certutil and NSS/NSPR runtime with
           dependency licenses, so users do not need a system certutil package. The
           setup UI uses the host's coherent Wayland/X11/OpenGL stack. The
@@ -868,10 +1211,14 @@ jobs:
 
           Linux native hosts are statically linked with musl; Linux setup uses the
           native GNU target and host GUI libraries.
-          Windows native hosts and setup executables statically link the Microsoft
-          CRT where supported. Automated Windows bundles are unsigned. Automated
-          macOS binaries are unsigned and not notarized; they rely only on system
-          frameworks until project signing credentials exist.
+          Windows native hosts and Setup executables statically link the Microsoft
+          CRT where supported and carry project self-signed Authenticode signatures
+          with RFC 3161 SHA-256 timestamps. This project certificate is not publicly
+          trusted, so SmartScreen and Unknown Publisher warnings may appear. Verify
+          the archive SHA-256 against SHA256SUMS and the pinned certificate fingerprint
+          `${windows_certificate_fingerprint}`. macOS binaries are Developer ID-signed
+          and Apple-notarized; Setup tickets are stapled. Linux archives carry GitHub
+          keyless build provenance attestations.
 
           Verify every downloaded artifact against SHA256SUMS before installing.
           EOF

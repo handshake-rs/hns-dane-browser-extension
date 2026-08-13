@@ -8538,8 +8538,13 @@ impl<'a> RootResolutionSession<'a> {
             .resolver
             .resolve(&request)
             .map_err(PlanBuildError::Resolver)?;
-        normalize_answer_cnames(&mut answer, &self.answers)?;
         if self.namespace == Namespace::Icann {
+            scope_icann_answer_to_request(&mut answer, &request)?;
+            // An authenticated recursive response can include a complete
+            // downstream CNAME chain. Only the queried owner's hop belongs to
+            // this observation; later hops are queried independently and may
+            // be steered to a different, equally valid CDN snapshot.
+            normalize_answer_cnames(&mut answer, &[])?;
             let observation = self
                 .icann_evidence
                 .ok_or(PlanBuildError::Malformed)?
@@ -8547,6 +8552,10 @@ impl<'a> RootResolutionSession<'a> {
                 .map_err(PlanBuildError::Resolver)?
                 .ok_or(PlanBuildError::Malformed)?;
             self.icann_observations.push(observation);
+        } else {
+            // HNS answers are rooted in one exact authenticated tree and must
+            // remain coherent across every query in the atomic plan.
+            normalize_answer_cnames(&mut answer, &self.answers)?;
         }
         self.requests.push(request);
         self.answers.push(answer.clone());
@@ -8562,11 +8571,13 @@ impl<'a> RootResolutionSession<'a> {
                         existing.record_type == RecordType::Cname
                             && existing.name == record.name
                             && existing.class == record.class
+                            && cname_record_target(existing).ok()
+                                == cname_record_target(record).ok()
                     })
                 {
-                    // Cross-answer target consistency was enforced when each
-                    // answer entered the session. Retain one CNAME and the
-                    // most conservative TTL in the aggregate.
+                    // Retain one copy of the same logical CNAME and the most
+                    // conservative TTL. Distinct ICANN targets from separate
+                    // query snapshots remain explicit diagnostic evidence.
                     existing.ttl = existing.ttl.min(record.ttl);
                     continue;
                 }
@@ -8717,6 +8728,29 @@ impl<'a> RootResolutionSession<'a> {
             }
         }
     }
+}
+
+fn scope_icann_answer_to_request(
+    answer: &mut ResolutionAnswer,
+    request: &ResolutionRequest,
+) -> Result<(), PlanBuildError> {
+    let owner = DnsName::from_ascii(&request.qname).map_err(|_| PlanBuildError::Malformed)?;
+    if answer.name != owner {
+        return Err(PlanBuildError::Malformed);
+    }
+    let requested_type = RecordType::from_code(request.qtype);
+    answer.records.retain(|record| {
+        if record.name != owner {
+            return false;
+        }
+        if record.record_type == RecordType::Cname || record.record_type == requested_type {
+            return true;
+        }
+        record.record_type == RecordType::Rrsig
+            && rrsig_type_covered(record)
+                .is_some_and(|covered| covered == RecordType::Cname || covered == requested_type)
+    });
+    Ok(())
 }
 
 fn normalize_answer_cnames(
@@ -9324,11 +9358,10 @@ fn resolve_service_endpoints(
         };
     }
     let family_paths_match = ipv4.0 == ipv6.0 && ipv4.1 == ipv6.1;
-    // Some legitimate ICANN authorities return an alias chain only for the
-    // address family that has an endpoint. A validated NODATA response for
-    // the other family is absence, not a conflicting positive alias path.
-    // Keep rejecting different paths when both families are positive, and do
-    // not weaken the stricter HNS plan boundary.
+    // ICANN authorities may return an alias chain for only one address family
+    // or independently steer two positive families. HNS remains bound to one
+    // authenticated path; the ICANN branches below retain one complete route
+    // whenever the single-route canonical plan cannot represent both.
     let ipv4_only = session.namespace == Namespace::Icann
         && !ipv4.2.is_empty()
         && ipv6.2.is_empty()
@@ -9337,15 +9370,24 @@ fn resolve_service_endpoints(
         && ipv4.2.is_empty()
         && ipv4_kind == Some(IcannDohAnswerKind::NoData)
         && !ipv6.2.is_empty();
-    if !family_paths_match && !ipv4_only && !ipv6_only {
-        return Err(PlanBuildError::Malformed);
-    }
-    let (alias_path, endpoint_target, mut addresses) = if ipv6_only {
-        ipv6
-    } else {
+    let independently_steered = session.namespace == Namespace::Icann
+        && !ipv4.2.is_empty()
+        && !ipv6.2.is_empty()
+        && !family_paths_match;
+    let (alias_path, endpoint_target, mut addresses) = if family_paths_match {
         let (alias_path, endpoint_target, mut addresses) = ipv4;
         addresses.extend(ipv6.2);
         (alias_path, endpoint_target, addresses)
+    } else if independently_steered || ipv4_only {
+        // The current canonical plan carries one endpoint alias lineage. For
+        // independently steered ICANN families, retain the first complete
+        // positive family rather than attaching both families' addresses to
+        // a path that authenticated only one of them.
+        ipv4
+    } else if ipv6_only {
+        ipv6
+    } else {
+        return Err(PlanBuildError::Malformed);
     };
     if addresses.is_empty() {
         return Err(PlanBuildError::NoUsableEndpoint);
@@ -13746,11 +13788,19 @@ fn install_header_snapshot_inner(
         fs::File::open(snapshot_path).map_err(|error| format!("open header snapshot: {error}"))?;
     let metadata = read_header_snapshot_metadata(&mut snapshot)?;
     let mut chain = open_initialized_header_chain(&base, network)?;
-    if chain
+    let best_height = chain
         .best_header()
         .map_err(|error| format!("read best header before snapshot import: {error}"))?
-        .is_some_and(|header| header.height.0 >= metadata.target_height)
-    {
+        .map(|header| header.height.0);
+    let canonical_target_hash =
+        if best_height.is_some_and(|height| height >= metadata.target_height) {
+            chain
+                .canonical_header(Height(metadata.target_height))
+                .map(|header| header.hash)
+        } else {
+            None
+        };
+    if existing_snapshot_anchor_matches(best_height, canonical_target_hash, &metadata)? {
         return sync_status_with_override(data_dir, network, "snapshot_present", 1, 1, 0);
     }
 
@@ -13822,6 +13872,29 @@ fn insert_header_snapshot_batch(
 struct HeaderSnapshotMetadata {
     target_height: u32,
     tip_hash: hns_core::Hash,
+}
+
+fn existing_snapshot_anchor_matches(
+    best_height: Option<u32>,
+    canonical_target_hash: Option<hns_core::Hash>,
+    metadata: &HeaderSnapshotMetadata,
+) -> Result<bool, String> {
+    if best_height.is_none_or(|height| height < metadata.target_height) {
+        return Ok(false);
+    }
+    let canonical_target_hash = canonical_target_hash.ok_or_else(|| {
+        format!(
+            "existing header chain has no canonical header at snapshot height {}",
+            metadata.target_height
+        )
+    })?;
+    if canonical_target_hash != metadata.tip_hash {
+        return Err(format!(
+            "existing canonical header mismatch at snapshot height {}: got {}, expected {}",
+            metadata.target_height, canonical_target_hash, metadata.tip_hash
+        ));
+    }
+    Ok(true)
 }
 
 fn read_header_snapshot_metadata<R: Read>(
@@ -14710,6 +14783,30 @@ mod tests {
             core_version(),
             concat!("hns-dane-browser-rust-core/", env!("CARGO_PKG_VERSION"))
         );
+    }
+
+    #[test]
+    fn snapshot_present_requires_the_exact_existing_canonical_anchor() {
+        let expected = Hash::from_slice(&[7; 32]).unwrap();
+        let different = Hash::from_slice(&[8; 32]).unwrap();
+        let metadata = HeaderSnapshotMetadata {
+            target_height: 300_000,
+            tip_hash: expected,
+        };
+
+        assert!(!existing_snapshot_anchor_matches(Some(299_999), None, &metadata).unwrap());
+        assert!(
+            existing_snapshot_anchor_matches(Some(300_000), Some(expected), &metadata).unwrap()
+        );
+        assert!(
+            existing_snapshot_anchor_matches(Some(300_001), None, &metadata)
+                .unwrap_err()
+                .contains("no canonical header")
+        );
+        let mismatch = existing_snapshot_anchor_matches(Some(300_001), Some(different), &metadata)
+            .unwrap_err();
+        assert!(mismatch.contains("existing canonical header mismatch"));
+        assert!(mismatch.contains("300000"));
     }
 
     #[test]
@@ -22570,6 +22667,237 @@ mod tests {
     }
 
     #[test]
+    fn icann_https_plan_accepts_independently_steered_recursive_cname_snapshots() {
+        let now = now_unix_seconds();
+        let host = "apps.apple.example";
+        let cdn = "apps-cdn.apple.example";
+        let row = "apps-cdn-row.apple.example";
+        let fastly = "h3.apis.apple.fastly.example";
+        let edgekey = "itunes.apple.edgekey.example";
+        let query = OriginQuery::new(
+            CanonicalHost::parse(host).unwrap(),
+            hns_namespace_resolution::OriginScheme::Https,
+            NonZeroU16::new(443),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let evidence = IcannDohEvidence::default();
+        for (qname, qtype, kind) in [
+            (host, RecordType::Https, IcannDohAnswerKind::Present),
+            (cdn, RecordType::Https, IcannDohAnswerKind::Present),
+            (row, RecordType::Https, IcannDohAnswerKind::Present),
+            (edgekey, RecordType::Https, IcannDohAnswerKind::NoData),
+            (edgekey, RecordType::A, IcannDohAnswerKind::Present),
+            (edgekey, RecordType::Aaaa, IcannDohAnswerKind::NoData),
+        ] {
+            evidence
+                .record(
+                    &ResolutionRequest {
+                        qname: qname.to_owned(),
+                        qtype: qtype.code(),
+                    },
+                    IcannDohObservation {
+                        kind,
+                        secure: false,
+                        rcode: DNS_RCODE_NOERROR,
+                        observed_at_unix: now,
+                        expires_at_unix: now + 60,
+                    },
+                )
+                .unwrap();
+        }
+
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let built = build_root_resolution(
+            Namespace::Icann,
+            &query,
+            &OriginMapResolver {
+                responses: HashMap::from([
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::Https.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: vec![
+                                cname_record(host, cdn, 60),
+                                cname_record(cdn, row, 60),
+                                cname_record(row, fastly, 20),
+                            ],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: cdn.to_owned(),
+                            qtype: RecordType::Https.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(cdn).unwrap(),
+                            records: vec![
+                                cname_record(cdn, row, 60),
+                                cname_record(row, fastly, 20),
+                            ],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: row.to_owned(),
+                            qtype: RecordType::Https.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(row).unwrap(),
+                            records: vec![cname_record(row, edgekey, 20)],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: edgekey.to_owned(),
+                            qtype: RecordType::Https.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(edgekey).unwrap(),
+                            records: Vec::new(),
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: edgekey.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(edgekey).unwrap(),
+                            records: vec![address_record(edgekey, [151, 101, 3, 6])],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: edgekey.to_owned(),
+                            qtype: RecordType::Aaaa.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(edgekey).unwrap(),
+                            records: Vec::new(),
+                            secure: false,
+                        },
+                    ),
+                ]),
+                requests: Arc::clone(&requests),
+            },
+            None,
+            Some(&evidence),
+            NetworkKind::Mainnet,
+            None,
+        );
+        let BuiltRootResolution { lookup, answer } = built;
+        let RootLookup::Present(plan) = lookup else {
+            panic!("independently steered ICANN snapshots must produce one coherent plan");
+        };
+
+        assert_eq!(plan.namespace(), Namespace::Icann);
+        assert_eq!(plan.tls_policy(), TlsTrustPolicy::WebPkiInsecureDelegation);
+        assert_eq!(plan.alias_path().len(), 3);
+        assert_eq!(plan.terminal_target().as_str(), edgekey);
+        assert_eq!(plan.endpoint_target().as_str(), edgekey);
+        assert_eq!(plan.endpoints(), &["151.101.3.6:443".parse().unwrap()]);
+        assert!(answer.records.iter().all(|record| {
+            record.name.to_string() != row
+                || record.record_type != RecordType::Cname
+                || cname_record_target(record).is_ok_and(|target| target.to_string() != fastly)
+        }));
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![
+                ResolutionRequest {
+                    qname: host.to_owned(),
+                    qtype: RecordType::Https.code(),
+                },
+                ResolutionRequest {
+                    qname: cdn.to_owned(),
+                    qtype: RecordType::Https.code(),
+                },
+                ResolutionRequest {
+                    qname: row.to_owned(),
+                    qtype: RecordType::Https.code(),
+                },
+                ResolutionRequest {
+                    qname: edgekey.to_owned(),
+                    qtype: RecordType::Https.code(),
+                },
+                ResolutionRequest {
+                    qname: edgekey.to_owned(),
+                    qtype: RecordType::A.code(),
+                },
+                ResolutionRequest {
+                    qname: edgekey.to_owned(),
+                    qtype: RecordType::Aaaa.code(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn icann_root_session_rejects_conflicting_cnames_within_one_response() {
+        let now = now_unix_seconds();
+        let host = "conflict.icann.example";
+        let request = ResolutionRequest {
+            qname: host.to_owned(),
+            qtype: RecordType::A.code(),
+        };
+        let evidence = IcannDohEvidence::default();
+        evidence
+            .record(
+                &request,
+                IcannDohObservation {
+                    kind: IcannDohAnswerKind::Present,
+                    secure: false,
+                    rcode: DNS_RCODE_NOERROR,
+                    observed_at_unix: now,
+                    expires_at_unix: now + 60,
+                },
+            )
+            .unwrap();
+        let query = OriginQuery::new(
+            CanonicalHost::parse(host).unwrap(),
+            hns_namespace_resolution::OriginScheme::Http,
+            NonZeroU16::new(80),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let resolver = OriginMapResolver {
+            responses: HashMap::from([(
+                request,
+                ResolutionAnswer {
+                    name: DnsName::from_ascii(host).unwrap(),
+                    records: vec![
+                        cname_record(host, "one.icann.example", 60),
+                        cname_record(host, "two.icann.example", 60),
+                    ],
+                    secure: false,
+                },
+            )]),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        };
+        let mut session = RootResolutionSession::new(
+            Namespace::Icann,
+            &query,
+            &resolver,
+            None,
+            Some(&evidence),
+            NetworkKind::Mainnet,
+            None,
+        );
+
+        assert!(matches!(
+            session.resolve(query.host(), RecordType::A),
+            Err(PlanBuildError::Malformed),
+        ));
+    }
+
+    #[test]
     fn full_host_root_plans_ignore_the_static_iana_suffix_class() {
         let query_for = |host: &str| {
             OriginQuery::new(
@@ -22826,6 +23154,198 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn icann_positive_address_families_may_use_independent_alias_paths() {
+        let now = now_unix_seconds();
+        let host = "www.steered.icann.example";
+        let ipv4_target = "ipv4.steered.icann.example";
+        let ipv6_target = "ipv6.steered.icann.example";
+        let query = OriginQuery::new(
+            CanonicalHost::parse(host).unwrap(),
+            hns_namespace_resolution::OriginScheme::Http,
+            NonZeroU16::new(80),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let evidence = IcannDohEvidence::default();
+        for (qname, qtype) in [
+            (host, RecordType::A),
+            (ipv4_target, RecordType::A),
+            (host, RecordType::Aaaa),
+            (ipv6_target, RecordType::Aaaa),
+        ] {
+            evidence
+                .record(
+                    &ResolutionRequest {
+                        qname: qname.to_owned(),
+                        qtype: qtype.code(),
+                    },
+                    IcannDohObservation {
+                        kind: IcannDohAnswerKind::Present,
+                        secure: false,
+                        rcode: DNS_RCODE_NOERROR,
+                        observed_at_unix: now,
+                        expires_at_unix: now + 60,
+                    },
+                )
+                .unwrap();
+        }
+        let ipv6 = Ipv6Addr::new(0x2600, 0x1406, 0xbc00, 0, 0, 0, 0, 0x173d);
+        let built = build_root_resolution(
+            Namespace::Icann,
+            &query,
+            &OriginMapResolver {
+                responses: HashMap::from([
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: vec![cname_record(host, ipv4_target, 60)],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: ipv4_target.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(ipv4_target).unwrap(),
+                            records: vec![address_record(ipv4_target, [151, 101, 3, 6])],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::Aaaa.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: vec![cname_record(host, ipv6_target, 60)],
+                            secure: false,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: ipv6_target.to_owned(),
+                            qtype: RecordType::Aaaa.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(ipv6_target).unwrap(),
+                            records: vec![ResourceRecord {
+                                name: DnsName::from_ascii(ipv6_target).unwrap(),
+                                record_type: RecordType::Aaaa,
+                                class: DNS_CLASS_IN,
+                                ttl: 60,
+                                rdata: ipv6.octets().to_vec(),
+                            }],
+                            secure: false,
+                        },
+                    ),
+                ]),
+                requests: Arc::new(Mutex::new(Vec::new())),
+            },
+            None,
+            Some(&evidence),
+            NetworkKind::Mainnet,
+            None,
+        );
+        let RootLookup::Present(plan) = built.lookup else {
+            panic!("ICANN must retain one coherent route when address families are steered apart");
+        };
+
+        assert_eq!(plan.endpoint_target().as_str(), ipv4_target);
+        assert_eq!(plan.endpoint_alias_path().len(), 1);
+        assert_eq!(plan.endpoints(), &["151.101.3.6:80".parse().unwrap()]);
+        assert!(
+            plan.endpoints()
+                .iter()
+                .all(|endpoint| endpoint.ip() != IpAddr::V6(ipv6))
+        );
+    }
+
+    #[test]
+    fn hns_positive_address_families_with_different_alias_paths_fail_closed() {
+        let now = now_unix_seconds();
+        let host = "www.steeredhns";
+        let ipv4_target = "ipv4.steeredhns";
+        let ipv6_target = "ipv6.steeredhns";
+        let query = OriginQuery::new(
+            CanonicalHost::parse(host).unwrap(),
+            hns_namespace_resolution::OriginScheme::Http,
+            NonZeroU16::new(80),
+            hns_namespace_resolution::ProtocolCapabilities::all(),
+        );
+        let lineage = HnsProofLineage::default();
+        lineage
+            .record(
+                "steeredhns",
+                HnsProofObservation {
+                    anchor: ResourceValueAnchor {
+                        tree_root: Hash::new([58; 32]),
+                        height: Height(1_008),
+                    },
+                    exists: true,
+                    observed_at_unix: now,
+                    expires_at_unix: now + 60,
+                },
+            )
+            .unwrap();
+        let built = build_root_resolution(
+            Namespace::Hns,
+            &query,
+            &OriginMapResolver {
+                responses: HashMap::from([
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: vec![cname_record(host, ipv4_target, 60)],
+                            secure: true,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: ipv4_target.to_owned(),
+                            qtype: RecordType::A.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(ipv4_target).unwrap(),
+                            records: vec![address_record(ipv4_target, [1, 1, 1, 1])],
+                            secure: true,
+                        },
+                    ),
+                    (
+                        ResolutionRequest {
+                            qname: host.to_owned(),
+                            qtype: RecordType::Aaaa.code(),
+                        },
+                        ResolutionAnswer {
+                            name: DnsName::from_ascii(host).unwrap(),
+                            records: vec![cname_record(host, ipv6_target, 60)],
+                            secure: true,
+                        },
+                    ),
+                ]),
+                requests: Arc::new(Mutex::new(Vec::new())),
+            },
+            Some(&lineage),
+            None,
+            NetworkKind::Mainnet,
+            None,
+        );
+        let RootLookup::Failed(failure) = built.lookup else {
+            panic!("HNS cross-family CNAME drift must remain fail closed");
+        };
+        assert_eq!(failure.kind(), RootFailureKind::MalformedResponse);
     }
 
     #[test]

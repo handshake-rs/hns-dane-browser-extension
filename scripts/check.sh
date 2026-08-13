@@ -30,6 +30,7 @@ target_directory="$(
     python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])'
 )"
 HNS_NATIVE_HOST_PATH="$target_directory/release/hns-chromium-native-host" \
+HNS_HEADER_SNAPSHOT_PATH="$ROOT_DIR/release/hns_headers_300000.snapshot.gzip" \
   "${CARGO[@]}" build --locked --release --manifest-path "$ROOT_DIR/rust/Cargo.toml" \
     -p hns-browser-setup --features embedded-host
 "$ROOT_DIR/scripts/fuzz-smoke.sh"

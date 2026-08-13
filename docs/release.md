@@ -2,17 +2,20 @@
 
 Tagged releases contain a keyless Manifest V3 package for first catalog
 submissions, a canonical-ID package for GitHub/unpacked use, and six native
-host bundles plus six graphical setup bundles for Linux, macOS, and Windows on
-x64 and arm64. Each of the 14 archives includes immutable source metadata, the
+host bundles plus six graphical Setup bundles for Linux, macOS, and Windows on
+x64 and arm64. Both extension packages embed those exact six finalized Setup
+archives. Each of the 14 top-level archives includes immutable source metadata, the
 product license, third-party notices, installation guidance, and a per-asset
 checksum. The workflow publishes an aggregate `SHA256SUMS` as the twenty-ninth
 asset only after every build and release gate succeeds.
 
 The canonical GitHub-release extension ID is
 `idejjnoplngbhpnpjekblpalblbianio`. Chrome Web Store, Microsoft Edge Add-ons,
-and Opera Add-ons can assign different IDs. Always copy the exact ID shown by
-the installed browser. The native-host installers accept multiple exact IDs
-so one host can serve verified installations from more than one catalog.
+and Opera Add-ons can assign different IDs. Configure the public
+`CHROME_EXTENSION_ID`, `EDGE_EXTENSION_ID`, and `OPERA_EXTENSION_ID`
+repository variables once assigned; the release gate validates, deduplicates,
+and compiles them with the canonical ID into every Setup binary. The advanced
+Setup field still accepts a deliberately reviewed exact ID.
 
 ## Publish
 
@@ -27,7 +30,8 @@ so one host can serve verified installations from more than one catalog.
 5. Create and push an annotated `v<version>` tag at that unchanged default
    branch tip.
 6. Follow the tag-triggered `Release` workflow. It creates or reuses a draft,
-   reruns the portable gate, builds all 14 required archives, verifies all 14
+   reruns the portable gate, builds and finalizes all 14 required archives,
+   verifies all 14
    checksum sidecars, generates the twenty-ninth asset (`SHA256SUMS`), checks
    GitHub's remote name, size, and SHA-256 digest for every asset against the
    local file, and publishes the release with the GitHub CLI.
@@ -122,9 +126,10 @@ authorize populating the production trust-root, release-pin, or floor tables.
 
 ## Setup application packages
 
-Every setup application embeds the exact native-host binary built earlier in
-the same target job. Packaging rejects a setup executable with the wrong file
-format, architecture, Rust target, or embedded host bytes.
+Every Setup application embeds the exact native-host binary built earlier in
+the same target job and the canonical height-300,000 mainnet header snapshot.
+Packaging rejects a Setup executable with the wrong file format,
+architecture, Rust target, embedded host bytes, or exact snapshot bytes.
 
 - Linux uses `HNS-DANE-Browser-Setup.AppDir/AppRun`. The embedded native host
   remains statically linked with musl, while the eframe setup uses the native
@@ -163,48 +168,65 @@ solely for immutable tags that predate that smoke-test mode.
 
 ## Signing and store submission
 
-The tag workflow creates unsigned Windows and macOS files first so ordinary
-builds never receive signing authority. Two manual, default-branch-only
-workflows can replace an existing published release's Windows or macOS x64 and
-arm64 native-host and Setup archives without changing its tag, version, source
-commit, title, or other platform assets.
+The tag workflow finalizes platform artifacts before it builds either
+extension ZIP. Linux archives receive GitHub OIDC build-provenance attestations
+and the bundling job verifies those attestations. Protected credential jobs
+sign/notarize macOS and sign/timestamp Windows. The extension job then verifies
+the six exact checksums and release metadata and embeds those files. A missing
+credential, failed attestation, unsigned Windows executable, or
+unnotarized/unstapled macOS app blocks publication.
 
-The published v0.5.5 macOS x64 and arm64 assets completed this
-default-branch-only flow on 2026-07-29. Its credential-bearing signing jobs
-used the protected `macos-signing` environment. Their Setup apps carry stapled
-tickets; their standalone native hosts use Apple's online notarization ticket.
-Windows v0.5.5 assets remain unsigned until the Windows replacement workflow is
-configured and completed.
+The manual replacement workflows remain only for historical immutable releases
+that predate this final-artifact DAG. They are not a way to change an installer
+already embedded in a current store ZIP.
 
-### Windows Authenticode
+### Windows self-signed Authenticode
 
-The `Replace Windows release assets with Authenticode-signed builds` workflow
-uses Azure Artifact Signing on an x64 Windows 2025 runner. It cross-builds the
-ARM64 target because the signing action does not support Windows ARM runners.
-The workflow signs and RFC 3161 SHA-256 timestamps each native host before
-embedding it, then signs the Setup executable. It verifies the exact approved
-certificate subject, timestamp certificate, Windows trust policy, SignTool
-policy, and complete DLL allowlist before packaging. No exportable certificate
-or private key enters GitHub.
+The tag release and historical Windows replacement workflows run on an x64
+Windows 2025 runner and cross-build ARM64. They sign each native host before it
+is embedded, build Setup around those exact signed bytes and the pinned header
+snapshot, then sign Setup. Both signatures use SHA-256 and an RFC 3161 SHA-256
+timestamp. SignTool warning exit code `2` is a release failure, not success.
 
-Create a protected `windows-signing` GitHub environment restricted to `main`.
-Configure a Microsoft Entra application with a GitHub Actions federated
-credential for that environment, and assign its service principal the
-`Artifact Signing Certificate Profile Signer` role at the narrow certificate
-profile scope. Configure these non-secret environment variables:
+The persistent public identity is committed as
+`release/windows-self-signed-code-signing.cer`; its exact attributes and
+SHA-256 fingerprint are pinned in the adjacent JSON metadata. This certificate
+is self-issued and is not rooted in Windows public trust. It establishes
+continuity with the published project key, but it does not suppress
+SmartScreen or **Unknown Publisher** warnings. Never install this publisher
+certificate on user machines. Release and Setup copy must tell users to verify
+the archive SHA-256 and published certificate fingerprint.
 
-- `AZURE_ARTIFACT_SIGNING_CLIENT_ID`
-- `AZURE_ARTIFACT_SIGNING_TENANT_ID`
-- `AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID`
-- `AZURE_ARTIFACT_SIGNING_ENDPOINT`
-- `AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME`
-- `AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE`
+Create a protected `windows-signing` GitHub environment restricted to the
+default branch and release tags matching `v*`. Configure these environment
+secrets:
+
+- `WINDOWS_SELF_SIGNED_PFX_BASE64`
+- `WINDOWS_SELF_SIGNED_PFX_PASSWORD`
+
+Configure these non-secret environment variables:
+
 - `WINDOWS_AUTHENTICODE_PUBLISHER`
+- `WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256`
 
-`WINDOWS_AUTHENTICODE_PUBLISHER` must be the complete certificate subject
-reported by `Get-AuthenticodeSignature`, including its exact ordering and
-punctuation. The workflow authenticates through GitHub OIDC and Azure CLI only;
-it does not accept an Azure client secret.
+The publisher variable must be the complete subject reported by
+`Get-AuthenticodeSignature`, including exact ordering and punctuation. The
+fingerprint must be the lowercase SHA-256 of the DER certificate. The signing
+script decodes the PFX only beneath `RUNNER_TEMP`, requires it to match the
+committed DER certificate byte-for-byte, and enforces a self-issued non-CA
+RSA-3072 leaf with Digital Signature key usage, Code Signing EKU, and a
+SHA-256 certificate signature. It imports exactly one private key
+non-exportably into `CurrentUser\\My`, selects it by exact SHA-1 thumbprint,
+and removes the store entry, secret environment values, PFX bytes, and
+temporary directory in `finally` cleanup.
+
+Verification temporarily adds only the matching committed public certificate
+to the runner's `CurrentUser\\Root` store. It requires an embedded (not
+catalog) signature, exact signer bytes/subject/fingerprint, timestamp EKU,
+SignTool policy success, and the complete DLL allowlist. It then removes that
+temporary trust anchor and confirms each executable remains signed and
+timestamped but returns to an untrusted state. The signing key and temporary
+trust anchor are never packaged.
 
 Run and follow the manual workflow with:
 
@@ -241,8 +263,8 @@ again, and repeats code-signing, stapler, and Gatekeeper checks. Submission
 IDs, status, and logs remain workflow evidence even after a failed job. Apple
 does not support stapling a ticket directly to a standalone executable.
 
-Create a protected `macos-signing` GitHub environment restricted to `main`, and
-configure these environment secrets:
+Create a protected `macos-signing` GitHub environment permitting only `main`
+and release tags matching `v*`, and configure these environment secrets:
 
 - `APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64`
 - `APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD`
@@ -256,12 +278,12 @@ Configure these non-secret environment variables:
 - `APPLE_NOTARY_API_KEY_ID`
 - `APPLE_NOTARY_API_ISSUER_ID`
 
-The final `replace` jobs use a separate `release` environment and
-`contents: write`. Protect that environment, restrict it to `main`, and require
-maintainer approval before treating asset publication as
-environment-protected. Both workflows reject a non-default-branch dispatch and
-require explicit confirmation, exact tag/source/version identity, and
-post-replacement digest verification.
+The final publisher and historical `replace` jobs use a separate `release`
+environment and `contents: write`. Its policy permits only `main` and `v*`
+tags. No required reviewer is currently configured; add one if a second human
+approval is desired. Both historical replacement workflows reject a
+non-default-branch dispatch and require explicit confirmation, exact
+tag/source/version identity, and post-replacement digest verification.
 
 The issuer ID must be copied from App Store Connect under **Users and Access >
 Integrations > App Store Connect API > Team Keys** for the Team key matching

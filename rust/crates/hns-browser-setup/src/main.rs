@@ -2,7 +2,8 @@ use clap::Parser;
 use eframe::egui;
 use hns_browser_setup::{
     Browser, BrowserSelection, CANONICAL_EXTENSION_ID, InstallRequest, InstallationStatus,
-    Installer, NativePayload, OperationReport, SetupError, VERSION, validate_extension_id,
+    Installer, NativePayload, OperationReport, SetupError, VERSION, compiled_extension_ids,
+    validate_extension_id,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -43,11 +44,7 @@ const DONATE_HNS_URL: &str = concat!(
 )]
 struct Arguments {
     /// Install or repair the native host and per-user trust material.
-    #[arg(
-        long,
-        conflicts_with_all = ["uninstall", "status"],
-        requires = "extension_ids"
-    )]
+    #[arg(long, conflicts_with_all = ["uninstall", "status"])]
     install: bool,
 
     /// Completely remove the native host, registrations, and per-user trust material.
@@ -134,7 +131,11 @@ fn run_automation(arguments: Arguments) -> Result<(), SetupError> {
     let installer = Installer::new(payload);
 
     if arguments.install {
-        let extension_ids = arguments.extension_ids;
+        let extension_ids = if arguments.extension_ids.is_empty() {
+            compiled_extension_ids()
+        } else {
+            arguments.extension_ids
+        };
         for extension_id in &extension_ids {
             validate_extension_id(extension_id)?;
         }
@@ -351,7 +352,7 @@ impl SetupApp {
             installer: Installer::new(NativePayload::release_embedded()),
             detected: selection.detected,
             selected: selection.selected,
-            extension_ids: String::new(),
+            extension_ids: compiled_extension_ids().join("\n"),
             status: None,
             busy: None,
             confirm_uninstall: false,
@@ -509,18 +510,18 @@ impl SetupApp {
     }
 
     fn show_configuration(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Extensions");
+        ui.heading("Authorized extensions");
         ui.label(
-            "On the extension's first-run page, copy the exact 32-character extension ID and \
-             paste it here. Separate multiple IDs with a newline, comma, or space. Browser \
-             catalogs can assign different IDs.",
+            "This release includes the exact canonical and configured catalog IDs shown below. \
+             Review them before installation. Advanced managed deployments can add an explicitly \
+             verified ID, separated by a newline, comma, or space.",
         );
         ui.add_enabled(
             self.busy.is_none(),
             egui::TextEdit::multiline(&mut self.extension_ids)
                 .desired_width(f32::INFINITY)
                 .desired_rows(2)
-                .hint_text("One or more exact extension IDs"),
+                .hint_text("Release-baked and advanced exact extension IDs"),
         );
         if ui
             .add_enabled(
@@ -536,7 +537,7 @@ impl SetupApp {
             "Canonical GitHub / unpacked ID (informational): {CANONICAL_EXTENSION_ID}"
         ));
         if self.extension_ids.trim().is_empty() {
-            ui.label("Paste at least one extension ID to enable Install or Repair.");
+            ui.label("At least one exact extension ID is required for Install or Repair.");
         } else if self.entered_extension_ids().is_none() {
             ui.colored_label(
                 egui::Color32::RED,
@@ -853,6 +854,20 @@ mod tests {
             Arguments::try_parse_from(["hns-dane-browser-setup", "--gui-smoke-test", "--status"])
                 .expect_err("GUI smoke testing must not combine with automation");
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn install_cli_uses_release_baked_ids_when_no_override_is_supplied() {
+        let arguments = Arguments::try_parse_from([
+            "hns-dane-browser-setup",
+            "--install",
+            "--browser",
+            "chrome",
+        ])
+        .expect("release-baked IDs should make an explicit ID optional");
+        assert!(arguments.install);
+        assert!(arguments.extension_ids.is_empty());
+        assert!(compiled_extension_ids().contains(&CANONICAL_EXTENSION_ID.to_owned()));
     }
 
     #[cfg(not(feature = "embedded-host"))]

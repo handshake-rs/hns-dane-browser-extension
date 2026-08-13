@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Existing published release tag to preserve
         required: true
-        default: v0.5.9
+        default: v0.6.0
         type: string
       confirm_replacement:
         description: Replace only that release's Windows assets and SHA256SUMS
@@ -30,6 +30,7 @@ jobs:
       contents: read
     outputs:
       extension-id: ${{ steps.validate.outputs.extension-id }}
+      extension-ids: ${{ steps.validate.outputs.extension-ids }}
       release-id: ${{ steps.validate.outputs.release-id }}
       source-commit: ${{ steps.validate.outputs.source-commit }}
       source-date-epoch: ${{ steps.validate.outputs.source-date-epoch }}
@@ -125,12 +126,17 @@ jobs:
           extension_id="$(
             jq -er '.extension.nativeRegistrationIds[-1]' <<<"$metadata"
           )"
+          extension_ids="$(
+            jq -er '.extension.nativeRegistrationIds | unique | join(",")' \
+              <<<"$metadata"
+          )"
           if [[ ! "$extension_id" =~ ^[a-p]{32}$ ]]; then
             echo "::error::Existing Windows release metadata has an invalid extension ID."
             exit 1
           fi
           {
             echo "extension-id=$extension_id"
+            echo "extension-ids=$extension_ids"
             echo "release-id=$release_id"
             echo "source-commit=$source_commit"
             echo "source-date-epoch=$source_date_epoch"
@@ -168,7 +174,7 @@ jobs:
             tests/test_resign_windows_workflow.py
 
   signed_windows:
-    name: Authenticode sign Windows ${{ matrix.architecture }}
+    name: Self-sign and timestamp Windows ${{ matrix.architecture }}
     needs: [prepare, quality]
     strategy:
       fail-fast: false
@@ -183,7 +189,6 @@ jobs:
     environment: windows-signing
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Check out current release tooling
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -197,13 +202,6 @@ jobs:
           path: source
           persist-credentials: false
           ref: ${{ inputs.release_tag }}
-
-      - name: Sign in to Azure with GitHub OIDC
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
-        with:
-          client-id: ${{ vars.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID }}
 
       - name: Build the static-CRT native host
         shell: pwsh
@@ -224,34 +222,31 @@ jobs:
             -p hns-chromium-native-host `
             --target $env:RUST_TARGET
 
-      - name: Authenticode sign and timestamp the native host
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE }}
-          files: ${{ github.workspace }}\source\rust\target\${{ matrix.rust-target }}\release\hns-chromium-native-host.exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: HNS DANE Browser native host
-          description-url: https://github.com/handshake-rs/hns-dane-browser-extension
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-cli-credential: false
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
-          exclude-interactive-browser-credential: true
+      - name: Self-sign and RFC 3161 timestamp the native host
+        shell: pwsh
+        env:
+          WINDOWS_AUTHENTICODE_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          WINDOWS_SELF_SIGNED_PFX_BASE64: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_BASE64 }}
+          WINDOWS_SELF_SIGNED_PFX_PASSWORD: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nativeHost = (
+            Resolve-Path `
+              "source/rust/target/${{ matrix.rust-target }}/release/hns-chromium-native-host.exe"
+          ).Path
+          & release-tools/scripts/sign-self-signed-windows.ps1 `
+            -Path @($nativeHost) `
+            -PinnedCertificate 'source/release/windows-self-signed-code-signing.cer'
 
       - name: Verify the native host and build the embedded setup
         shell: pwsh
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
           EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          HNS_EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
+          HNS_HEADER_SNAPSHOT_PATH: ${{ github.workspace }}\source\release\hns_headers_300000.snapshot.gzip
           RUST_TARGET: ${{ matrix.rust-target }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -264,7 +259,10 @@ jobs:
           & release-tools/scripts/verify-windows-binaries.ps1 `
             -Path @($nativeHost) `
             -RequireAuthenticode `
-            -ExpectedPublisher $env:EXPECTED_PUBLISHER
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+            -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'source/release/windows-self-signed-code-signing.cer'
           $env:RUSTFLAGS = (
             "$env:RUSTFLAGS -C target-feature=+crt-static"
           ).Trim()
@@ -276,35 +274,31 @@ jobs:
             --features embedded-host `
             --target $env:RUST_TARGET
 
-      - name: Authenticode sign and timestamp the setup
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE }}
-          files: ${{ github.workspace }}\source\rust\target\${{ matrix.rust-target }}\release\hns-dane-browser-setup.exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: HNS DANE Browser Setup
-          description-url: https://github.com/handshake-rs/hns-dane-browser-extension
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-cli-credential: false
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
-          exclude-interactive-browser-credential: true
+      - name: Self-sign and RFC 3161 timestamp Setup
+        shell: pwsh
+        env:
+          WINDOWS_AUTHENTICODE_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          WINDOWS_SELF_SIGNED_PFX_BASE64: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_BASE64 }}
+          WINDOWS_SELF_SIGNED_PFX_PASSWORD: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = (
+            Resolve-Path `
+              "source/rust/target/${{ matrix.rust-target }}/release/hns-dane-browser-setup.exe"
+          ).Path
+          & release-tools/scripts/sign-self-signed-windows.ps1 `
+            -Path @($setup) `
+            -PinnedCertificate 'source/release/windows-self-signed-code-signing.cer'
 
       - name: Verify, smoke test, and package signed Windows assets
         shell: pwsh
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
           EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
           EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           RUST_TARGET: ${{ matrix.rust-target }}
           SOURCE_COMMIT: ${{ needs.prepare.outputs.source-commit }}
@@ -319,10 +313,30 @@ jobs:
             Resolve-Path `
               "source/rust/target/$env:RUST_TARGET/release/hns-dane-browser-setup.exe"
           ).Path
+          $output = "$env:GITHUB_WORKSPACE/dist/signed"
+          [void](New-Item -ItemType Directory -Path $output -Force)
+          $nativeEvidence = Join-Path `
+            $output `
+            "windows-native-host-signing-evidence-$env:ARCHITECTURE.json"
+          $setupEvidence = Join-Path `
+            $output `
+            "windows-setup-signing-evidence-$env:ARCHITECTURE.json"
           & release-tools/scripts/verify-windows-binaries.ps1 `
-            -Path @($nativeHost, $setup) `
+            -Path @($nativeHost) `
             -RequireAuthenticode `
-            -ExpectedPublisher $env:EXPECTED_PUBLISHER
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+            -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'source/release/windows-self-signed-code-signing.cer' `
+            -EvidenceOutput $nativeEvidence
+          & release-tools/scripts/verify-windows-binaries.ps1 `
+            -Path @($setup) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+            -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'source/release/windows-self-signed-code-signing.cer' `
+            -EvidenceOutput $setupEvidence
           if ($env:ARCHITECTURE -eq 'x64') {
             & $setup --status | Out-Null
             if ($LASTEXITCODE -ne 0) {
@@ -359,7 +373,6 @@ jobs:
             }
           }
 
-          $output = "$env:GITHUB_WORKSPACE/dist/signed"
           python release-tools/scripts/package-release.py native `
             --repository-root source `
             --output-dir $output `
@@ -367,11 +380,12 @@ jobs:
             --source-commit $env:SOURCE_COMMIT `
             --source-tag $env:RELEASE_TAG `
             --extension-id $env:EXTENSION_ID `
+            --extension-ids $env:EXTENSION_IDS `
             --platform windows `
             --architecture $env:ARCHITECTURE `
             --rust-target $env:RUST_TARGET `
             --native-host $nativeHost `
-            --windows-authenticode-signed
+            --windows-signing-evidence $nativeEvidence
           if ($LASTEXITCODE -ne 0) {
             throw 'Signed Windows native-host packaging failed.'
           }
@@ -382,13 +396,14 @@ jobs:
             --source-commit $env:SOURCE_COMMIT `
             --source-tag $env:RELEASE_TAG `
             --extension-id $env:EXTENSION_ID `
+            --extension-ids $env:EXTENSION_IDS `
             --platform windows `
             --architecture $env:ARCHITECTURE `
             --native-rust-target $env:RUST_TARGET `
             --setup-rust-target $env:RUST_TARGET `
             --setup-executable $setup `
             --embedded-native-host $nativeHost `
-            --windows-authenticode-signed
+            --windows-signing-evidence $setupEvidence
           if ($LASTEXITCODE -ne 0) {
             throw 'Signed Windows setup packaging failed.'
           }

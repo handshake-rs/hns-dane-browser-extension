@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github/workflows/release.yml"
 WINDOWS_VERIFY = ROOT / "scripts/verify-windows-binaries.ps1"
+WINDOWS_SIGN = ROOT / "scripts/sign-self-signed-windows.ps1"
 MACOS_VERIFY = ROOT / "scripts/verify-macos-binaries.sh"
 CANONICAL_ID = json.loads(
     (ROOT / "release/extension-identity.json").read_text(encoding="utf-8")
@@ -20,15 +21,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = WORKFLOW.read_text(encoding="utf-8")
         cls.windows_verify = WINDOWS_VERIFY.read_text(encoding="utf-8")
+        cls.windows_sign = WINDOWS_SIGN.read_text(encoding="utf-8")
         cls.macos_verify = MACOS_VERIFY.read_text(encoding="utf-8")
 
-    def test_external_actions_are_pinned_and_first_party(self) -> None:
+    def test_external_actions_are_pinned_and_allowlisted(self) -> None:
         references = re.findall(r"^\s*uses:\s*([^#\s]+)", self.source, re.MULTILINE)
         self.assertTrue(references)
         for reference in references:
             self.assertRegex(
                 reference,
-                r"^actions/(?:checkout|setup-node|upload-artifact|download-artifact)"
+                r"^actions/(?:checkout|setup-node|upload-artifact|download-artifact|"
+                r"attest-build-provenance)"
                 r"@[0-9a-f]{40}$",
             )
         self.assertNotRegex(self.source, r"uses:\s*softprops/")
@@ -49,34 +52,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 "aarch64-unknown-linux-musl",
                 "aarch64-unknown-linux-gnu",
             ),
-            (
-                "windows",
-                "x64",
-                "windows-2025",
-                "x86_64-pc-windows-msvc",
-                "x86_64-pc-windows-msvc",
-            ),
-            (
-                "windows",
-                "arm64",
-                "windows-11-arm",
-                "aarch64-pc-windows-msvc",
-                "aarch64-pc-windows-msvc",
-            ),
-            (
-                "macos",
-                "x64",
-                "macos-15-intel",
-                "x86_64-apple-darwin",
-                "x86_64-apple-darwin",
-            ),
-            (
-                "macos",
-                "arm64",
-                "macos-15",
-                "aarch64-apple-darwin",
-                "aarch64-apple-darwin",
-            ),
         }
         rows = set(
             re.findall(
@@ -94,7 +69,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('tags:\n      - "v*"', self.source)
         self.assertIn('gh release create "$RELEASE_TAG" \\\n              --draft', self.source)
         self.assertIn(
-            "needs: [prepare, quality, extension, native]",
+            "needs: [prepare, quality, extension, native, signed_macos, signed_windows]",
             self.source,
         )
         self.assertIn("resolve_release_json", self.source)
@@ -106,6 +81,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("QUALITY_RESULT: ${{ needs.quality.result }}", self.source)
         self.assertIn("EXTENSION_RESULT: ${{ needs.extension.result }}", self.source)
         self.assertIn("NATIVE_RESULT: ${{ needs.native.result }}", self.source)
+        self.assertIn(
+            "SIGNED_MACOS_RESULT: ${{ needs.signed_macos.result }}",
+            self.source,
+        )
+        self.assertIn(
+            "SIGNED_WINDOWS_RESULT: ${{ needs.signed_windows.result }}",
+            self.source,
+        )
         self.assertIn("environment: release", self.source)
         self.assertNotIn("--latest", self.source)
 
@@ -242,10 +225,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("scripts/verify-macos-binaries.sh", self.source)
         self.assertIn("LC_BUILD_VERSION", self.macos_verify)
         self.assertIn("/System/Library/* | /usr/lib/*", self.macos_verify)
-        self.assertEqual(
-            self.source.count('macos-deployment-target: "11.0"'),
-            2,
-        )
+        self.assertIn('MACOSX_DEPLOYMENT_TARGET: "11.0"', self.source)
         self.assertGreaterEqual(self.source.count("--gui-smoke-test"), 2)
         self.assertIn("WaitForExit(30000)", self.source)
         self.assertIn("smoke_pid=", self.source)
@@ -258,6 +238,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_store_identity_and_source_metadata_are_mandatory(self) -> None:
         self.assertIn("vars.CHROMIUM_EXTENSION_ID", self.source)
+        self.assertIn("vars.CHROME_EXTENSION_ID", self.source)
+        self.assertIn("vars.EDGE_EXTENSION_ID", self.source)
+        self.assertIn("vars.OPERA_EXTENSION_ID", self.source)
         self.assertIn(
             "jq -er '.canonicalId' release/extension-identity.json",
             self.source,
@@ -289,7 +272,104 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--extension-id", self.source)
         self.assertIn("SHA256SUMS", self.source)
         self.assertIn("GitHub Sponsors: https://github.com/sponsors/denuoweb", self.source)
-        self.assertIn("unsigned and not notarized", self.source)
+
+    def test_finalized_installers_are_signed_attested_and_bundled(self) -> None:
+        self.assertIn("environment: macos-signing", self.source)
+        self.assertIn("environment: windows-signing", self.source)
+        self.assertNotIn("azure/", self.source)
+        self.assertNotIn("AZURE_", self.source)
+        self.assertEqual(
+            self.source.count("scripts/sign-self-signed-windows.ps1"),
+            2,
+        )
+        self.assertNotIn("--windows-self-signed-authenticode", self.source)
+        self.assertEqual(self.source.count("-EvidenceOutput"), 2)
+        self.assertEqual(self.source.count("--windows-signing-evidence"), 2)
+        self.assertIn("-Path @($nativeHost)", self.source)
+        self.assertIn("-EvidenceOutput $nativeEvidence", self.source)
+        self.assertIn("-Path @($setup)", self.source)
+        self.assertIn("-EvidenceOutput $setupEvidence", self.source)
+        self.assertIn(
+            "--windows-signing-evidence $nativeEvidence",
+            self.source,
+        )
+        self.assertIn(
+            "--windows-signing-evidence $setupEvidence",
+            self.source,
+        )
+        self.assertGreaterEqual(self.source.count("-AllowSelfSigned"), 2)
+        self.assertGreaterEqual(
+            self.source.count("release/windows-self-signed-code-signing.cer"),
+            4,
+        )
+        self.assertIn("secrets.WINDOWS_SELF_SIGNED_PFX_BASE64", self.source)
+        self.assertIn("secrets.WINDOWS_SELF_SIGNED_PFX_PASSWORD", self.source)
+        self.assertIn("vars.WINDOWS_AUTHENTICODE_PUBLISHER", self.source)
+        self.assertIn(
+            "vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256",
+            self.source,
+        )
+        self.assertIn("scripts/build-signed-macos-release.sh", self.source)
+        self.assertIn("actions/attest-build-provenance@", self.source)
+        self.assertIn("gh attestation verify", self.source)
+        self.assertIn("--linux-attestations-verified", self.source)
+        self.assertIn("attestations: write", self.source)
+        self.assertIn("id-token: write", self.source)
+        self.assertIn(
+            "needs: [prepare, native, signed_macos, signed_windows]",
+            self.source,
+        )
+        self.assertIn("--setup-dir dist/platform-assets", self.source)
+        self.assertIn("HNS_HEADER_SNAPSHOT_PATH", self.source)
+        self.assertIn("HNS_EXTENSION_IDS", self.source)
+
+    def test_self_signed_windows_certificate_policy_is_pinned_and_reversible(
+        self,
+    ) -> None:
+        for script in (self.windows_sign, self.windows_verify):
+            self.assertIn("Get-CertificateSha256", script)
+            self.assertIn("RawData", script)
+            self.assertIn("KeySize -lt 3072", script)
+            self.assertIn("1.3.6.1.5.5.7.3.3", script)
+            self.assertIn("DigitalSignature", script)
+            self.assertIn("CertificateAuthority", script)
+        self.assertIn(
+            "$Certificate.Subject -ne $expectedPublisher -or\n"
+            "      $Certificate.Issuer -ne $expectedPublisher",
+            self.windows_sign,
+        )
+        self.assertIn("WINDOWS_SELF_SIGNED_PFX_BASE64", self.windows_sign)
+        self.assertIn("WINDOWS_SELF_SIGNED_PFX_PASSWORD", self.windows_sign)
+        self.assertIn("SignatureType.ToString() -ne 'Authenticode'", self.windows_sign)
+        self.assertIn("TimeStamperCertificate", self.windows_sign)
+        self.assertIn("SignatureType.ToString() -ne 'Authenticode'", self.windows_verify)
+        self.assertIn("1.3.6.1.5.5.7.3.8", self.windows_verify)
+        trust = self.windows_verify.index("$selfSignedRootStore.Add")
+        trusted_verify = self.windows_verify.index("signtool verify /pa /all /v /tw")
+        remove = self.windows_verify.index("$selfSignedRootStore.Remove")
+        untrusted_verify = self.windows_verify.index(
+            "$untrustedSignature = Get-AuthenticodeSignature"
+        )
+        self.assertLess(trust, trusted_verify)
+        self.assertLess(trusted_verify, remove)
+        self.assertLess(remove, untrusted_verify)
+        self.assertIn("acceptableUntrustedStatuses", self.windows_verify)
+        self.assertIn("[string]$EvidenceOutput", self.windows_verify)
+        self.assertIn("schemaVersion = 1", self.windows_verify)
+        self.assertIn("files = @($signingEvidenceFiles)", self.windows_verify)
+
+    def test_release_notes_disclose_windows_self_signed_trust(self) -> None:
+        self.assertIn("project self-signed Authenticode", self.source)
+        self.assertIn("not publicly", self.source)
+        self.assertIn("SmartScreen", self.source)
+        self.assertIn("Unknown Publisher", self.source)
+        self.assertIn("archive SHA-256 against SHA256SUMS", self.source)
+        self.assertIn(
+            "release/windows-self-signed-code-signing.json",
+            self.source,
+        )
+        self.assertIn("jq -er '.certificateSha256'", self.source)
+        self.assertIn("windows_certificate_fingerprint", self.source)
 
 
 if __name__ == "__main__":

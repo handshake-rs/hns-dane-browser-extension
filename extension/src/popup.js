@@ -18,7 +18,13 @@ document
   .addEventListener("click", () => void syncHeadersNow());
 document.querySelector("#settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 document.querySelector("#setup").addEventListener("click", () => {
-  void chrome.tabs.create({ url: chrome.runtime.getURL("src/setup.html") });
+  void openSetup("install");
+});
+document.querySelector("#complete-uninstall").addEventListener("click", () => {
+  void openSetup("complete-uninstall");
+});
+document.querySelector("#legal").addEventListener("click", () => {
+  void chrome.tabs.create({ url: chrome.runtime.getURL("src/legal.html") });
 });
 document.querySelector("#pool-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -74,28 +80,43 @@ async function showSyncError(error) {
 
 function renderStatus(status) {
   const active = status.state === "active" && status.proxyActive === true;
+  const nativeUpdateRequired =
+    status.nativeComponentState === "versionMismatch" ||
+    status.nativeComponentState === "incompatible";
   const security = currentSecurityResult(status.latestMainFrameSecurity, status);
   const connectDecision = connectDecisionForStatus(status);
   const displayedSecurity = security ?? connectDecision;
   renderHeaderStatus(status);
-  document.querySelector("#state-title").textContent = active
-    ? "Rust security path active"
-    : "Handshake browsing blocked";
-  document.querySelector("#state-detail").textContent = security
-    ? namespaceSummary(security, status.latestMainFrameSecurityReceiptState)
-    : connectDecision
-      ? connectDecisionSummary(
-          connectDecision,
-          status.latestMainFrameSecurityReceiptState,
-          status.latestMainFrameSecurityReceiptSource
-        )
+  document.querySelector("#state-title").textContent = nativeUpdateRequired
+    ? "Native component update required"
     : active
-      ? status.latestMainFrameSecurityUnavailableReason
-        ? `Checked main-frame security status unavailable: ${stateLabel(
-            status.latestMainFrameSecurityUnavailableReason
-          )}.`
-        : "No browser main-frame security result has been recorded in this proxy generation."
-      : `Fail-closed reason: ${status.reason ?? status.state ?? "runtime unavailable"}`;
+      ? "Rust security path active"
+      : "Handshake browsing blocked";
+  document.querySelector("#state-detail").textContent = nativeUpdateRequired
+    ? nativeComponentUpdateSummary(status)
+    : security
+      ? namespaceSummary(security, status.latestMainFrameSecurityReceiptState)
+      : connectDecision
+        ? connectDecisionSummary(
+            connectDecision,
+            status.latestMainFrameSecurityReceiptState,
+            status.latestMainFrameSecurityReceiptSource
+          )
+      : active
+        ? status.latestMainFrameSecurityUnavailableReason
+          ? `Checked main-frame security status unavailable: ${stateLabel(
+              status.latestMainFrameSecurityUnavailableReason
+            )}.`
+          : "No browser main-frame security result has been recorded in this proxy generation."
+        : `Fail-closed reason: ${status.reason ?? status.state ?? "runtime unavailable"}`;
+  document.querySelector("#extension-version").textContent =
+    status.extensionVersion ?? chrome.runtime.getManifest().version ?? "—";
+  document.querySelector("#native-version").textContent =
+    status.nativeHostVersion ??
+    (status.nativeComponentState === "incompatible" ? "Incompatible" : "—");
+  document.querySelector("#setup").textContent = nativeUpdateRequired
+    ? "Run updated Setup"
+    : "Setup";
   document.querySelector("#runtime-generation").textContent =
     status.runtimeGeneration ?? "—";
   document.querySelector("#policy-generation").textContent =
@@ -140,6 +161,20 @@ function renderStatus(status) {
     : "—";
   document.querySelector("#security-event").textContent =
     displayedSecurity?.eventSequence ?? "—";
+}
+
+function nativeComponentUpdateSummary(status) {
+  const required = status.extensionVersion ?? chrome.runtime.getManifest().version;
+  if (status.nativeComponentState === "versionMismatch") {
+    return `The installed native component is ${status.nativeHostVersion ?? "an unknown version"}; extension ${required} requires the matching component. Browsing stays blocked until you download and run the embedded Setup again.`;
+  }
+  return `The native component did not report a compatible version for extension ${required}. Browsing stays blocked until you download and run the embedded Setup again.`;
+}
+
+function openSetup(fragment) {
+  const url = new URL(chrome.runtime.getURL("src/setup.html"));
+  url.hash = fragment;
+  return chrome.tabs.create({ url: url.href });
 }
 
 function renderHeaderStatus(status) {

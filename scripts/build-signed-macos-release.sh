@@ -12,6 +12,8 @@ required_environment=(
   APPLE_TEAM_ID
   ARCHITECTURE
   EXTENSION_ID
+  HNS_EXTENSION_IDS
+  HNS_HEADER_SNAPSHOT_PATH
   MACOSX_DEPLOYMENT_TARGET
   NATIVE_RUST_TARGET
   OUTPUT_DIR
@@ -296,6 +298,7 @@ package=(
   --source-commit "$SOURCE_COMMIT" \
   --source-tag "$RELEASE_TAG" \
   --extension-id "$EXTENSION_ID" \
+  --extension-ids "$HNS_EXTENSION_IDS" \
   --platform macos \
   --architecture "$ARCHITECTURE" \
   --rust-target "$NATIVE_RUST_TARGET" \
@@ -308,6 +311,7 @@ package=(
   --source-commit "$SOURCE_COMMIT" \
   --source-tag "$RELEASE_TAG" \
   --extension-id "$EXTENSION_ID" \
+  --extension-ids "$HNS_EXTENSION_IDS" \
   --platform macos \
   --architecture "$ARCHITECTURE" \
   --native-rust-target "$NATIVE_RUST_TARGET" \

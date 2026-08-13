@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Existing published release tag to preserve
         required: true
-        default: v0.5.9
+        default: v0.6.0
         type: string
       confirm_replacement:
         description: Replace only that release's macOS assets and SHA256SUMS
@@ -30,6 +30,7 @@ jobs:
       contents: read
     outputs:
       extension-id: ${{ steps.validate.outputs.extension-id }}
+      extension-ids: ${{ steps.validate.outputs.extension-ids }}
       release-id: ${{ steps.validate.outputs.release-id }}
       source-commit: ${{ steps.validate.outputs.source-commit }}
       source-date-epoch: ${{ steps.validate.outputs.source-date-epoch }}
@@ -127,12 +128,17 @@ jobs:
           extension_id="$(
             jq -er '.extension.nativeRegistrationIds[-1]' <<<"$metadata"
           )"
+          extension_ids="$(
+            jq -er '.extension.nativeRegistrationIds | unique | join(",")' \
+              <<<"$metadata"
+          )"
           if [[ ! "$extension_id" =~ ^[a-p]{32}$ ]]; then
             echo "::error::Existing macOS release metadata has an invalid extension ID."
             exit 1
           fi
           {
             echo "extension-id=$extension_id"
+            echo "extension-ids=$extension_ids"
             echo "release-id=$release_id"
             echo "source-commit=$source_commit"
             echo "source-date-epoch=$source_date_epoch"
@@ -219,6 +225,8 @@ jobs:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           ARCHITECTURE: ${{ matrix.architecture }}
           EXTENSION_ID: ${{ needs.prepare.outputs.extension-id }}
+          HNS_EXTENSION_IDS: ${{ needs.prepare.outputs.extension-ids }}
+          HNS_HEADER_SNAPSHOT_PATH: ${{ github.workspace }}/source/release/hns_headers_300000.snapshot.gzip
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos-deployment-target }}
           NATIVE_RUST_TARGET: ${{ matrix.native-rust-target }}
           OUTPUT_DIR: ${{ github.workspace }}/dist/signed

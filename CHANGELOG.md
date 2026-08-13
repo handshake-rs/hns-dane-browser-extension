@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.6.0 - 2026-08-12
+
+### Added
+
+- Bundle the canonical, hash-pinned mainnet header snapshot from genesis
+  through height 300,000 in every Setup executable. Setup verifies the gzip
+  and raw byte size/digest, decompresses through a strict bound, invokes the
+  native host's independently validating snapshot importer, and removes its
+  private temporary file on every outcome.
+- Bundle all six finalized Linux, macOS, and Windows Setup archives inside both
+  extension ZIP variants. The Setup page selects the exact operating system
+  and CPU locally and offers an ordinary user-initiated save without a remote
+  executable download.
+- Add **Complete Uninstall…** to the extension dropdown and Setup page. The
+  browser hands off to the platform Setup application, whose existing explicit
+  confirmation and ownership checks perform removal.
+
+### Changed
+
+- Compile the canonical and configured Chrome, Edge, and Opera catalog IDs
+  into Setup, pre-populate its GUI, and use them by default in CLI installs.
+  Explicit advanced IDs remain exact, bounded, and reviewable.
+- Require the native host's exact product version in its `hello` response
+  before runtime activation. Missing, malformed, older, or newer components
+  retain the fail-closed navigation/PAC gate and prompt once per browser
+  session to run the newly embedded Setup.
+- Make the release graph sign and notarize macOS, apply the project's pinned
+  self-signed Authenticode identity and an RFC 3161 SHA-256 timestamp to
+  Windows, and attest Linux archives before assembling the extension. The
+  Windows certificate is deliberately not publicly trusted, so SmartScreen or
+  **Unknown Publisher** may still appear; release copy directs users to verify
+  the archive SHA-256 and published certificate fingerprint. Packaging rejects
+  absent, mismatched, unsigned, or falsely described Setup inputs rather than
+  publishing a later-replaceable unsigned store package.
+
 ## 0.5.9 - 2026-08-12
 
 ### Fixed

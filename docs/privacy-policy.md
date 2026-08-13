@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 
 HNS DANE Browser Extension is published by Denuo Web, LLC. Privacy and
 support questions can be sent to `info@denuoweb.com`. Do not post personal

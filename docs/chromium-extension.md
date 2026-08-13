@@ -209,6 +209,7 @@ cargo +1.92.0 build --release --locked \
   --manifest-path rust/Cargo.toml \
   -p hns-chromium-native-host
 HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
+HNS_HEADER_SNAPSHOT_PATH="$PWD/release/hns_headers_300000.snapshot.gzip" \
   cargo +1.92.0 build --release --locked \
     --manifest-path rust/Cargo.toml \
     -p hns-browser-setup \
@@ -222,25 +223,29 @@ follow [installed-browser qualification](installed-browser-qualification.md),
 which keeps the normal browser profile and registration untouched and records
 the exact host/extension hashes.
 
-The unpacked extension is written to `dist/chromium-extension`. The extension
-bundle does not contain the native executable, a CA private key, or a trust
-anchor.
+The development-only unpacked extension is written to
+`dist/chromium-extension`. Final release/store ZIPs additionally contain the
+six signed or attested Setup archives. Each Setup executable embeds its own
+native host and public header bootstrap; no package contains a CA private key
+or pre-created trust anchor.
 
 ## Install
 
 Install the extension from its catalog, or load `dist/chromium-extension`
 through the target browser's extension developer page. Its first-run page
-links to the exact-version HNS DANE Browser Setup downloads and displays the
-exact 32-character ID assigned by that catalog or browser.
+offers the exact-version, platform-matched HNS DANE Browser Setup package
+embedded in the extension and displays the exact 32-character ID assigned by
+that catalog or browser.
 
-Download the Setup application matching your operating system and CPU, close
-every selected browser, paste the displayed extension ID, select every
-Chromium flavor in which that ID is installed, and choose **Install or
-Repair**. Repeat the exact ID field for store and sideloaded builds with
-different IDs. Setup does not scan browser profiles or infer extension IDs.
+Save the selected Setup application, close every selected browser, confirm the
+release-baked extension IDs, select every Chromium flavor in which that ID is
+installed, and choose **Install or Repair**. An advanced field permits an
+explicitly reviewed additional ID. Setup does not scan browser profiles or
+infer extension IDs.
 It installs only for the current user.
 
-Each Setup package embeds the matching native host. Windows and macOS packages
+Each Setup package embeds the matching native host and the validated mainnet
+header snapshot through height 300,000. Windows and macOS packages
 use the platform's standard trust facilities. Linux packages also carry the
 NSS `certutil` executable and companion non-system libraries used to modify
 the current user's Chromium NSS database. Base operating-system facilities,
@@ -299,6 +304,13 @@ short-lived leaf certificates after native name admission on paths where Rust
 must terminate TLS to enforce HNS or ICANN DANE. Defined ICANN WebPKI fallback
 paths bypass this CA. The extension does not activate the PAC until platform
 trust installation succeeds and the matching SHA-256 marker exists.
+
+Windows release executables use the project's pinned self-signed Authenticode
+certificate and an RFC 3161 SHA-256 timestamp. This publisher identity is not
+in Windows' public trust program and Setup does not add it to a user's trust
+store. SmartScreen or **Unknown Publisher** can therefore still appear; the
+Setup page shows the archive digest and certificate fingerprint to verify
+against the release metadata before the user runs the saved archive.
 
 ## Uninstall
 

@@ -3,9 +3,11 @@
 - Name: `HNS DANE Browser`
 - Summary: `Browse HNS and ICANN names through a local Rust DNSSEC and DANE security path.`
 - Category: `Web Development`
+- Website: `https://denuoweb.com/work/hns-dane-browser-extension`
 - Support page: `https://github.com/handshake-rs/hns-dane-browser-extension/issues`
 - License: `PolyForm Noncommercial License 1.0.0`
-- Privacy policy: `https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md`
+- Privacy policy: `https://denuoweb.com/work/hns-dane-browser-extension/privacy`
+- License and user agreement: `https://denuoweb.com/work/hns-dane-browser-extension/legal`
 - First-submission package:
   `hns-dane-browser-extension-v<version>-mv3-store.zip` (keyless)
 
@@ -22,12 +24,19 @@ downloads, and WebSockets. Optional P2P DNS use is requester-only and requires
 explicit consent. A user-configured recursive HNS DoH recovery URL is blank by
 default. Bogus or indeterminate evidence fails closed.
 
-Download the matching Linux, macOS, or Windows HNS DANE Browser Setup package
-from the GitHub Release linked by the extension's setup page. Each package
-contains the matching native host and required non-system dependencies. Paste
-the exact Opera extension ID, select Opera, and choose Install or Repair. The
-extension runs no ads, analytics, telemetry, or developer-operated
-browsing-history service.
+The submitted extension ZIP contains the finalized Linux, macOS, and Windows
+HNS DANE Browser Setup packages. Its Setup page selects the current computer's
+package for a user-initiated save. Each package contains the matching Rust
+native host, validated Handshake headers through height 300,000, required non-system
+dependencies, and release-baked catalog IDs. Select Opera and choose Install
+or Repair; Complete Uninstall is available from both Setup and the extension
+dropdown. The extension runs no ads, analytics, telemetry, or
+developer-operated browsing-history service.
+
+Windows executables carry a project self-signed Authenticode signature and an
+RFC 3161 SHA-256 timestamp. The certificate is not publicly trusted, so
+SmartScreen or **Unknown Publisher** may warn; verify the archive SHA-256 and
+publisher certificate fingerprint shown by Setup before running it.
 
 Source and downloads:
 https://github.com/handshake-rs/hns-dane-browser-extension

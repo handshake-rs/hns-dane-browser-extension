@@ -174,7 +174,7 @@ See
 ## Repository layout
 
 - `extension/`: service worker, options and popup UI, tests, build tooling, and
-  user-level native-host installers.
+  the release-time index for six embedded Setup archives.
 - `rust/`: Chromium native host, platform adapter, loopback proxy, Handshake
   resolution stack, transport, and pinned canonical engine contracts.
 - `rust/crates/hns-browser-setup/`: desktop GUI/CLI that installs, repairs,
@@ -198,6 +198,7 @@ cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
 cargo +1.92.0 build --locked --release \
   --manifest-path rust/Cargo.toml -p hns-chromium-native-host
 HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
+HNS_HEADER_SNAPSHOT_PATH="$PWD/release/hns_headers_300000.snapshot.gzip" \
   cargo +1.92.0 build --locked --release \
     --manifest-path rust/Cargo.toml -p hns-browser-setup \
     --features embedded-host
@@ -215,24 +216,33 @@ artifact creation is not itself qualification.
 See [HNS DANE Browser Setup](docs/setup-application.md) for the primary desktop
 installation flow and [Chromium Extension and Native Host](docs/chromium-extension.md)
 for build, trust, recovery, and manual-installation details.
+The extension detects an exact native-component version mismatch before
+activation, retains its blocking gate, and offers the newly embedded Setup
+package. Its dropdown also exposes a safe **Complete Uninstall…** handoff; the
+user still closes browsers and confirms removal inside Setup.
 
 Store submission copy, reviewer disclosures, permission justifications, and
 shared Chrome/Edge/Opera artwork are maintained in [`store/`](store/README.md).
-Tagged GitHub Releases provide the browser-neutral extension ZIP, six
-platform-matched setup applications, and matching manual native-host bundles.
+Tagged GitHub Releases provide the browser-neutral extension ZIP, with all six
+final platform-matched Setup applications embedded, plus matching manual
+native-host bundles. Setup embeds the validated mainnet header bootstrap
+through height 300,000. Store packaging occurs only after Windows signing,
+macOS signing/notarization, and Linux provenance finalization.
 The Linux Setup ABI ceiling remains glibc 2.39 (for example Ubuntu 24.04 or
 Debian 13).
 Chrome Web Store distribution also serves Brave and Vivaldi, while Edge and
 Opera can use their own catalog listings.
 See the [Chromium release process](docs/release.md) for the immutable-tag,
 multi-platform build, checksum, signing-status, and catalog-ID boundaries.
-The published v0.5.5 macOS native-host and Setup assets are Developer ID
-signed and Apple-notarized; Setup tickets are stapled and native hosts use
-Apple's online ticket. Windows release builds now enforce a complete system-DLL
-allowlist and have an OIDC-backed Azure Artifact Signing replacement workflow;
-the published v0.5.5 Windows assets remain unsigned until that workflow is
-configured and completed. Windows and macOS release jobs perform bounded real
-GUI startup tests, and macOS binaries have a verified 11.0 deployment floor.
+Windows release builds enforce a complete system-DLL allowlist and carry the
+project's pinned self-signed Authenticode signature plus an RFC 3161 SHA-256
+timestamp. That certificate is not publicly trusted, so SmartScreen or an
+**Unknown Publisher** warning can still appear; users should verify both the
+archive SHA-256 and the published certificate fingerprint. macOS jobs require
+Developer ID signatures, Apple notarization, stapled Setup tickets, and the
+verified 11.0 deployment floor. Linux release archives receive keyless GitHub
+build-provenance attestations. A missing credential or failed platform check
+blocks the extension artifact instead of publishing an unsigned store bundle.
 
 ## Support and license
 

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "file": "hns_headers_300000.snapshot.gzip",
+  "sourceRepository": "https://github.com/handshake-rs/hns-dane-browser-mobile.git",
+  "sourceCommit": "c26ad3bd0dde441b93f21c8b62880a51349d0d7e",
+  "format": "HNSHDRSNAP1",
+  "network": "mainnet",
+  "targetHeight": 300000,
+  "headerCount": 300001,
+  "tipHash": "000000000000000c346b203c4dd866a6881a829c9dca10be1f597bb38e132ba9",
+  "compression": "gzip",
+  "compressedBytes": 35030894,
+  "compressedSha256": "0ff3484e1dede5bc34ce41206b70934b809791927b5ad82a4dac08412ec1fdd1",
+  "uncompressedBytes": 70800287,
+  "uncompressedSha256": "ff7c042b2f5d6dd035e0e083f0f31dd4dafb279288c0e929e092b71ce288d388"
+}

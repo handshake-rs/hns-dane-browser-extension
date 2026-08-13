@@ -3,9 +3,10 @@
 - Name: `HNS DANE Browser`
 - Short description: `Routes web DNS names through a local Rust dual-root DNSSEC and DANE runtime.`
 - Category: `Developer tools`
-- Website: `https://github.com/handshake-rs/hns-dane-browser-extension`
+- Website: `https://denuoweb.com/work/hns-dane-browser-extension`
 - Support: `https://github.com/handshake-rs/hns-dane-browser-extension/issues`
-- Privacy policy: `https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md`
+- Privacy policy: `https://denuoweb.com/work/hns-dane-browser-extension/privacy`
+- License and user agreement: `https://denuoweb.com/work/hns-dane-browser-extension/legal`
 - Mature content: `No`
 - First-submission package:
   `hns-dane-browser-extension-v<version>-mv3-store.zip` (keyless)
@@ -34,11 +35,17 @@ by default. Both recovery paths still require local proof, DNSSEC, TLSA, and
 DANE verification.
 
 The matching source-available HNS DANE Browser Setup application must be run on
-Linux, macOS, or Windows. Its platform package contains the matching Rust
-native host and required non-system dependencies. The extension page displays
-this Edge catalog item's exact ID and links first to the matching
-version-specific Setup release, with the latest release labeled only as a
-fallback. ChromeOS and mobile Chromium are unsupported.
+Linux, macOS, or Windows. The submitted extension ZIP contains the finalized
+packages and its Setup page selects the current computer's package for a
+user-initiated save. Setup contains the matching Rust native host, validated
+Handshake headers through height 300,000, required non-system dependencies,
+and release-baked catalog IDs. The dropdown also provides a Complete Uninstall
+handoff. ChromeOS and mobile Chromium are unsupported.
+
+Windows executables carry the project's self-signed Authenticode signature and
+an RFC 3161 SHA-256 timestamp. The certificate is not publicly trusted, so
+SmartScreen or **Unknown Publisher** may warn; compare the archive SHA-256 and
+publisher certificate fingerprint shown by Setup with the release metadata.
 
 There are no ads, analytics, telemetry, developer accounts, paid feature
 unlocks, or developer-operated browsing-history service. Source, license,

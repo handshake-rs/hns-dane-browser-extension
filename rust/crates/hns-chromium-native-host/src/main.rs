@@ -1,7 +1,9 @@
 use hns_chromium_native_host::{
     LocalCaStore, NativeHostController, native_messaging_host_manifest_json, serve_native_messaging,
 };
-use hns_chromium_platform_runtime::{NetworkKind, chromium_dane_pac_script};
+use hns_chromium_platform_runtime::{
+    BrowserRuntime, NetworkKind, RuntimeConfiguration, chromium_dane_pac_script,
+};
 use std::env;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
@@ -56,6 +58,16 @@ fn run() -> Result<(), String> {
             );
             return Ok(());
         }
+        UtilityCommand::InstallHeaderSnapshot(snapshot_path) => {
+            let runtime =
+                BrowserRuntime::open(RuntimeConfiguration::new(data_dir.clone(), options.network))
+                    .map_err(|error| format!("unable to open browser runtime: {error}"))?;
+            let status = runtime
+                .install_header_snapshot(&snapshot_path)
+                .map_err(|error| format!("unable to install header snapshot: {error}"))?;
+            println!("{}", status.to_json());
+            return Ok(());
+        }
         UtilityCommand::Serve => {}
     }
 
@@ -84,6 +96,7 @@ enum UtilityCommand {
     MarkCaInstalled,
     ClearCaInstalled,
     PrintHostManifest,
+    InstallHeaderSnapshot(PathBuf),
 }
 
 impl Options {
@@ -134,6 +147,14 @@ impl Options {
                 }
                 "--print-host-manifest" => {
                     options.set_command(UtilityCommand::PrintHostManifest)?;
+                }
+                "--install-header-snapshot" => {
+                    index += 1;
+                    let value = arguments
+                        .get(index)
+                        .ok_or_else(|| "--install-header-snapshot requires a path".to_owned())?;
+                    options
+                        .set_command(UtilityCommand::InstallHeaderSnapshot(PathBuf::from(value)))?;
                 }
                 "--extension-id" => {
                     index += 1;
@@ -237,4 +258,53 @@ fn installed_data_dir() -> Option<PathBuf> {
         return None;
     }
     Some(binary_directory.parent()?.join("data"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_header_snapshot_utility_command() {
+        let options = Options::parse(
+            [
+                "--data-dir",
+                "/tmp/hns-runtime",
+                "--network",
+                "mainnet",
+                "--install-header-snapshot",
+                "/tmp/headers.snapshot",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
+        .unwrap();
+
+        assert_eq!(options.data_dir, Some(PathBuf::from("/tmp/hns-runtime")));
+        assert!(matches!(options.network, NetworkKind::Mainnet));
+        assert!(matches!(
+            options.command,
+            UtilityCommand::InstallHeaderSnapshot(path)
+                if path == std::path::Path::new("/tmp/headers.snapshot")
+        ));
+    }
+
+    #[test]
+    fn header_snapshot_utility_requires_a_path_and_is_exclusive() {
+        assert!(
+            Options::parse(["--install-header-snapshot"].into_iter().map(str::to_owned)).is_err()
+        );
+        assert!(
+            Options::parse(
+                [
+                    "--ca-info",
+                    "--install-header-snapshot",
+                    "/tmp/headers.snapshot",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+            )
+            .is_err()
+        );
+    }
 }

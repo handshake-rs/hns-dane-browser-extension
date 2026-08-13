@@ -14,73 +14,132 @@
           <p class="eyebrow">RUST-VERIFIED HANDSHAKE</p>
           <h1>Set up HNS DANE Browser</h1>
           <p class="lede">
-            The extension is the browser control surface. A matching local Rust native host
-            performs dual-root resolution, DNSSEC, TLSA/DANE, and the authenticated loopback
-            proxy.
+            The extension is the browser control surface. Its matching local Rust native
+            component performs dual-root resolution, DNSSEC, TLSA/DANE, and the authenticated
+            loopback proxy.
           </p>
         </div>
       </header>
 
+      <p id="native-update-warning" class="warning" role="alert" hidden></p>
       <p class="warning">
-        Browsing remains blocked until the native host and its per-user local CA are installed.
-        The CA is used only when Rust must terminate TLS to enforce HNS or ICANN DANE. Defined
-        ICANN WebPKI fallback stays end-to-end in Chromium and shows the site's real certificate.
+        Browsing remains blocked until the matching native component and its per-user local CA
+        are installed. The CA is used only when Rust must terminate TLS to enforce HNS or ICANN
+        DANE. Defined ICANN WebPKI fallback stays end-to-end in Chromium and shows the site's
+        real certificate.
       </p>
 
       <div class="setup-grid">
-        <section class="setup-card">
-          <h2>1. Download Setup</h2>
+        <section id="install" class="setup-card">
+          <h2>1. Download the embedded Setup</h2>
           <p>
-            Download HNS DANE Browser Setup version
-            <code id="extension-version">shown after installation</code> for your operating
-            system and CPU. Each package contains the matching Rust native host and
-            non-system runtime dependencies. Linux Setup requires glibc 2.39 or
-            newer (Ubuntu 24.04 / Debian 13 generation).
+            This extension contains HNS DANE Browser Setup version
+            <code id="extension-version">shown after installation</code>. The matching package
+            for <strong id="detected-platform">your system</strong> is selected locally; no
+            website download or operating-system information upload is needed.
           </p>
-          <p class="link-stack">
-            <a id="version-downloads" href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Setup downloads for this version</a>
-            <a href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Latest release (fallback only)</a>
-            <a id="manual-downloads" href="https://github.com/handshake-rs/hns-dane-browser-extension/releases/latest" target="_blank" rel="noopener noreferrer">Manual native-host packages</a>
+          <p>
+            Setup includes the matching Rust native component, non-system runtime dependencies,
+            and the validated Handshake header snapshot through block 300,000.
+          </p>
+          <p>
+            <a id="download-setup" class="button-link" hidden download>Download Setup</a>
+          </p>
+          <p id="installer-status" class="section-detail" role="status">
+            Detecting your operating system and CPU…
+          </p>
+          <dl class="installer-details">
+            <div><dt>Package</dt><dd id="installer-file">—</dd></div>
+            <div><dt>Size</dt><dd id="installer-size">—</dd></div>
+            <div><dt>Signing</dt><dd id="installer-signing">—</dd></div>
+            <div><dt>SHA-256</dt><dd id="installer-sha256">—</dd></div>
+          </dl>
+          <div id="windows-signing-warning" class="warning signing-warning" role="alert" hidden>
+            <strong>Windows signing disclosure</strong>
+            <p>
+              This Setup uses a project self-signed Authenticode certificate with an RFC 3161
+              SHA-256 timestamp. The certificate is not publicly trusted, so Windows SmartScreen
+              or an “Unknown Publisher” warning may appear.
+            </p>
+            <p>
+              Before running Setup, verify both the downloaded archive SHA-256 and the signer
+              certificate SHA-256 fingerprint against these package values:
+            </p>
+            <dl class="installer-details verification-values">
+              <div><dt>Archive SHA-256</dt><dd id="windows-archive-sha256">—</dd></div>
+              <div><dt>Certificate SHA-256</dt><dd id="windows-certificate-sha256">—</dd></div>
+            </dl>
+          </div>
+        </section>
+
+        <section class="setup-card">
+          <h2>2. Run Setup</h2>
+          <p>
+            Extract the downloaded package, close every supported Chromium browser, and open the
+            Setup application. The catalog extension IDs are built into the signed Setup; choose
+            every browser you use, then select <strong>Install or Repair</strong>.
+          </p>
+          <p>
+            Re-run this newly embedded Setup whenever the extension reports that its native
+            component is out of date. Setup preserves current-user settings while replacing the
+            native application and repairing its registrations and local CA.
           </p>
         </section>
 
         <section class="setup-card">
-          <h2>2. Copy this exact ID</h2>
-          <p>Setup must receive this exact store-specific extension ID:</p>
+          <h2>3. Verify</h2>
+          <p>
+            Reopen the browser, select <strong>Retry</strong> in the toolbar popup, and confirm
+            “Rust security path active” and “DANE local CA: Installed.”
+          </p>
+        </section>
+
+        <section class="setup-card">
+          <h2>Advanced identity check</h2>
+          <p>The current catalog-specific extension ID is:</p>
           <p id="extension-id" class="extension-id"><code>shown after installation</code></p>
-          <button id="copy-extension-id" type="button">Copy extension ID</button>
+          <button id="copy-extension-id" type="button" class="secondary">Copy extension ID</button>
           <p id="copy-status" class="section-detail" role="status"></p>
           <p>
-            Catalogs can assign different IDs. Do not copy an ID from documentation or
-            another browser installation.
-          </p>
-        </section>
-
-        <section class="setup-card">
-          <h2>3. Run Setup</h2>
-          <p>
-            Close the selected browsers, open the downloaded setup application, paste the
-            exact ID, select every Chromium flavor you use, and choose Install or Repair.
-            Setup registers the native host and installs its local CA for the current user.
-          </p>
-        </section>
-
-        <section class="setup-card">
-          <h2>4. Verify or remove</h2>
-          <p>
-            Open the toolbar popup and confirm “Rust security path active” and “DANE local CA:
-            Installed.” Setup also provides Complete Uninstall, which removes registrations,
-            the exact CA, runtime data, and cached chain state.
+            Setup normally already contains this ID. Use it only when diagnosing a registration
+            with support.
           </p>
         </section>
       </div>
+
+      <section id="complete-uninstall" class="setup-card uninstall-card">
+        <h2>Complete Uninstall</h2>
+        <p>
+          Complete Uninstall removes the native registrations, the exact per-user local CA,
+          native runtime data, settings, and cached Handshake chain state. Removing the extension
+          alone does not perform that operating-system cleanup.
+        </p>
+        <p class="warning">
+          This is the destructive option. Export anything you intend to retain, then close every
+          supported Chromium browser before continuing.
+        </p>
+        <ol>
+          <li>Download and extract the same Setup package selected above.</li>
+          <li>Open Setup and choose <strong>Complete Uninstall</strong>.</li>
+          <li>Review and accept Setup's explicit removal confirmation.</li>
+          <li>After Setup succeeds, remove this extension from the browser.</li>
+        </ol>
+        <p>
+          <a id="download-uninstall-setup" class="button-link" hidden download>Download Setup for Complete Uninstall</a>
+        </p>
+        <p id="uninstall-installer-status" class="section-detail" role="status">
+          Detecting your Setup package…
+        </p>
+      </section>
 
       <section class="project-links">
         <h2>Project, privacy, and support</h2>
         <p>
           <a href="https://github.com/handshake-rs/hns-dane-browser-extension" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
-          <a href="https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">PolyForm Noncommercial license</a>
-          <a href="https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/docs/privacy-policy.md" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+          <a href="legal.html#license">PolyForm Noncommercial license</a>
+          <a href="legal.html#privacy">Privacy policy</a>
+          <a href="legal.html#agreement">User agreement</a>
+          <a href="legal.html#notices">Third-party notices</a>
           <a href="https://github.com/handshake-rs/hns-dane-browser-extension/issues" target="_blank" rel="noopener noreferrer">Support and bug reports</a>
           <a href="https://github.com/sponsors/denuoweb" target="_blank" rel="noopener noreferrer">GitHub Sponsors</a>
           <a href="handshake:hs1q5997733eq7f4yyk2vq2z8gz3yqyvpz422ypggh?label=Denuo%20Web%20Handshake%20Browser&amp;message=Handshake%20Browser%20donation">Donate HNS</a>
@@ -94,7 +153,7 @@
 
       <p class="section-detail">
         Supported desktop systems: Linux, macOS, and Windows. ChromeOS and mobile Chromium do not
-        support this native-host installation; Android and iOS are separate products.
+        support this native-component installation; Android and iOS are separate products.
       </p>
     </main>
     <script type="module" src="setup.js"></script>

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "file": "windows-self-signed-code-signing.cer",
+  "trustModel": "selfSigned",
+  "subject": "CN=Denuo Web Self-Signed Windows Builds, O=Denuo Web LLC, C=US",
+  "issuer": "CN=Denuo Web Self-Signed Windows Builds, O=Denuo Web LLC, C=US",
+  "serialNumber": "4e5d2ae42da121754fd737fe08963c36385fffaf",
+  "notBefore": "2026-08-13T06:57:03Z",
+  "notAfter": "2036-08-10T06:57:03Z",
+  "certificateSha256": "683a7560a685c447e5630f198c12a1201e8d0e40b6c80f3d259526364797e981",
+  "publicKey": {
+    "algorithm": "RSA",
+    "bits": 3072
+  },
+  "signatureAlgorithm": "sha256WithRSAEncryption",
+  "extendedKeyUsage": [
+    "1.3.6.1.5.5.7.3.3"
+  ],
+  "warning": "This certificate is not rooted in the Windows public trust store. Authenticode proves continuity with this pinned project key but does not suppress SmartScreen or unknown-publisher warnings."
+}

@@ -2,9 +2,15 @@
 
 use crate::CANONICAL_EXTENSION_ID;
 use crate::payload::{PRODUCT_LICENSE, THIRD_PARTY_NOTICES};
-use crate::{Browser, NATIVE_HOST_NAME, NativePayload, VERSION};
+use crate::{
+    Browser, HEADER_SNAPSHOT_COMPRESSED_BYTES, HEADER_SNAPSHOT_COMPRESSED_SHA256,
+    HEADER_SNAPSHOT_TARGET_HEIGHT, HEADER_SNAPSHOT_UNCOMPRESSED_BYTES,
+    HEADER_SNAPSHOT_UNCOMPRESSED_SHA256, HeaderSnapshotPayload, NATIVE_HOST_NAME, NativePayload,
+    VERSION,
+};
 #[cfg(target_os = "linux")]
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -33,8 +39,24 @@ const NATIVE_HOST_FILE_NAME: &str = if cfg!(windows) {
 } else {
     "hns-chromium-native-host"
 };
+const BUNDLED_HEADER_SNAPSHOT: SnapshotIntegrity<'static> = SnapshotIntegrity {
+    target_height: HEADER_SNAPSHOT_TARGET_HEIGHT,
+    compressed_bytes: HEADER_SNAPSHOT_COMPRESSED_BYTES,
+    compressed_sha256: HEADER_SNAPSHOT_COMPRESSED_SHA256,
+    uncompressed_bytes: HEADER_SNAPSHOT_UNCOMPRESSED_BYTES,
+    uncompressed_sha256: HEADER_SNAPSHOT_UNCOMPRESSED_SHA256,
+};
 
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy)]
+struct SnapshotIntegrity<'a> {
+    target_height: u32,
+    compressed_bytes: u64,
+    compressed_sha256: &'a str,
+    uncompressed_bytes: u64,
+    uncompressed_sha256: &'a str,
+}
 
 #[derive(Debug, Clone)]
 pub struct InstallRequest {
@@ -85,11 +107,25 @@ pub fn validate_extension_id(value: &str) -> Result<(), SetupError> {
 #[derive(Debug, Clone)]
 pub struct Installer {
     payload: NativePayload,
+    header_snapshot: HeaderSnapshotPayload,
 }
 
 impl Installer {
     pub fn new(payload: NativePayload) -> Self {
-        Self { payload }
+        Self {
+            payload,
+            header_snapshot: HeaderSnapshotPayload::release_embedded(),
+        }
+    }
+
+    pub fn with_header_snapshot(
+        payload: NativePayload,
+        header_snapshot: HeaderSnapshotPayload,
+    ) -> Self {
+        Self {
+            payload,
+            header_snapshot,
+        }
     }
 
     /// Returns a fail-closed status. `installed` is true only when the receipt,
@@ -437,6 +473,17 @@ impl Installer {
             "Committed a pre-trust ownership transaction at {}.",
             layout.transaction_path.display()
         ));
+        let snapshot = install_header_snapshot_payload(
+            &self.header_snapshot,
+            &layout.installed_host,
+            &layout.data_dir,
+        )?;
+        details.push(format!(
+            "Verified and installed the bundled mainnet header snapshot through height {} (native status {}, best height {}).",
+            HEADER_SNAPSHOT_TARGET_HEIGHT,
+            snapshot.status,
+            snapshot.best_height
+        ));
         install_trust_anchor(&layout, &ca, &trust_store, &mut details)?;
 
         invoke_native_utility(
@@ -743,6 +790,15 @@ struct CaInfo {
     certificate_path: PathBuf,
     certificate_sha1: String,
     certificate_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeaderSnapshotInstallInfo {
+    network: String,
+    status: String,
+    best_height: u32,
+    error: Option<String>,
 }
 
 fn prepare_install_directories(layout: &InstallLayout) -> Result<(), SetupError> {
@@ -1135,6 +1191,206 @@ fn invoke_ca_info(host: &Path, data_dir: &Path) -> Result<CaInfo, SetupError> {
             "native host returned invalid local-CA JSON: {error}"
         ))
     })
+}
+
+fn install_header_snapshot_payload(
+    payload: &HeaderSnapshotPayload,
+    host: &Path,
+    data_dir: &Path,
+) -> Result<HeaderSnapshotInstallInfo, SetupError> {
+    let compressed = payload.read().map_err(|error| {
+        let source = payload
+            .source_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "embedded release snapshot".to_owned());
+        operation(format!(
+            "unable to read bundled header snapshot ({source}): {error}"
+        ))
+    })?;
+    install_header_snapshot_bytes(&compressed, host, data_dir, BUNDLED_HEADER_SNAPSHOT)
+}
+
+fn install_header_snapshot_bytes(
+    compressed: &[u8],
+    host: &Path,
+    data_dir: &Path,
+    integrity: SnapshotIntegrity<'_>,
+) -> Result<HeaderSnapshotInstallInfo, SetupError> {
+    let compressed_bytes = u64::try_from(compressed.len())
+        .map_err(|_| operation("bundled header snapshot length does not fit in u64"))?;
+    if compressed_bytes != integrity.compressed_bytes {
+        return Err(operation(format!(
+            "bundled header snapshot compressed size mismatch: got {compressed_bytes}, expected {}",
+            integrity.compressed_bytes
+        )));
+    }
+    let compressed_sha256 = sha256_hex(compressed);
+    if compressed_sha256 != integrity.compressed_sha256 {
+        return Err(operation(format!(
+            "bundled header snapshot compressed SHA-256 mismatch: got {compressed_sha256}, expected {}",
+            integrity.compressed_sha256
+        )));
+    }
+
+    let (temporary_path, temporary_file) = create_temporary_snapshot(data_dir)?;
+    let install_result = (|| {
+        decompress_header_snapshot(compressed, temporary_file, integrity)?;
+        invoke_header_snapshot_install(host, data_dir, &temporary_path, integrity.target_height)
+    })();
+    let cleanup_result = fs::remove_file(&temporary_path);
+
+    match (install_result, cleanup_result) {
+        (Ok(status), Ok(())) => Ok(status),
+        (Ok(_), Err(error)) => Err(operation(format!(
+            "unable to remove temporary header snapshot {}: {error}",
+            temporary_path.display()
+        ))),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(cleanup_error)) => Err(operation(format!(
+            "{error}; additionally unable to remove temporary header snapshot {}: {cleanup_error}",
+            temporary_path.display()
+        ))),
+    }
+}
+
+fn create_temporary_snapshot(data_dir: &Path) -> Result<(PathBuf, File), SetupError> {
+    validate_existing_ancestors_no_redirect(data_dir, "header-snapshot data ancestor")?;
+    ensure_directory(data_dir, true)?;
+    validate_existing_ancestors_no_redirect(data_dir, "header-snapshot data ancestor")?;
+    reject_symlink(data_dir, "header-snapshot data directory")?;
+
+    for _ in 0..100 {
+        let sequence = TEMPORARY_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let candidate = data_dir.join(format!(
+            ".hns-headers-{}-{}.snapshot.tmp",
+            std::process::id(),
+            sequence
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+                }
+                return Ok((candidate, file));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(operation(format!(
+                    "unable to create temporary header snapshot in {}: {error}",
+                    data_dir.display()
+                )));
+            }
+        }
+    }
+
+    Err(operation(format!(
+        "unable to allocate a unique temporary header snapshot in {}",
+        data_dir.display()
+    )))
+}
+
+fn decompress_header_snapshot(
+    compressed: &[u8],
+    mut destination: File,
+    integrity: SnapshotIntegrity<'_>,
+) -> Result<(), SetupError> {
+    let mut decoder = GzDecoder::new(compressed);
+    let mut hasher = Sha256::new();
+    let mut uncompressed_bytes = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+
+    loop {
+        let read = decoder.read(&mut buffer).map_err(|error| {
+            operation(format!(
+                "unable to decompress bundled header snapshot: {error}"
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        let next_size = uncompressed_bytes
+            .checked_add(read as u64)
+            .ok_or_else(|| operation("bundled header snapshot decompressed size overflow"))?;
+        if next_size > integrity.uncompressed_bytes {
+            return Err(operation(format!(
+                "bundled header snapshot decompressed size exceeds expected {} bytes",
+                integrity.uncompressed_bytes
+            )));
+        }
+        destination.write_all(&buffer[..read])?;
+        hasher.update(&buffer[..read]);
+        uncompressed_bytes = next_size;
+    }
+
+    if uncompressed_bytes != integrity.uncompressed_bytes {
+        return Err(operation(format!(
+            "bundled header snapshot decompressed size mismatch: got {uncompressed_bytes}, expected {}",
+            integrity.uncompressed_bytes
+        )));
+    }
+    let uncompressed_sha256 = lower_hex(&hasher.finalize());
+    if uncompressed_sha256 != integrity.uncompressed_sha256 {
+        return Err(operation(format!(
+            "bundled header snapshot decompressed SHA-256 mismatch: got {uncompressed_sha256}, expected {}",
+            integrity.uncompressed_sha256
+        )));
+    }
+    destination.sync_all().map_err(|error| {
+        operation(format!(
+            "unable to flush temporary header snapshot: {error}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn invoke_header_snapshot_install(
+    host: &Path,
+    data_dir: &Path,
+    snapshot_path: &Path,
+    target_height: u32,
+) -> Result<HeaderSnapshotInstallInfo, SetupError> {
+    let output = invoke_native_utility(
+        host,
+        &[
+            OsString::from("--data-dir"),
+            data_dir.as_os_str().to_os_string(),
+            OsString::from("--network"),
+            OsString::from("mainnet"),
+            OsString::from("--install-header-snapshot"),
+            snapshot_path.as_os_str().to_os_string(),
+        ],
+        "install the bundled mainnet header snapshot",
+    )?;
+    if output.stdout.is_empty() || output.stdout.len() as u64 > MAX_JSON_BYTES {
+        return Err(operation(
+            "native host produced empty or oversized header-snapshot metadata",
+        ));
+    }
+    let status: HeaderSnapshotInstallInfo =
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            operation(format!(
+                "native host returned invalid header-snapshot JSON: {error}"
+            ))
+        })?;
+    if status.network != "mainnet"
+        || !matches!(
+            status.status.as_str(),
+            "snapshot_imported" | "snapshot_present"
+        )
+        || status.best_height < target_height
+        || status.error.is_some()
+    {
+        return Err(operation(format!(
+            "native host did not confirm the mainnet header snapshot through height {target_height}"
+        )));
+    }
+    Ok(status)
 }
 
 fn invoke_native_utility(
@@ -3581,9 +3837,12 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut output = String::with_capacity(64);
-    for byte in digest {
+    lower_hex(&Sha256::digest(bytes))
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         use std::fmt::Write as _;
         let _ = write!(output, "{byte:02x}");
     }
@@ -3639,6 +3898,7 @@ fn operation(message: impl Into<String>) -> SetupError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{Compression, write::GzEncoder};
 
     const EXTENSION_ID: &str = "idejjnoplngbhpnpjekblpalblbianio";
 
@@ -3664,6 +3924,122 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn snapshot_temp_files(data_dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(data_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(".hns-headers-"))
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
+    fn write_snapshot_host(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(path, body).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_install_verifies_both_layers_and_removes_temporary_file() {
+        let temporary = TestDirectory::new("snapshot-success");
+        let data_dir = temporary.path().join("data");
+        let host = temporary.path().join("native-host");
+        write_snapshot_host(
+            &host,
+            "#!/bin/sh\nprintf '%s\\n' '{\"network\":\"mainnet\",\"status\":\"snapshot_imported\",\"bestHeight\":7,\"error\":null}'\n",
+        );
+        let raw = b"small verified header snapshot fixture";
+        let compressed = gzip(raw);
+        let compressed_sha256 = sha256_hex(&compressed);
+        let uncompressed_sha256 = sha256_hex(raw);
+        let integrity = SnapshotIntegrity {
+            target_height: 7,
+            compressed_bytes: compressed.len() as u64,
+            compressed_sha256: &compressed_sha256,
+            uncompressed_bytes: raw.len() as u64,
+            uncompressed_sha256: &uncompressed_sha256,
+        };
+
+        let status =
+            install_header_snapshot_bytes(&compressed, &host, &data_dir, integrity).unwrap();
+
+        assert_eq!(status.status, "snapshot_imported");
+        assert_eq!(status.best_height, 7);
+        assert!(snapshot_temp_files(&data_dir).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_install_rejects_raw_digest_mismatch_without_invoking_host() {
+        let temporary = TestDirectory::new("snapshot-raw-mismatch");
+        let data_dir = temporary.path().join("data");
+        let host = temporary.path().join("native-host");
+        let marker = temporary.path().join("host-was-invoked");
+        write_snapshot_host(
+            &host,
+            &format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
+        );
+        let raw = b"snapshot fixture";
+        let compressed = gzip(raw);
+        let compressed_sha256 = sha256_hex(&compressed);
+        let wrong_uncompressed_sha256 = "00".repeat(32);
+        let integrity = SnapshotIntegrity {
+            target_height: 1,
+            compressed_bytes: compressed.len() as u64,
+            compressed_sha256: &compressed_sha256,
+            uncompressed_bytes: raw.len() as u64,
+            uncompressed_sha256: &wrong_uncompressed_sha256,
+        };
+
+        let error = install_header_snapshot_bytes(&compressed, &host, &data_dir, integrity)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("decompressed SHA-256 mismatch"));
+        assert!(!marker.exists());
+        assert!(snapshot_temp_files(&data_dir).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_install_removes_temporary_file_when_native_import_fails() {
+        let temporary = TestDirectory::new("snapshot-native-failure");
+        let data_dir = temporary.path().join("data");
+        let host = temporary.path().join("native-host");
+        write_snapshot_host(&host, "#!/bin/sh\necho import-failed >&2\nexit 9\n");
+        let raw = b"snapshot fixture";
+        let compressed = gzip(raw);
+        let compressed_sha256 = sha256_hex(&compressed);
+        let uncompressed_sha256 = sha256_hex(raw);
+        let integrity = SnapshotIntegrity {
+            target_height: 1,
+            compressed_bytes: compressed.len() as u64,
+            compressed_sha256: &compressed_sha256,
+            uncompressed_bytes: raw.len() as u64,
+            uncompressed_sha256: &uncompressed_sha256,
+        };
+
+        let error = install_header_snapshot_bytes(&compressed, &host, &data_dir, integrity)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("install the bundled mainnet header snapshot"));
+        assert!(error.contains("import-failed"));
+        assert!(snapshot_temp_files(&data_dir).is_empty());
     }
 
     #[cfg(target_os = "linux")]

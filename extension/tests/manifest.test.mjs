@@ -176,6 +176,31 @@ test("service worker activates the authenticated proxy before initial header cat
   assert.doesNotMatch(worker, /route.*record/i);
 });
 
+test("service worker blocks an outdated native component before start and prompts once", () => {
+  const startup = worker.match(
+    /async function startRuntime\(policyOverride\) \{[\s\S]*?\n\}\n\nasync function establishStartupHeaderReadiness/
+  )?.[0];
+  assert.ok(startup, "startRuntime implementation");
+  const blocker = startup.indexOf("await installBlockingPac(startControlEpoch)");
+  const hello = startup.indexOf('client.request("hello")');
+  const versionInspection = startup.indexOf("inspectNativeComponent(hello, EXTENSION_VERSION)");
+  const nativeStart = startup.indexOf('client.request("start", { policy })');
+  assert.ok(blocker >= 0 && blocker < hello, "the mandatory blocker precedes hello");
+  assert.ok(hello < versionInspection, "hello is inspected");
+  assert.ok(
+    versionInspection < nativeStart,
+    "exact native version acceptance precedes native startup"
+  );
+  assert.match(startup, /nativeComponentUpdateRequired/);
+  assert.match(startup, /nativeComponentIncompatible/);
+  assert.match(worker, /state: "blocked",[\s\S]*?nativeComponentState/);
+  assert.match(worker, /NATIVE_SETUP_PROMPTED_VERSION_KEY/);
+  assert.match(worker, /chrome\.storage\.session\.get/);
+  assert.match(worker, /chrome\.storage\.session\.set/);
+  assert.match(worker, /reason", "native-component-update"/);
+  assert.match(worker, /setupUrl\.hash = "install"/);
+});
+
 test("health checks preserve a live generation and reconnect only after failure", () => {
   assert.match(
     worker,
@@ -281,35 +306,59 @@ test("the unpacked Chromium build carries the generated dependency notices", () 
   assert.match(buildScript, /github\.com\/sponsors\/denuoweb/);
 });
 
-test("first install opens a complete bundled Setup flow and project disclosure", () => {
+test("first install opens the embedded Setup and Complete Uninstall flow", () => {
   assert.match(
     worker,
     /details\.reason === "install"[\s\S]*?chrome\.runtime\.getURL\("src\/setup\.html"\)/
   );
-  assert.match(setup, /matching local Rust native host/);
+  assert.match(setup, /matching local Rust native/);
   assert.match(setup, /HNS DANE Browser Setup/);
-  assert.match(setup, /contains the matching Rust native host/);
+  assert.match(setup, /contains HNS DANE Browser Setup version/);
   assert.match(setup, /non-system runtime dependencies/);
-  assert.match(setup, /Copy extension ID/);
-  assert.match(setup, /select every Chromium flavor/);
+  assert.match(setup, /id="download-setup"[^>]*download/);
+  assert.match(setup, /catalog extension IDs are built into/);
+  assert.match(setup, /every browser you use/);
+  assert.match(setup, /block 300,000/);
   assert.match(setup, /Complete Uninstall/);
+  assert.match(setup, /id="complete-uninstall"/);
   assert.match(setup, /per-user local CA/);
-  assert.match(setup, /releases\/latest/);
   assert.match(setup, /handshake-rs\/hns-dane-browser-extension/);
-  assert.match(setup, /blob\/main\/LICENSE/);
-  assert.match(setup, /blob\/main\/docs\/privacy-policy\.md/);
+  assert.match(setup, /legal\.html#license/);
+  assert.match(setup, /legal\.html#privacy/);
+  assert.match(setup, /legal\.html#agreement/);
+  assert.match(setup, /legal\.html#notices/);
   assert.match(setup, /github\.com\/sponsors\/denuoweb/);
   assert.match(setup, /Donations do not unlock features/);
   assert.match(setup, /ChromeOS and mobile Chromium do not/);
   assert.match(setupScript, /\^\[a-p\]\{32\}\$/);
   assert.match(setupScript, /runtime\?\.getManifest\?\.\(\)/);
   assert.match(setupScript, /navigator\.clipboard\.writeText\(extensionId\)/);
-  assert.match(
-    setupScript,
-    /releases\/tag\/v\$\{extensionVersion\}/
+  assert.match(setupScript, /runtime\.getPlatformInfo\(\)/);
+  assert.match(setupScript, /runtime\.getURL\("installers\/index\.json"\)/);
+  assert.match(setupScript, /selectEmbeddedInstaller/);
+  assert.match(setupScript, /runtime\.getURL\(selection\.path\)/);
+  assert.match(setup, /project self-signed Authenticode certificate/i);
+  assert.match(setup, /RFC 3161[\s\S]*SHA-256 timestamp/);
+  assert.match(setup, /not publicly trusted/);
+  assert.match(setup, /Windows SmartScreen/);
+  assert.match(setup, /Unknown Publisher/);
+  assert.match(setup, /Archive SHA-256/);
+  assert.match(setup, /Certificate SHA-256/);
+  assert.match(setupScript, /selfSignedAuthenticodeAndTimestamped/);
+  assert.match(setupScript, /certificateTrust !== "notPubliclyTrusted"/);
+  assert.match(setupScript, /signerCertificateSha256/);
+  const trustValidation = setupScript.indexOf(
+    "validateWindowsInstallerTrust(index, selection)"
   );
-  assert.match(setup, /Manual native-host packages/);
-  assert.match(setup, /Latest release \(fallback only\)/);
+  const downloadEnablement = setupScript.indexOf(
+    'configureDownload("#download-setup"'
+  );
+  assert.ok(
+    trustValidation >= 0 && trustValidation < downloadEnablement,
+    "Windows trust metadata must validate before a download link is exposed"
+  );
   assert.match(popup, /id="setup"/);
+  assert.match(popup, /id="complete-uninstall"/);
+  assert.match(popupScript, /openSetup\("complete-uninstall"\)/);
   assert.match(popupScript, /src\/setup\.html/);
 });

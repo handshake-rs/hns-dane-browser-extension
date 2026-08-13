@@ -12,28 +12,33 @@ Releases provide six explicit targets:
 - Windows x64 and arm64; and
 - macOS x64 and arm64.
 
-Each target embeds the native-host executable produced for that same target.
-Release setup builds do not accept a runtime native-host override, and the
-setup application never downloads or substitutes executable code during
-installation. A local payload override exists only in non-embedded development
+Each target embeds the native-host executable produced for that same target,
+the canonical mainnet header snapshot through height 300,000, and the exact
+known catalog extension IDs supplied to the release build. Release setup
+builds do not accept a runtime native-host or snapshot override, and the setup
+application never downloads or substitutes executable code during
+installation. Local payload overrides exist only in non-embedded development
 builds.
 
 ## User flow
 
 1. Install HNS DANE Browser in the intended Chromium catalog or load the
    canonical GitHub package.
-2. Open the extension's Setup page and copy the exact 32-character extension
-   ID shown there.
-3. Download the setup package matching the operating system and CPU.
-4. Close the selected Chromium browsers.
-5. Paste one or more exact extension IDs, select the installed Chromium
-   flavors, and choose **Install or Repair**.
-6. Reopen the browser and verify **Rust security path active** and
+2. On the extension's Setup page, choose **Save Setup**. The page selects the
+   signed package embedded in the installed extension for the current
+   operating system and CPU; it does not fetch an executable from the web.
+3. Close the selected Chromium browsers and run the saved Setup application.
+4. Confirm the detected browser selections and the release-baked extension
+   IDs, then choose **Install or Repair**. The advanced ID field remains
+   available for an explicitly reviewed catalog or managed-deployment ID.
+5. Reopen the browser and verify **Rust security path active** and
    **DANE local CA: Installed** in the toolbar popup.
 
-Different catalogs can assign different extension IDs. Setup accepts multiple
-exact IDs and registers only those values. It does not infer identity by
-scanning browser profiles.
+Different catalogs can assign different extension IDs. The release gate bakes
+the canonical ID and every configured Chrome, Edge, and Opera catalog ID into
+all six Setup applications. Setup accepts multiple exact IDs and registers
+only those values. It does not infer identity by scanning browser profiles.
+Unknown IDs are never discovered or silently authorized.
 
 Browser selection expresses the Chromium-family compatibility the user
 intends; it is not a promise that every flavor has a private registration
@@ -58,6 +63,8 @@ Setup performs a per-user installation:
 
 - writes the version-matched native host to the product's private application
   data directory;
+- verifies and imports the embedded mainnet header snapshot through height
+  300,000 before reporting installation success;
 - obtains the Native Messaging manifest from that installed executable;
 - writes the native-messaging compatibility locations required by the
   selected Chrome, Chromium, Edge, Brave, Vivaldi, and Opera flavors, including
@@ -81,6 +88,28 @@ private key material, runtime data, and setup receipt. Unsafe or ambiguous
 removal roots are rejected. If installation was interrupted after trust
 mutation but before the final receipt, Complete Uninstall uses the pre-trust
 transaction to identify and remove only the recorded CA and registration.
+
+The toolbar dropdown exposes **Complete Uninstall…** as a handoff to the
+extension Setup page. That page saves the same platform-matched embedded Setup
+package and instructs the user to close all supported browsers, run it, and
+choose **Complete Uninstall**. Browser JavaScript never invokes the destructive
+operation directly.
+
+## Header bootstrap snapshot
+
+The bundled `HNSHDRSNAP1` snapshot contains 300,001 mainnet headers from
+genesis through height 300,000. It is not a full-block archive, transaction
+archive, wallet, or precomputed name-state database. The compressed and raw
+SHA-256 digests are pinned in `release/header-snapshot-300000.json`.
+
+Setup verifies the compressed payload, streams it through a strict
+70,800,287-byte output bound, verifies the raw digest, and gives the temporary
+file only to the installed version-matched native host. The host then applies
+its normal genesis, linkage, proof-of-work, difficulty, checkpoint, trailing
+data, count, and exact-tip checks before committing header batches. The
+temporary file is removed on success or failure. The operation is idempotent
+when the local validated chain is already at or beyond height 300,000; peers
+provide later headers and live proof-backed name state.
 
 ## Optional wallet service staging
 
@@ -114,8 +143,10 @@ availability, and value movement all remain false regardless of local staging.
 ## Bundling and operating-system dependencies
 
 Rust application dependencies are linked into the setup executable. The
-matching native host, product license, and third-party notices are part of
-each setup package.
+matching native host and canonical compressed header snapshot are embedded in
+that executable, so they are covered by Windows Authenticode or macOS code
+signing. The product license and third-party notices are part of each setup
+package.
 
 Windows uses current-user registry and certificate-store facilities supplied
 by Windows. macOS uses the current user's login keychain and system security
@@ -147,10 +178,12 @@ ChromeOS and mobile Chromium do not support this desktop native-host
 installation. Android and iOS are maintained in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-Automated Windows setup artifacts must be described as unsigned until
-project-controlled Authenticode signing is configured. A macOS Setup artifact
-must be described as unsigned unless the credentialed release workflow has
-verified its Developer ID signature, Apple acceptance, stapled ticket, final
-archive extraction, and Gatekeeper assessment. The published v0.5.5 macOS
-Setup assets completed those checks on 2026-07-29; the v0.5.5 Windows Setup
-assets remain unsigned.
+Store packages must never contain an unsigned Windows Setup executable or an
+unnotarized macOS Setup application. The release graph finalizes and verifies
+the project's pinned self-signed Windows Authenticode signatures and RFC 3161
+SHA-256 timestamps, macOS Developer ID signatures/notarization/stapling, and
+Linux build-provenance attestations before it assembles the extension ZIP. The
+Windows publisher certificate is not publicly trusted and is never installed
+on a user's machine, so SmartScreen or **Unknown Publisher** may still warn.
+Verify the downloaded archive SHA-256 and the published certificate
+fingerprint before running it. Missing signing authority blocks the release.

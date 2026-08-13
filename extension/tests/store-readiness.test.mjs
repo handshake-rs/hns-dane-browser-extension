@@ -56,7 +56,10 @@ test("Chromium package and catalog artwork have exact required PNG dimensions", 
 });
 
 test("store copy covers every supported Chromium distribution and exact public links", () => {
+  const productUrl = "https://denuoweb.com/work/hns-dane-browser-extension";
+  const privacyUrl = `${productUrl}/privacy`;
   assert.ok(manifest.description.length <= 132);
+  assert.equal(manifest.homepage_url, productUrl);
   for (const browser of [
     "Google Chrome",
     "Brave",
@@ -68,6 +71,9 @@ test("store copy covers every supported Chromium distribution and exact public l
     assert.match(storeReadme, new RegExp(browser));
   }
   for (const listing of [chromeListing, edgeListing, operaListing]) {
+    assert.match(listing, new RegExp(productUrl));
+    assert.match(listing, new RegExp(privacyUrl));
+    assert.match(listing, new RegExp(`${productUrl}/legal`));
     assert.match(listing, /handshake-rs\/hns-dane-browser-extension/);
     assert.match(listing, /HNS DANE Browser Setup/);
     assert.match(listing, /matching(?:\s+Rust)?\s+native host/i);
@@ -76,6 +82,7 @@ test("store copy covers every supported Chromium distribution and exact public l
     assert.match(listing, /github\.com\/sponsors\/denuoweb/);
     assert.match(listing, /-mv3-store\.zip/);
   }
+  assert.match(storeReadme, new RegExp(`${productUrl}/legal`));
   assert.match(storeReadme, /first-submission `-mv3-store\.zip`/);
   assert.match(storeReadme, /YouTube feature-video URL/);
   assert.match(chromeListing, /Localized promo video:[\s\S]*YouTube/);

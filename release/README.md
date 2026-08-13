@@ -4,7 +4,8 @@ The tag-triggered workflow accepts only `v<manifest-version>` tags that point to
 the exact current default-branch tip. It packages a keyless browser-neutral
 Manifest V3 ZIP for first store submissions, a canonical-ID ZIP for GitHub and
 unpacked use, and both native-host and graphical setup packages for Linux,
-Windows, and macOS on x64 and arm64. The 14 deterministic archives have 14
+Windows, and macOS on x64 and arm64. Both extension ZIPs contain those same six
+final Setup archives and a platform-selection index. The 14 deterministic archives have 14
 checksum sidecars; `SHA256SUMS` is the twenty-ninth release asset. Before
 publication, the publisher checks every remote name, nonzero size, and GitHub
 SHA-256 digest against the locally verified file. It publishes only after all
@@ -15,19 +16,19 @@ repository administrators should:
 
 1. protect the default branch and require the `Required CI` check;
 2. restrict creation and updates of `v*` tags to release maintainers;
-3. configure the `release` GitHub Actions environment with required maintainer
-   approval; and
-4. enable immutable releases only after any required signing replacement has
-   completed; then
-5. review the tag commit, workflow changes, store identity, and release notes
+3. configure the `release`, `macos-signing`, and `windows-signing` GitHub
+   Actions environments with the documented protection and credentials;
+4. review the tag commit, workflow changes, store identity, and release notes
    before approving that environment.
 
 The canonical release/default extension ID and the public key from which it is
 derived are recorded in `release/extension-identity.json`. Store catalogs can
-assign different IDs. Set the public `CHROMIUM_EXTENSION_ID` repository variable
-to an exact catalog ID before tagging when one is known. Native bundles register
-both the canonical ID and that catalog ID; the installers also accept additional
-exact IDs. The `-mv3.zip` GitHub/unpacked package injects the public key into its
+assign different IDs. Set the public `CHROME_EXTENSION_ID`,
+`EDGE_EXTENSION_ID`, and `OPERA_EXTENSION_ID` repository variables before
+tagging when those IDs are known. The legacy `CHROMIUM_EXTENSION_ID` remains a
+single-catalog compatibility input. Native bundles and Setup receive the
+validated, deduplicated set with the canonical ID. The `-mv3.zip`
+GitHub/unpacked package injects the public key into its
 packaged manifest so unpacked installations derive the canonical ID. The
 `-mv3-store.zip` first-submission package remains keyless so each catalog can
 assign its own ID. No private key is distributed in either package.
@@ -40,29 +41,31 @@ release asset, and must be exercised only in a disposable profile as documented
 in
 [`docs/installed-browser-qualification.md`](../docs/installed-browser-qualification.md).
 
-The tag workflow contains no signing authority and initially creates unsigned
-Windows and macOS archives. Two manual, default-branch-only replacement
-workflows can rebuild the same tagged source on x64 and arm64. The Windows flow
-uses GitHub OIDC and Azure Artifact Signing to Authenticode-sign and RFC 3161
-SHA-256 timestamp each native host before embedding it and each Setup
-executable afterward. The macOS flow uses the approved Developer ID Application
-identity, notarizes both products, and staples the Setup apps. Each publisher
-replaces only its four platform archives, four checksum sidecars, and
-`SHA256SUMS`, preserving the release tag, source commit, title, version, and all
-other assets.
+The tag workflow itself now contains protected, environment-scoped platform
+jobs. Windows uses the project's persistent, pinned self-signed certificate to
+Authenticode-sign and RFC 3161 SHA-256 timestamp each native host before
+embedding it and each Setup executable afterward. macOS uses the approved
+Developer ID Application identity, notarizes both products, and staples Setup.
+Linux uses GitHub keyless artifact attestations. Only after all six Setup
+archives are finalized does the read-only extension job embed them; only after
+that does the `release` environment publish.
 
-The published v0.5.5 macOS assets completed that default-branch workflow on
-2026-07-29. Its credentialed signing jobs used the protected
-`macos-signing` environment. Setup apps contain stapled tickets and standalone
-native hosts use Apple's online notarization ticket. Windows v0.5.5 artifacts
-remain unsigned until the Windows replacement workflow is configured and
-completed.
+The manual replacement workflows remain for historical releases, including
+v0.5.5. Current store packages cannot be finalized by replacing separate assets
+after publication because their installer bytes are already inside the ZIP.
 
-Windows signing uses the protected `windows-signing` environment, an Entra
-federated identity, and the narrowly scoped Artifact Signing Certificate
-Profile Signer role; no exportable key or client secret is stored in GitHub.
-The approved exact certificate subject is pinned and every signed executable is
-checked with PowerShell trust policy and SignTool, including its timestamp.
+Windows signing uses the protected `windows-signing` environment. The encrypted
+PFX and its password are environment secrets; only the public DER certificate
+and its metadata are committed. The runner imports the key non-exportably into
+its current-user store, signs by exact thumbprint, and deletes the key and
+temporary PFX on every exit path. Verification temporarily trusts only the
+committed public certificate, checks the exact certificate bytes, subject,
+RSA-3072 key, code-signing EKU, embedded signature, timestamp, and SignTool
+policy, then removes that temporary trust and confirms the files return to an
+intact-but-untrusted state. Users' systems never install the publisher
+certificate. It is not publicly trusted, so SmartScreen or **Unknown Publisher**
+warnings remain expected; verify each archive SHA-256 and the published
+certificate fingerprint.
 
 The macOS credentialed signing jobs use the protected `macos-signing`
 environment.
@@ -80,12 +83,13 @@ submission IDs, status, and logs as workflow artifacts, including after
 failure. The `.p8` key is unencrypted API key material; no `.p8` password is
 used.
 
-The final write-enabled `replace` job uses the separate `release` environment;
-that environment currently has no approval or branch rules and must be
-protected before the asset publisher can be described as
-environment-protected.
+The final write-enabled publisher and historical `replace` jobs use the
+separate `release` environment. Its deployment policy permits only `main` and
+`v*` tags. It currently has no required reviewer, so repository administrators
+can add one if releases should pause for a second explicit approval.
 
-Each setup executable embeds the exact version-matched native host. Windows
+Each Setup executable embeds the exact version-matched native host and the
+hash-pinned height-300,000 mainnet header snapshot. Windows
 setup executables and their embedded native hosts statically link the Microsoft
 CRT where supported. Every concrete imported DLL is explicitly allowlisted as
 a `System32` component, while Windows API-set contracts are recognized

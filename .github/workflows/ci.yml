@@ -135,6 +135,7 @@ jobs:
 
       - name: Build Setup with the exact native host embedded
         env:
+          HNS_HEADER_SNAPSHOT_PATH: ${{ github.workspace }}/release/hns_headers_300000.snapshot.gzip
           HNS_NATIVE_HOST_PATH: ${{ github.workspace }}/rust/target/release/hns-chromium-native-host
         run: >-
           cargo +1.92.0 build --locked --release

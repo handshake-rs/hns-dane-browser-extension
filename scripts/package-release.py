@@ -22,6 +22,7 @@ import zipfile
 
 
 REPOSITORY_URL = "https://github.com/handshake-rs/hns-dane-browser-extension"
+PRODUCT_URL = "https://denuoweb.com/work/hns-dane-browser-extension"
 LICENSE_NAME = "PolyForm Noncommercial License 1.0.0"
 GITHUB_SPONSORS_URL = "https://github.com/sponsors/denuoweb"
 DONATION_URL = (
@@ -31,6 +32,22 @@ DONATION_URL = (
 )
 EXTENSION_ID_PATTERN = re.compile(r"[a-p]{32}")
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+WINDOWS_SIGNING_EVIDENCE_KEYS = {
+    "schemaVersion",
+    "codeSigningStatus",
+    "certificateTrust",
+    "timestampStatus",
+    "signerSubject",
+    "signerCertificateSha256",
+    "files",
+}
+WINDOWS_SIGNED_FILE_EVIDENCE_KEYS = {
+    "fileName",
+    "sha256",
+    "signatureType",
+    "timestampCertificateSha256",
+}
 PLATFORMS = {"linux", "macos", "windows"}
 ARCHITECTURES = {"x64", "arm64"}
 NATIVE_RUST_TARGETS = {
@@ -99,6 +116,20 @@ LINUX_SETUP_SYSTEM_SONAMES = {
 LINUX_RUNTIME_METADATA_SCHEMA_VERSION = 2
 MACOS_DEPLOYMENT_TARGET = "11.0"
 ZIP_EPOCH = 315532800  # 1980-01-01, the earliest ZIP timestamp.
+SETUP_INSTALLER_ARCHITECTURES = {
+    "x64": "x86_64",
+    "arm64": "aarch64",
+}
+HEADER_SNAPSHOT = {
+    "format": "HNSHDRSNAP1",
+    "height": 300000,
+    "headerCount": 300001,
+    "sha256": "0ff3484e1dede5bc34ce41206b70934b809791927b5ad82a4dac08412ec1fdd1",
+    "size": 35030894,
+    "uncompressedSha256": "ff7c042b2f5d6dd035e0e083f0f31dd4dafb279288c0e929e092b71ce288d388",
+    "uncompressedSize": 70800287,
+    "tipHash": "000000000000000c346b203c4dd866a6881a829c9dca10be1f597bb38e132ba9",
+}
 
 
 class PackagingError(ValueError):
@@ -140,6 +171,145 @@ def load_canonical_identity(repository_root: Path) -> tuple[str, dict[str, objec
     return canonical_id, identity
 
 
+def load_windows_self_signed_identity(
+    repository_root: Path,
+) -> dict[str, str]:
+    metadata_path = (
+        repository_root / "release/windows-self-signed-code-signing.json"
+    )
+    certificate_path = (
+        repository_root / "release/windows-self-signed-code-signing.cer"
+    )
+    if not metadata_path.is_file() or metadata_path.is_symlink():
+        raise PackagingError(
+            "the Windows self-signed certificate metadata is missing or unsafe"
+        )
+    if not certificate_path.is_file() or certificate_path.is_symlink():
+        raise PackagingError(
+            "the Windows self-signed public certificate is missing or unsafe"
+        )
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PackagingError(
+            "the Windows self-signed certificate metadata is unreadable"
+        ) from error
+    subject = metadata.get("subject") if isinstance(metadata, dict) else None
+    certificate_sha256 = (
+        metadata.get("certificateSha256")
+        if isinstance(metadata, dict)
+        else None
+    )
+    public_key = metadata.get("publicKey") if isinstance(metadata, dict) else None
+    extended_key_usage = (
+        metadata.get("extendedKeyUsage")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("schemaVersion") != 1
+        or metadata.get("file") != certificate_path.name
+        or metadata.get("trustModel") != "selfSigned"
+        or not isinstance(subject, str)
+        or not subject
+        or metadata.get("issuer") != subject
+        or not isinstance(metadata.get("serialNumber"), str)
+        or not re.fullmatch(r"[0-9a-f]+", metadata["serialNumber"])
+        or not isinstance(metadata.get("notBefore"), str)
+        or not isinstance(metadata.get("notAfter"), str)
+        or not isinstance(certificate_sha256, str)
+        or not SHA256_PATTERN.fullmatch(certificate_sha256)
+        or not isinstance(public_key, dict)
+        or public_key.get("algorithm") != "RSA"
+        or not isinstance(public_key.get("bits"), int)
+        or public_key["bits"] < 3072
+        or metadata.get("signatureAlgorithm") != "sha256WithRSAEncryption"
+        or extended_key_usage != ["1.3.6.1.5.5.7.3.3"]
+        or not isinstance(metadata.get("warning"), str)
+        or not metadata["warning"]
+    ):
+        raise PackagingError(
+            "the Windows self-signed certificate metadata is invalid"
+        )
+    actual_sha256 = sha256_file(certificate_path)
+    if actual_sha256 != certificate_sha256:
+        raise PackagingError(
+            "the Windows self-signed public certificate SHA-256 does not match "
+            "its committed metadata"
+        )
+    return {
+        "certificateTrust": "notPubliclyTrusted",
+        "signerSubject": subject,
+        "signerCertificateSha256": certificate_sha256,
+    }
+
+
+def load_windows_signing_evidence(
+    evidence_path: Path,
+    binary: Path,
+    pinned_signer: dict[str, str],
+) -> dict[str, str]:
+    if not evidence_path.is_file() or evidence_path.is_symlink():
+        raise PackagingError(
+            "Windows signing evidence is missing or unsafe: "
+            f"{evidence_path}"
+        )
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PackagingError("Windows signing evidence is unreadable") from error
+    if (
+        not isinstance(evidence, dict)
+        or set(evidence) != WINDOWS_SIGNING_EVIDENCE_KEYS
+        or evidence.get("schemaVersion") != 1
+        or evidence.get("codeSigningStatus") != "selfSignedAuthenticode"
+        or evidence.get("certificateTrust")
+        != pinned_signer["certificateTrust"]
+        or evidence.get("timestampStatus") != "rfc3161Sha256"
+        or evidence.get("signerSubject") != pinned_signer["signerSubject"]
+        or evidence.get("signerCertificateSha256")
+        != pinned_signer["signerCertificateSha256"]
+    ):
+        raise PackagingError(
+            "Windows signing evidence does not match the exact project "
+            "self-signed signing policy"
+        )
+    files = evidence.get("files")
+    if not isinstance(files, list) or len(files) != 1:
+        raise PackagingError(
+            "Windows signing evidence must describe exactly one file"
+        )
+    signed_file = files[0]
+    if (
+        not isinstance(signed_file, dict)
+        or set(signed_file) != WINDOWS_SIGNED_FILE_EVIDENCE_KEYS
+        or signed_file.get("fileName") != binary.name
+        or not isinstance(signed_file.get("sha256"), str)
+        or not SHA256_PATTERN.fullmatch(signed_file["sha256"])
+        or signed_file.get("sha256") != sha256_file(binary)
+        or signed_file.get("signatureType") != "Authenticode"
+        or not isinstance(
+            signed_file.get("timestampCertificateSha256"), str
+        )
+        or not SHA256_PATTERN.fullmatch(
+            signed_file["timestampCertificateSha256"]
+        )
+    ):
+        raise PackagingError(
+            "Windows signing evidence file does not match the current binary"
+        )
+    return {
+        "codeSigningStatus": "selfSignedAuthenticode",
+        "certificateTrust": pinned_signer["certificateTrust"],
+        "timestampStatus": "rfc3161Sha256",
+        "signerSubject": pinned_signer["signerSubject"],
+        "signerCertificateSha256": pinned_signer[
+            "signerCertificateSha256"
+        ],
+    }
+
+
 def normalized_text(path: Path) -> bytes:
     text = path.read_text(encoding="utf-8")
     return text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
@@ -156,6 +326,7 @@ def load_release_context(
     source_commit: str,
     source_tag: str | None,
     extension_id: str,
+    extension_ids: str | None = None,
 ) -> dict[str, object]:
     if not COMMIT_PATTERN.fullmatch(source_commit):
         raise PackagingError("source commit must be a lowercase 40-character Git SHA")
@@ -187,15 +358,24 @@ def load_release_context(
     if (
         not isinstance(repository_value, str)
         or repository_value.removesuffix(".git") != REPOSITORY_URL
-        or manifest.get("homepage_url") != REPOSITORY_URL
+        or manifest.get("homepage_url") != PRODUCT_URL
     ):
-        raise PackagingError("package and manifest source links are not canonical")
+        raise PackagingError("package source and manifest product links are not canonical")
     if manifest.get("manifest_version") != 3:
         raise PackagingError("the store package must use Manifest V3")
     canonical_extension_id, identity = load_canonical_identity(repository_root)
+    configured_ids = [] if extension_ids is None else extension_ids.split(",")
+    for configured_id in configured_ids:
+        if not EXTENSION_ID_PATTERN.fullmatch(configured_id):
+            raise PackagingError(
+                "extension IDs must be a comma-separated list of exact "
+                "32-character lowercase values from a through p"
+            )
     native_registration_ids = list(
-        dict.fromkeys([canonical_extension_id, extension_id])
+        dict.fromkeys([canonical_extension_id, extension_id, *configured_ids])
     )
+    if len(native_registration_ids) > 16:
+        raise PackagingError("at most 16 native registration IDs may be packaged")
     source_metadata: dict[str, object] = {
         "repository": REPOSITORY_URL,
         "commit": source_commit,
@@ -394,6 +574,224 @@ def write_checksum(destination: Path) -> Path:
     return checksum_path
 
 
+def validated_header_snapshot(
+    repository_root: Path,
+) -> tuple[Path, dict[str, object]]:
+    snapshot = repository_root / "release/hns_headers_300000.snapshot.gzip"
+    manifest_path = repository_root / "release/header-snapshot-300000.json"
+    if not snapshot.is_file() or snapshot.is_symlink():
+        raise PackagingError(f"the release header snapshot is missing or unsafe: {snapshot}")
+    if snapshot.stat().st_size != HEADER_SNAPSHOT["size"]:
+        raise PackagingError("the release header snapshot has an unexpected size")
+    if sha256_file(snapshot) != HEADER_SNAPSHOT["sha256"]:
+        raise PackagingError("the release header snapshot has an unexpected SHA-256")
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise PackagingError("the release header snapshot manifest is missing or unsafe")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected_manifest_values = {
+        "schemaVersion": 1,
+        "file": snapshot.name,
+        "format": HEADER_SNAPSHOT["format"],
+        "network": "mainnet",
+        "targetHeight": HEADER_SNAPSHOT["height"],
+        "headerCount": HEADER_SNAPSHOT["headerCount"],
+        "tipHash": HEADER_SNAPSHOT["tipHash"],
+        "compression": "gzip",
+        "compressedBytes": HEADER_SNAPSHOT["size"],
+        "compressedSha256": HEADER_SNAPSHOT["sha256"],
+        "uncompressedBytes": HEADER_SNAPSHOT["uncompressedSize"],
+        "uncompressedSha256": HEADER_SNAPSHOT["uncompressedSha256"],
+    }
+    if any(manifest.get(key) != value for key, value in expected_manifest_values.items()):
+        raise PackagingError("the release header snapshot manifest is inconsistent")
+    return snapshot, dict(HEADER_SNAPSHOT)
+
+
+def read_setup_archive_metadata(archive_path: Path) -> dict[str, object]:
+    stem = archive_path.name
+    if stem.endswith(".tar.gz"):
+        stem = stem[: -len(".tar.gz")]
+        with tarfile.open(archive_path, "r:gz") as archive:
+            members = archive.getmembers()
+            member_names: set[str] = set()
+            for member in members:
+                checked_archive_path(member.name.rstrip("/"))
+                if member.name in member_names:
+                    raise PackagingError(
+                        f"setup archive contains duplicate paths: {archive_path.name}"
+                    )
+                member_names.add(member.name)
+                if not (member.isfile() or member.isdir()):
+                    raise PackagingError(
+                        f"setup archive may contain only files and directories: "
+                        f"{archive_path.name}"
+                    )
+            metadata_member = archive.getmember(f"{stem}/RELEASE-METADATA.json")
+            extracted = archive.extractfile(metadata_member)
+            if extracted is None:
+                raise PackagingError(
+                    f"setup metadata is unreadable: {archive_path.name}"
+                )
+            raw_metadata = extracted.read()
+    elif stem.endswith(".zip"):
+        stem = stem[: -len(".zip")]
+        with zipfile.ZipFile(archive_path) as archive:
+            infos = archive.infolist()
+            if len({info.filename for info in infos}) != len(infos):
+                raise PackagingError(
+                    f"setup archive contains duplicate paths: {archive_path.name}"
+                )
+            for info in infos:
+                checked_archive_path(info.filename.rstrip("/"))
+                file_type = (info.external_attr >> 16) & 0o170000
+                if file_type not in {0, stat.S_IFREG, stat.S_IFDIR}:
+                    raise PackagingError(
+                        f"setup archive may contain only files and directories: "
+                        f"{archive_path.name}"
+                    )
+            try:
+                raw_metadata = archive.read(f"{stem}/RELEASE-METADATA.json")
+            except KeyError as error:
+                raise PackagingError(
+                    f"setup metadata is missing: {archive_path.name}"
+                ) from error
+    else:
+        raise PackagingError(f"unsupported setup archive: {archive_path.name}")
+    metadata = json.loads(raw_metadata)
+    if not isinstance(metadata, dict):
+        raise PackagingError(f"setup metadata is invalid: {archive_path.name}")
+    return metadata
+
+
+def bundled_setup_installers(
+    setup_dir: Path,
+    context: dict[str, object],
+    snapshot: dict[str, object],
+    linux_attestations_verified: bool,
+    windows_signer: dict[str, str],
+) -> tuple[dict[str, tuple[bytes, int]], dict[str, object]]:
+    if not setup_dir.is_dir() or setup_dir.is_symlink():
+        raise PackagingError(f"setup archive directory is missing or unsafe: {setup_dir}")
+    version = str(context["version"])
+    source = context["metadata"]["source"]
+    source_commit = source["commit"]
+    source_tag = source.get("tag")
+    files: dict[str, tuple[bytes, int]] = {}
+    installers: list[dict[str, object]] = []
+    for platform in ("linux", "macos", "windows"):
+        archive_suffix = ".zip" if platform == "windows" else ".tar.gz"
+        for release_architecture in ("x64", "arm64"):
+            file_name = (
+                f"hns-dane-browser-setup-v{version}-{platform}-"
+                f"{release_architecture}{archive_suffix}"
+            )
+            archive_path = setup_dir / file_name
+            if not archive_path.is_file() or archive_path.is_symlink():
+                raise PackagingError(f"required setup archive is missing: {file_name}")
+            sidecar = setup_dir / f"{file_name}.sha256"
+            if not sidecar.is_file() or sidecar.is_symlink():
+                raise PackagingError(f"setup checksum sidecar is missing: {sidecar.name}")
+            digest = sha256_file(archive_path)
+            expected_sidecar = f"{digest}  {file_name}\n"
+            if sidecar.read_text(encoding="ascii") != expected_sidecar:
+                raise PackagingError(f"setup checksum sidecar is invalid: {sidecar.name}")
+            metadata = read_setup_archive_metadata(archive_path)
+            setup = metadata.get("setup")
+            metadata_source = metadata.get("source")
+            metadata_extension = metadata.get("extension")
+            if (
+                metadata.get("version") != version
+                or not isinstance(setup, dict)
+                or setup.get("platform") != platform
+                or setup.get("architecture") != release_architecture
+                or not isinstance(metadata_source, dict)
+                or metadata_source.get("commit") != source_commit
+                or metadata_source.get("tag") != source_tag
+                or not isinstance(metadata_extension, dict)
+                or metadata_extension.get("nativeRegistrationIds")
+                != context["metadata"]["extension"]["nativeRegistrationIds"]
+                or setup.get("bootstrapSnapshot") != snapshot
+            ):
+                raise PackagingError(
+                    f"setup archive metadata does not match this release: {file_name}"
+                )
+            if platform == "macos":
+                if (
+                    setup.get("codeSigningStatus") != "developerIdSigned"
+                    or setup.get("notarizationStatus") != "acceptedAndStapled"
+                ):
+                    raise PackagingError(
+                        f"macOS setup is not signed, notarized, and stapled: {file_name}"
+                    )
+                signing_status = "developerIdSignedAndNotarized"
+            elif platform == "windows":
+                if (
+                    setup.get("codeSigningStatus")
+                    != "selfSignedAuthenticode"
+                    or setup.get("certificateTrust")
+                    != windows_signer["certificateTrust"]
+                    or setup.get("timestampStatus") != "rfc3161Sha256"
+                    or setup.get("signerSubject")
+                    != windows_signer["signerSubject"]
+                    or setup.get("signerCertificateSha256")
+                    != windows_signer["signerCertificateSha256"]
+                ):
+                    raise PackagingError(
+                        "Windows setup does not have the exact project self-signed "
+                        f"Authenticode identity, trust disclosure, and timestamp: {file_name}"
+                    )
+                signing_status = "selfSignedAuthenticodeAndTimestamped"
+            else:
+                if (
+                    setup.get("codeSigningStatus") != "notApplicable"
+                    or setup.get("notarizationStatus") != "notApplicable"
+                    or setup.get("timestampStatus") != "notApplicable"
+                ):
+                    raise PackagingError(
+                        f"Linux setup has invalid signing metadata: {file_name}"
+                    )
+                if not linux_attestations_verified:
+                    raise PackagingError(
+                        "Linux setup provenance must be verified before extension "
+                        "bundling"
+                    )
+                signing_status = "githubKeylessAttested"
+            archive_bytes = archive_path.read_bytes()
+            relative_path = f"installers/{file_name}"
+            files[relative_path] = (archive_bytes, 0o644)
+            installer = {
+                "architecture": SETUP_INSTALLER_ARCHITECTURES[
+                    release_architecture
+                ],
+                "fileName": file_name,
+                "path": relative_path,
+                "platform": platform,
+                "sha256": digest,
+                "signingStatus": signing_status,
+                "size": len(archive_bytes),
+            }
+            if platform == "windows":
+                installer.update(
+                    {
+                        "certificateTrust": windows_signer[
+                            "certificateTrust"
+                        ],
+                        "signerCertificateSha256": windows_signer[
+                            "signerCertificateSha256"
+                        ],
+                    }
+                )
+            installers.append(installer)
+    index = {
+        "schemaVersion": 1,
+        "version": version,
+        "installers": installers,
+        "snapshot": snapshot,
+    }
+    files["installers/index.json"] = (canonical_json(index), 0o644)
+    return files, index
+
+
 def validate_release_binary(
     binary: Path,
     platform: str,
@@ -451,6 +849,7 @@ def package_extension(arguments: argparse.Namespace) -> list[Path]:
         arguments.source_commit,
         arguments.source_tag,
         arguments.extension_id,
+        arguments.extension_ids,
     )
     files = checked_source_files(root / "dist/chromium-extension")
     manifest_bytes = (root / "extension/manifest.json").read_bytes()
@@ -458,6 +857,28 @@ def package_extension(arguments: argparse.Namespace) -> list[Path]:
         raise PackagingError(
             "dist/chromium-extension is stale; rebuild it before packaging"
         )
+    if any(name == "installers" or name.startswith("installers/") for name in files):
+        raise PackagingError(
+            "dist/chromium-extension may not supply unverified installer payloads"
+        )
+    installer_index: dict[str, object] | None = None
+    if arguments.setup_dir is None:
+        if arguments.source_tag is not None:
+            raise PackagingError(
+                "tagged extension packaging requires --setup-dir with six "
+                "finalized setup archives"
+            )
+    else:
+        _snapshot_path, snapshot = validated_header_snapshot(root)
+        windows_signer = load_windows_self_signed_identity(root)
+        installer_files, installer_index = bundled_setup_installers(
+            arguments.setup_dir.resolve(),
+            context,
+            snapshot,
+            arguments.linux_attestations_verified,
+            windows_signer,
+        )
+        files.update(installer_files)
     canonical_manifest = dict(context["manifest"])
     canonical_manifest["key"] = context["metadata"]["extension"][
         "canonicalPublicKeyDerBase64"
@@ -476,6 +897,11 @@ def package_extension(arguments: argparse.Namespace) -> list[Path]:
                 **context["metadata"],
                 "extensionPackageVariant": "canonicalUnpacked",
                 "manifestKeyIncluded": True,
+                **(
+                    {"embeddedSetupInstallers": installer_index}
+                    if installer_index is not None
+                    else {}
+                ),
             }
         ),
         0o644,
@@ -497,6 +923,11 @@ def package_extension(arguments: argparse.Namespace) -> list[Path]:
                 **context["metadata"],
                 "extensionPackageVariant": "storeFirstSubmission",
                 "manifestKeyIncluded": False,
+                **(
+                    {"embeddedSetupInstallers": installer_index}
+                    if installer_index is not None
+                    else {}
+                ),
             }
         ),
         0o644,
@@ -522,7 +953,7 @@ def native_installation_readme(
     extension_id: str,
     source_url: str,
     macos_signed_notarized: bool,
-    windows_authenticode_signed: bool,
+    windows_signing: dict[str, str] | None,
 ) -> bytes:
     registration_ids = list(
         dict.fromkeys([canonical_extension_id, extension_id])
@@ -546,12 +977,16 @@ def native_installation_readme(
             "The installer uses the current user's Windows certificate store."
         )
         signing_notice = (
-            "The Windows executables are Authenticode signed by the project "
-            "publisher and carry RFC 3161 SHA-256 timestamps."
-            if windows_authenticode_signed
+            "The Windows executables carry project self-signed Authenticode "
+            "signatures and RFC 3161 SHA-256 timestamps. This certificate is "
+            "not publicly trusted, so Microsoft Defender SmartScreen or an "
+            "Unknown Publisher warning may still appear. Verify the archive "
+            "SHA-256 and the published certificate fingerprint "
+            f"`{windows_signing['signerCertificateSha256']}` before running it."
+            if windows_signing is not None
             else (
-                "This automated Windows bundle is unsigned until project "
-                "Authenticode credentials are configured."
+                "This Windows bundle is unsigned. Verify the archive SHA-256 "
+                "before deciding whether to continue."
             )
         )
     else:
@@ -641,6 +1076,7 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
         arguments.source_commit,
         arguments.source_tag,
         arguments.extension_id,
+        arguments.extension_ids,
     )
     if arguments.platform not in PLATFORMS:
         raise PackagingError(f"unsupported native platform: {arguments.platform}")
@@ -653,11 +1089,11 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
             "--macos-signed-notarized is valid only for macOS packages"
         )
     if (
-        arguments.windows_authenticode_signed
+        arguments.windows_signing_evidence is not None
         and arguments.platform != "windows"
     ):
         raise PackagingError(
-            "--windows-authenticode-signed is valid only for Windows packages"
+            "--windows-signing-evidence is valid only for Windows packages"
         )
     native_host = arguments.native_host.resolve()
     if not native_host.is_file() or native_host.is_symlink():
@@ -679,6 +1115,53 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
         NATIVE_RUST_TARGETS[(arguments.platform, arguments.architecture)],
         "native host",
     )
+    windows_signing: dict[str, str] | None = None
+    if arguments.windows_signing_evidence is not None:
+        windows_signing = load_windows_signing_evidence(
+            arguments.windows_signing_evidence.resolve(),
+            native_host,
+            load_windows_self_signed_identity(root),
+        )
+
+    native_host_metadata: dict[str, object] = {
+        "architecture": arguments.architecture,
+        "binary": f"rust/target/release/{expected_binary_name}",
+        "codeSigningStatus": (
+            "developerIdSigned"
+            if arguments.macos_signed_notarized
+            else (
+                "selfSignedAuthenticode"
+                if windows_signing is not None
+                else "unsigned"
+            )
+        )
+        if arguments.platform in {"macos", "windows"}
+        else "notApplicable",
+        "notarizationStatus": (
+            "acceptedOnlineTicket"
+            if arguments.macos_signed_notarized
+            else "notNotarized"
+        )
+        if arguments.platform == "macos"
+        else "notApplicable",
+        "platform": arguments.platform,
+        "rustTarget": arguments.rust_target,
+        "timestampStatus": (
+            "rfc3161Sha256"
+            if windows_signing is not None
+            else "notApplicable"
+        )
+        if arguments.platform == "windows"
+        else "notApplicable",
+    }
+    if arguments.platform == "windows":
+        native_host_metadata["certificateTrust"] = (
+            windows_signing["certificateTrust"]
+            if windows_signing is not None
+            else "notApplicable"
+        )
+        if windows_signing is not None:
+            native_host_metadata.update(windows_signing)
 
     files: dict[str, tuple[bytes, int]] = {
         "LICENSE": (normalized_text(root / "LICENSE"), 0o644),
@@ -691,7 +1174,7 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
                 arguments.extension_id,
                 str(context["source_url"]),
                 arguments.macos_signed_notarized,
-                arguments.windows_authenticode_signed,
+                windows_signing,
             ),
             0o644,
         ),
@@ -699,37 +1182,7 @@ def package_native(arguments: argparse.Namespace) -> list[Path]:
             canonical_json(
                 {
                     **context["metadata"],
-                    "nativeHost": {
-                        "architecture": arguments.architecture,
-                        "binary": f"rust/target/release/{expected_binary_name}",
-                        "codeSigningStatus": (
-                            "developerIdSigned"
-                            if arguments.macos_signed_notarized
-                            else (
-                                "authenticodeSigned"
-                                if arguments.windows_authenticode_signed
-                                else "unsigned"
-                            )
-                        )
-                        if arguments.platform in {"macos", "windows"}
-                        else "notApplicable",
-                        "notarizationStatus": (
-                            "acceptedOnlineTicket"
-                            if arguments.macos_signed_notarized
-                            else "notNotarized"
-                        )
-                        if arguments.platform == "macos"
-                        else "notApplicable",
-                        "platform": arguments.platform,
-                        "rustTarget": arguments.rust_target,
-                        "timestampStatus": (
-                            "rfc3161Sha256"
-                            if arguments.windows_authenticode_signed
-                            else "notApplicable"
-                        )
-                        if arguments.platform == "windows"
-                        else "notApplicable",
-                    },
+                    "nativeHost": native_host_metadata,
                 }
             ),
             0o644,
@@ -1102,7 +1555,7 @@ def setup_installation_readme(
     architecture: str,
     source_url: str,
     macos_signed_notarized: bool,
-    windows_authenticode_signed: bool,
+    windows_signing: dict[str, str] | None,
 ) -> bytes:
     if platform == "windows":
         launch = r".\hns-dane-browser-setup.exe"
@@ -1113,16 +1566,19 @@ def setup_installation_readme(
             "on Windows components."
         )
         signing = (
-            "This Windows setup executable is Authenticode signed by the "
-            "project publisher and carries an RFC 3161 SHA-256 timestamp. "
-            "Verify the publisher shown by Windows before continuing."
-            if windows_authenticode_signed
+            "This Windows setup executable carries a project self-signed "
+            "Authenticode signature and an RFC 3161 SHA-256 timestamp. The "
+            "certificate is not publicly trusted, so Microsoft Defender "
+            "SmartScreen or an Unknown Publisher warning may still appear. "
+            "Verify the archive SHA-256 and the published certificate "
+            f"fingerprint `{windows_signing['signerCertificateSha256']}` before "
+            "continuing."
+            if windows_signing is not None
             else (
-                "This automated Windows setup executable is unsigned until "
-                "project Authenticode credentials are configured, so Microsoft "
-                "Defender SmartScreen may warn. Check the archive against "
-                "SHA256SUMS before deciding whether to continue; checksum "
-                "verification is required."
+                "This Windows setup executable is unsigned, so Microsoft "
+                "Defender SmartScreen may warn. Verify the archive SHA-256 "
+                "before deciding whether to continue; checksum verification "
+                "is required."
             )
         )
     elif platform == "macos":
@@ -1330,6 +1786,7 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
         arguments.source_commit,
         arguments.source_tag,
         arguments.extension_id,
+        arguments.extension_ids,
     )
     if arguments.platform not in PLATFORMS:
         raise PackagingError(f"unsupported setup platform: {arguments.platform}")
@@ -1342,11 +1799,11 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
             "--macos-signed-notarized is valid only for macOS packages"
         )
     if (
-        arguments.windows_authenticode_signed
+        arguments.windows_signing_evidence is not None
         and arguments.platform != "windows"
     ):
         raise PackagingError(
-            "--windows-authenticode-signed is valid only for Windows packages"
+            "--windows-signing-evidence is valid only for Windows packages"
         )
 
     expected_setup_name = (
@@ -1372,6 +1829,13 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
         SETUP_RUST_TARGETS[(arguments.platform, arguments.architecture)],
         "setup executable",
     )
+    windows_signing: dict[str, str] | None = None
+    if arguments.windows_signing_evidence is not None:
+        windows_signing = load_windows_signing_evidence(
+            arguments.windows_signing_evidence.resolve(),
+            setup_executable,
+            load_windows_self_signed_identity(root),
+        )
 
     expected_host_name = (
         "hns-chromium-native-host.exe"
@@ -1403,14 +1867,20 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
         )
 
     version = str(context["version"])
+    snapshot_path, snapshot = validated_header_snapshot(root)
+    if snapshot_path.read_bytes() not in setup_bytes:
+        raise PackagingError(
+            "setup executable does not contain the exact bootstrap snapshot payload"
+        )
     setup_metadata: dict[str, object] = {
         "architecture": arguments.architecture,
+        "bootstrapSnapshot": snapshot,
         "codeSigningStatus": (
             "developerIdSigned"
             if arguments.macos_signed_notarized
             else (
-                "authenticodeSigned"
-                if arguments.windows_authenticode_signed
+                "selfSignedAuthenticode"
+                if windows_signing is not None
                 else "unsigned"
             )
         )
@@ -1434,12 +1904,20 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
         "selfContained": True,
         "timestampStatus": (
             "rfc3161Sha256"
-            if arguments.windows_authenticode_signed
+            if windows_signing is not None
             else "notApplicable"
         )
         if arguments.platform == "windows"
         else "notApplicable",
     }
+    if arguments.platform == "windows":
+        setup_metadata["certificateTrust"] = (
+            windows_signing["certificateTrust"]
+            if windows_signing is not None
+            else "notApplicable"
+        )
+        if windows_signing is not None:
+            setup_metadata.update(windows_signing)
     files: dict[str, tuple[bytes, int]] = {
         "LICENSE": (normalized_text(root / "LICENSE"), 0o644),
         "README.md": (
@@ -1449,7 +1927,7 @@ def package_setup(arguments: argparse.Namespace) -> list[Path]:
                 arguments.architecture,
                 str(context["source_url"]),
                 arguments.macos_signed_notarized,
-                arguments.windows_authenticode_signed,
+                windows_signing,
             ),
             0o644,
         ),
@@ -1605,6 +2083,13 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument("--extension-id", required=True)
+    parser.add_argument(
+        "--extension-ids",
+        help=(
+            "comma-separated exact IDs compiled into Setup; the canonical and "
+            "primary --extension-id values are always included"
+        ),
+    )
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -1614,6 +2099,22 @@ def parse_arguments() -> argparse.Namespace:
         "extension", help="package the browser-neutral MV3 extension"
     )
     add_common_arguments(extension)
+    extension.add_argument(
+        "--setup-dir",
+        type=Path,
+        help=(
+            "directory containing the exact six finalized, checksummed setup "
+            "archives to embed; mandatory for tagged releases"
+        ),
+    )
+    extension.add_argument(
+        "--linux-attestations-verified",
+        action="store_true",
+        help=(
+            "confirm that gh attestation verify succeeded for both Linux setup "
+            "archives in --setup-dir"
+        ),
+    )
     extension.set_defaults(package=package_extension)
 
     native = subparsers.add_parser(
@@ -1632,9 +2133,12 @@ def parse_arguments() -> argparse.Namespace:
         help="mark a macOS binary already signed and accepted by Apple",
     )
     native.add_argument(
-        "--windows-authenticode-signed",
-        action="store_true",
-        help="mark a Windows binary already Authenticode signed and timestamped",
+        "--windows-signing-evidence",
+        type=Path,
+        help=(
+            "exact verifier evidence for the signed Windows binary; its file "
+            "name and SHA-256 must match --native-host"
+        ),
     )
     native.set_defaults(package=package_native)
 
@@ -1657,9 +2161,12 @@ def parse_arguments() -> argparse.Namespace:
         help="mark a macOS app already signed, accepted, and stapled",
     )
     setup.add_argument(
-        "--windows-authenticode-signed",
-        action="store_true",
-        help="mark a Windows app already Authenticode signed and timestamped",
+        "--windows-signing-evidence",
+        type=Path,
+        help=(
+            "exact verifier evidence for the signed Windows setup executable; "
+            "its file name and SHA-256 must match --setup-executable"
+        ),
     )
     setup.set_defaults(package=package_setup)
 
