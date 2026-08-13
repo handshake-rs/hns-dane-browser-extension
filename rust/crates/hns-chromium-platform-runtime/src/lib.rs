@@ -4789,15 +4789,13 @@ fn require_current_proxy_work(
     if cancellation.is_cancelled() {
         return Err(ProxyBackendError::Cancelled);
     }
-    let header_state = if let Some(identity) = stamp.storage_identity {
-        Some(HeaderStateLease::new(
+    let header_state = stamp.storage_identity.map(|identity| {
+        HeaderStateLease::new(
             Arc::clone(&runtime.inner.coordination),
             identity,
             stamp.name_tree_authority,
-        ))
-    } else {
-        None
-    };
+        )
+    });
     let _header_state_guard = header_state
         .as_ref()
         .map(HeaderStateLease::acquire)
