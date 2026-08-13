@@ -1,6 +1,6 @@
 # Version Audit
 
-Audit date: 2026-08-12
+Audit date: 2026-08-13
 
 This table records configured versions for the Chromium extension, native
 host, and Setup build. It does not claim that each entry is the newest
@@ -8,9 +8,9 @@ upstream release.
 
 | Component | Configured version/source |
 | --- | --- |
-| Extension package | `0.6.0` |
-| Rust workspace | `0.6.0` |
-| HNS DANE Browser Setup | `0.6.0` |
+| Extension package | `0.6.1` |
+| Rust workspace | `0.6.1` |
+| HNS DANE Browser Setup | `0.6.1` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
@@ -29,7 +29,7 @@ upstream release.
 | webbrowser | `1.2.2` |
 
 Published `v0.5.5` used the five checksum-verified crates.io `0.1.0` packages
-below. The `0.6.0` candidate consumes their `0.2.1` successors and the private
+below. The `0.6.1` candidate consumes their `0.2.1` successors and the private
 adapters from the one exact, final dated engine Git revision shown above:
 
 - `hns-browser-runtime`;

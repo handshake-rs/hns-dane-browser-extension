@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "HNS DANE Browser",
   "description": "Routes web DNS names through a local Rust dual-root DNSSEC and DANE runtime.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "homepage_url": "https://denuoweb.com/work/hns-dane-browser-extension",
   "minimum_chrome_version": "121",
   "incognito": "not_allowed",

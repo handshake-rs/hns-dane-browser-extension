@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.6.1 - 2026-08-13
+
+### Fixed
+
+- Accept independently traffic-steered ICANN recursive CNAME snapshots and
+  IPv4/IPv6 CDN routes without combining addresses under a false alias
+  lineage. Each query now retains only its consumed owner records, conflicting
+  CNAMEs within one response still fail closed, and HNS cross-answer
+  consistency remains strict.
+
 ## 0.6.0 - 2026-08-12
 
 ### Added
