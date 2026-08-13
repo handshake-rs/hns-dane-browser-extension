@@ -26,7 +26,7 @@ class ResignWindowsWorkflowTests(unittest.TestCase):
     ) -> None:
         self.assertIn("workflow_dispatch:", self.workflow)
         self.assertNotIn("\n  push:", self.workflow)
-        self.assertIn("default: v0.5.8", self.workflow)
+        self.assertIn("default: v0.5.9", self.workflow)
         self.assertIn("confirm_replacement:", self.workflow)
         self.assertIn(
             "GH_REPO\" != handshake-rs/hns-dane-browser-extension",

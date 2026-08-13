@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Existing published release tag to preserve
         required: true
-        default: v0.5.8
+        default: v0.5.9
         type: string
       confirm_replacement:
         description: Replace only that release's Windows assets and SHA256SUMS

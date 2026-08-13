@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.5.9 - 2026-08-12
+
+### Fixed
+
+- Bind in-flight Chromium work to the exact authoritative Handshake name-tree
+  root instead of revoking it for every header-store generation. Same-root
+  publication now preserves established ICANN WebPKI tunnels, while a changed
+  or unavailable root still revokes work and peer-only refresh cannot cross a
+  root boundary silently.
+- Hold top-level HTTP(S) GET navigation on a local extension waiting page
+  during native-proxy replacement, header synchronization, and tree-root
+  readiness gaps, including the first extension-update bootstrap, then resume
+  that document's exact credential-free URL once. Close the gate ahead of the
+  authenticated peer-evidence deadline so delayed MV3 alarms cannot expose a
+  stale proxy tunnel. This prevents restored tabs from surfacing `ERR_FAILED` or
+  `ERR_TUNNEL_CONNECTION_FAILED` during extension-controlled transitions
+  without retrying POST requests or adding a direct-routing fallback.
+
 ## 0.5.8 - 2026-08-12
 
 ### Fixed
