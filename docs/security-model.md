@@ -95,6 +95,18 @@ route ID, record sequence, and expiry under a distinct profile domain. The old
 `hsa1`, fixed service authorization, and old document schema are rejected, not
 fallbacks.
 
+Handshake root labels use consensus grammar, which permits interior `_` as
+well as `-` and rejects `example`, `invalid`, `local`, `localhost`, and `test`;
+the HNSA service name remains the distinct hyphen-only `pool-stats`. The parser
+does not reserve zero for an unsigned network/time or opaque cryptographic
+digest/ID field unless the defining draft says nonzero. Both endpoint and
+snapshot signatures must round-trip to the exact strict-DER bytes in addition
+to being low-S. An unchanged aggregate revision must carry the exact retained
+HRM root and service observation or the profile state becomes conflicted.
+A greater trusted operation time is durably retained locally but cannot be
+used beneath the old broker revision: the trusted-time-only aggregate
+transition itself requires a fresh acknowledged revision before authorization.
+
 Endpoint and global per-operator sequence/digest history, current authority
 observation, trusted-time high-water, and sticky conflict/capacity state live
 in one canonical checksummed profile state. A minimized result is released
@@ -105,6 +117,12 @@ must add atomic authenticated storage, external rollback floors, exact retry
 of ambiguous writes, and subject-wide serialization. Reported tips, counts,
 mode, and `production_eligible` remain operator claims, not consensus, payment,
 wallet, or settlement facts.
+
+For this private profile, the compressed endpoint key is the logical endpoint
+replacement key. Snapshot sequence is global to an operator ID within one
+service generation, across endpoint keys; changing signed bytes at an equal
+sequence is equivocation. Service-controller replacement clears both histories
+only after a greater service generation is admitted.
 
 No complete HRM validator, authority broker, store, constructor, native
 message, or UI join exists. The local endpoint/profile implementation mirrors

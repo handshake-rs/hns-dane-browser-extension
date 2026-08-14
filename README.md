@@ -117,6 +117,11 @@ generation, and expiry. Commit-before-release state retains endpoint and
 operator replacement history; minimized values contain no keys, signatures,
 or raw authority objects. Counts, mode, tip, and production eligibility remain
 authenticated operator claims, never consensus, wallet, or settlement facts.
+The private profile defines a logical endpoint as its compressed endpoint key
+and scopes snapshot replacement to `(service generation, operator ID)` across
+endpoint keys. Core unsigned network/time and cryptographic digest/ID fields
+are not treated as absence sentinels; the HNSA-required service generation and
+endpoint sequence and the profile's record sequence remain nonzero.
 
 This verifier is deliberately dormant. `CurrentHrmNamedService` has no public
 constructor because the Chromium product does not yet have the sole trusted

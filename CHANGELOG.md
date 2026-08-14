@@ -10,6 +10,13 @@ All notable changes to this project will be documented in this file.
   verifier and its persisted profile-local state, while retaining the HNSA
   requirement that endpoint and application-record replacement sequences are
   nonzero.
+- Align the dormant HRM/HNSA parser with the drafts' exact value domains:
+  accept zero for unsigned network/time and opaque digest/ID fields where no
+  nonzero rule exists, preserve the explicit nonzero generation and
+  replacement-sequence rules, require byte-canonical strict DER, reject
+  changed authority beneath an unchanged aggregate revision, and validate
+  expected roots with Handshake consensus name grammar (including interior
+  underscores and the five consensus-blacklisted names).
 
 ### Added
 

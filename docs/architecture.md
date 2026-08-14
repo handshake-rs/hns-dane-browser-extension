@@ -236,13 +236,16 @@ authenticated current name/root, deterministic HRM, exact service observation,
 trusted-time, withdrawal/generation history, revision floor and fenced lease,
 then commit complete state atomically before returning a minimized snapshot.
 
-The display-only popup already collects the expected exact lowercase HNS label
-separately from the public HTTP endpoint, validates the verifier core's label
-grammar, and derives the SHA3-256 Handshake name hash before any request. It
-does not infer an endpoint from the active tab. The selection remains local
-presentation state until a native request binds it to proof authority and the
-authenticated rollback-resistant verifier store; neither the endpoint nor its
-response can supply trusted identity.
+The display-only popup already collects the expected exact canonical HNS root
+separately from the public HTTP endpoint, validates Handshake's consensus name
+grammar (including interior underscores and the five blacklisted roots), and
+derives the SHA3-256 Handshake name hash before any request. It does not infer
+an endpoint from the active tab. This mirrors `hns-covenants::validate_name`
+and `hns-covenants::hash_name`; it is intentionally distinct from HNSA's
+hyphen-only service-name grammar. The selection remains local presentation
+state until a native request binds it to proof authority and the authenticated
+rollback-resistant verifier store; neither the endpoint nor its response can
+supply trusted identity.
 
 ## Setup and runtime separation
 

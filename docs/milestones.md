@@ -71,6 +71,10 @@ change.
   commit accepts every mutation. That checksum is corruption detection, not a
   substitute for the broker's authenticated aggregate, rollback floor,
   pending-transition retry, or fenced lease.
+- The conformance audit distinguishes Handshake root grammar from the HNSA
+  service label, enforces byte-canonical strict DER and exact equal-revision
+  authority identity, and rejects zero only for fields whose HRM, HNSA, or
+  private application-profile definition explicitly requires nonzero.
 - The superseded `hsa1`/fixed service-authorization code and `hns-rs`
   dependency are removed. Native capabilities report schema 2 while keeping
   the HRM adapter and verified-feed capabilities false and explicitly

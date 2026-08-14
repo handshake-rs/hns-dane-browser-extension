@@ -13,16 +13,26 @@ test("expected pool authority is an independent exact canonical HNS label", () =
     name: "pool-1",
     nameHash: "073bfbaf6b85e537a1b109e2367c4198787b4c564944b04c1bb455516052587a"
   });
+  assert.deepEqual(expectedPoolAuthority("pool_1"), {
+    name: "pool_1",
+    nameHash: "57cbbbf29ae97cf301aa128c6d4b6fbda7269d491af0a659f57c0b1cfe011360"
+  });
   for (const name of [
     "",
     "Pool",
     "-pool",
     "pool-",
-    "pool_name",
+    "_pool",
+    "pool_",
     "pool.name",
+    "example",
+    "invalid",
+    "local",
+    "localhost",
+    "test",
     "a".repeat(64)
   ]) {
-    assert.throws(() => expectedPoolAuthority(name), /exact lowercase Handshake pool name/);
+    assert.throws(() => expectedPoolAuthority(name), /exact canonical Handshake pool name/);
   }
 });
 
@@ -51,6 +61,18 @@ test("pool statistics parser rejects trailing and oversized inputs", () => {
   bytes.fill(0, 111, 119);
   zeroEndpointSequence.snapshot = bytes.toString("hex");
   assert.throws(() => parsePoolStatsDocument(zeroEndpointSequence), /snapshot fields/);
+});
+
+test("pool statistics parser does not reinterpret permitted zero digests as absence", () => {
+  const document = documentFixture();
+  const bytes = Buffer.from(document.snapshot, "hex");
+  bytes.fill(0, 7, 71);
+  bytes.fill(0, 79, 111);
+  document.snapshot = bytes.toString("hex");
+  const snapshot = parsePoolStatsDocument(document);
+  assert.equal(snapshot.serviceResourceId, "0".repeat(64));
+  assert.equal(snapshot.serviceDelegationId, "0".repeat(64));
+  assert.equal(snapshot.endpointDelegationId, "0".repeat(64));
 });
 
 test("pool statistics parser rejects the superseded hsa1 document model", () => {
@@ -99,7 +121,7 @@ test("pool fetch fixes expected identity before contacting the endpoint", async 
       contacted = true;
       throw new Error("must not be reached");
     }),
-    /exact lowercase Handshake pool name/
+    /exact canonical Handshake pool name/
   );
   assert.equal(contacted, false);
 });

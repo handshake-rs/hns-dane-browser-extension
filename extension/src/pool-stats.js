@@ -6,7 +6,8 @@ const MAX_SNAPSHOT_HEX_LENGTH = 2 * 640;
 const REQUEST_TIMEOUT_MS = 5_000;
 const PROFILE_ID = 0xff00;
 const MODES = ["Bootstrapping", "Mining", "Degraded", "Fallback", "Draining", "Stopped"];
-const CANONICAL_HNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const CANONICAL_HNS_LABEL = /^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?$/;
+const CONSENSUS_BLACKLIST = new Set(["example", "invalid", "local", "localhost", "test"]);
 
 export async function fetchPoolStats(endpoint, expectedName, fetchImpl = fetch) {
   // Validate the independently selected identity before contacting an operator.
@@ -41,9 +42,13 @@ export async function fetchPoolStats(endpoint, expectedName, fetchImpl = fetch) 
 }
 
 export function expectedPoolAuthority(name) {
-  if (typeof name !== "string" || !CANONICAL_HNS_LABEL.test(name)) {
+  if (
+    typeof name !== "string" ||
+    !CANONICAL_HNS_LABEL.test(name) ||
+    CONSENSUS_BLACKLIST.has(name)
+  ) {
     throw new Error(
-      "Enter the exact lowercase Handshake pool name (letters, numbers, and interior hyphens only)"
+      "Enter the exact canonical Handshake pool name (lowercase letters, numbers, and interior hyphens or underscores)"
     );
   }
   return Object.freeze({
@@ -201,10 +206,7 @@ function decodeSnapshot(bytes) {
   if (
     !MODES[modeValue] ||
     productionValue > 1 ||
-    /^0+$/.test(serviceResourceId) ||
-    /^0+$/.test(serviceDelegationId) ||
     serviceGeneration === 0n ||
-    /^0+$/.test(endpointDelegationId) ||
     /^0+$/.test(routeId) ||
     /^0+$/.test(operatorId) ||
     endpointSequence === 0n ||

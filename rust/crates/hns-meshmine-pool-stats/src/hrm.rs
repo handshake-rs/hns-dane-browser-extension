@@ -57,14 +57,8 @@ impl<'a> HrmPoolStatsRequest<'a> {
             return Err(HrmPoolStatsError::InvalidExpectedName);
         }
         let expected_name_hash = Sha3_256::digest(expected_name).into();
-        if expected_network_magic == 0 {
-            return Err(HrmPoolStatsError::InvalidExpectedNetwork);
-        }
         if expected_route_id == [0; 32] {
             return Err(HrmPoolStatsError::InvalidExpectedRoute);
-        }
-        if trusted_now == 0 {
-            return Err(HrmPoolStatsError::InvalidTrustedTime);
         }
         Ok(Self {
             expected_name,
@@ -179,14 +173,10 @@ impl CurrentHrmNamedService {
     }
 
     fn validate(&self) -> Result<(), HrmPoolStatsError> {
-        if self.network_magic == 0
-            || self.name_hash == [0; 32]
-            || self.service_name != SERVICE_NAME
+        if self.service_name != SERVICE_NAME
             || self.application_profile_id != EXPERIMENTAL_PROFILE_ID
-            || self.hrm_envelope_hash == [0; 32]
             || self.authority_revision == 0
             || self.operation_lease_generation == 0
-            || self.trusted_operation_time == 0
             || self.service_resource_id
                 != named_service_resource_id(
                     self.network_magic,
@@ -194,7 +184,6 @@ impl CurrentHrmNamedService {
                     self.service_name.as_bytes(),
                     self.application_profile_id,
                 )
-            || self.service_delegation_id == [0; 32]
             || self.service_generation == 0
             || self.resource_not_before >= self.resource_expires_at
             || self.delegation_not_before < self.resource_not_before
@@ -686,26 +675,19 @@ impl HrmPoolStatsState {
 
     fn valid_shape(&self) -> bool {
         self.generation != 0
-            && self.trusted_time_high_water != 0
-            && self.network_magic != 0
-            && self.name_hash != [0; 32]
             && self.authority_revision != 0
-            && self.hrm_envelope_hash != [0; 32]
-            && self.service_resource_id != [0; 32]
-            && self.service_delegation_id != [0; 32]
             && self.service_generation != 0
             && self.endpoints.len() <= MAX_ENDPOINT_HISTORIES
             && strictly_sorted_by(&self.endpoints, |value| value.endpoint_key)
             && self.endpoints.iter().all(|value| {
-                value.sequence != 0
-                    && value.delegation_id != [0; 32]
-                    && VerifyingKey::from_sec1_bytes(&value.endpoint_key).is_ok()
+                value.sequence != 0 && VerifyingKey::from_sec1_bytes(&value.endpoint_key).is_ok()
             })
             && self.operators.len() <= MAX_OPERATOR_HISTORIES
             && strictly_sorted_by(&self.operators, |value| value.operator_id)
-            && self.operators.iter().all(|value| {
-                value.operator_id != [0; 32] && value.sequence != 0 && value.digest != [0; 32]
-            })
+            && self
+                .operators
+                .iter()
+                .all(|value| value.operator_id != [0; 32] && value.sequence != 0)
     }
 
     fn matches_current(
@@ -761,10 +743,19 @@ impl HrmPoolStatsState {
         {
             return Err(HrmPoolStatsError::AuthorityRollback);
         }
-        if authority.authority_revision == self.authority_revision
-            && request.trusted_now > previous_time
-        {
-            return Err(HrmPoolStatsError::AuthorityNotCurrent);
+        if authority.authority_revision == self.authority_revision {
+            if authority.hrm_sequence != self.hrm_sequence
+                || authority.hrm_envelope_hash != self.hrm_envelope_hash
+                || authority.service_resource_id != self.service_resource_id
+                || authority.service_delegation_id != self.service_delegation_id
+                || authority.service_generation != self.service_generation
+            {
+                self.mark_conflicted()?;
+                return Err(HrmPoolStatsError::ConflictingAuthority);
+            }
+            if request.trusted_now > previous_time {
+                return Err(HrmPoolStatsError::AuthorityNotCurrent);
+            }
         }
         if (authority.hrm_sequence == self.hrm_sequence
             && authority.hrm_envelope_hash != self.hrm_envelope_hash)
@@ -995,12 +986,8 @@ pub fn verify_hrm_and_commit<E>(
 pub enum HrmPoolStatsError {
     #[error("the independently selected HNS name is invalid")]
     InvalidExpectedName,
-    #[error("the independently selected Handshake network is invalid")]
-    InvalidExpectedNetwork,
     #[error("the independently selected route ID is invalid")]
     InvalidExpectedRoute,
-    #[error("the trusted operation time is invalid")]
-    InvalidTrustedTime,
     #[error("the opaque broker-issued current HRM authority is invalid")]
     InvalidCurrentAuthority,
     #[error("the current HRM authority does not match the independent request")]
@@ -1162,13 +1149,7 @@ impl EndpointDelegation {
         }
         let signature = reader.bytes(signature_length)?.to_vec();
         reader.finish()?;
-        if network_magic == 0
-            || service_resource_id == [0; 32]
-            || service_delegation_id == [0; 32]
-            || service_generation == 0
-            || endpoint_sequence == 0
-            || issued_at >= expires_at
-        {
+        if service_generation == 0 || endpoint_sequence == 0 || issued_at >= expires_at {
             return Err(HrmPoolStatsError::InvalidEndpoint("invalid bounded fields"));
         }
         VerifyingKey::from_sec1_bytes(&endpoint_key)
@@ -1312,12 +1293,8 @@ impl PoolStatsSnapshot {
         }
         let signature = reader.bytes(signature_length)?.to_vec();
         reader.finish()?;
-        if network_magic == 0
-            || application_profile_id != EXPERIMENTAL_PROFILE_ID
-            || service_resource_id == [0; 32]
-            || service_delegation_id == [0; 32]
+        if application_profile_id != EXPERIMENTAL_PROFILE_ID
             || service_generation == 0
-            || endpoint_delegation_id == [0; 32]
             || endpoint_sequence == 0
             || route_id == [0; 32]
             || sequence == 0
@@ -1458,7 +1435,7 @@ fn parse_low_s_signature(
         return Err(error);
     }
     let signature = Signature::from_der(input).map_err(|_| error.clone())?;
-    if signature.normalize_s().is_some() {
+    if signature.normalize_s().is_some() || signature.to_der().as_bytes() != input {
         return Err(error);
     }
     Ok(signature)
@@ -1559,12 +1536,18 @@ fn encode_cbor_length(output: &mut Vec<u8>, major: u8, length: usize) {
 }
 
 fn is_canonical_hns_label(name: &[u8]) -> bool {
+    // This is the root-name grammar consumed by hns_covenants::hash_name,
+    // not HNSA's deliberately narrower service-name grammar.
     (1..=63).contains(&name.len())
-        && name.first() != Some(&b'-')
-        && name.last() != Some(&b'-')
-        && name
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        && !matches!(
+            name,
+            b"example" | b"invalid" | b"local" | b"localhost" | b"test"
+        )
+        && !matches!(name.first(), Some(b'-' | b'_'))
+        && !matches!(name.last(), Some(b'-' | b'_'))
+        && name.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
 }
 
 fn strictly_sorted_by<T, K: Ord>(values: &[T], key: impl Fn(&T) -> K) -> bool {
@@ -1737,7 +1720,12 @@ mod tests {
         signature.to_der().as_bytes().to_vec()
     }
 
-    fn endpoint(authority: &CurrentHrmNamedService, sequence: u64) -> Vec<u8> {
+    fn endpoint_with_interval(
+        authority: &CurrentHrmNamedService,
+        sequence: u64,
+        issued_at: u64,
+        expires_at: u64,
+    ) -> Vec<u8> {
         let mut bytes = vec![ENDPOINT_VERSION];
         bytes.extend_from_slice(&authority.network_magic.to_le_bytes());
         bytes.extend_from_slice(&authority.service_resource_id);
@@ -1745,8 +1733,8 @@ mod tests {
         bytes.extend_from_slice(&authority.service_generation.to_le_bytes());
         bytes.extend_from_slice(&public_key([3; 32]));
         bytes.extend_from_slice(&sequence.to_le_bytes());
-        bytes.extend_from_slice(&(NOW - 10).to_le_bytes());
-        bytes.extend_from_slice(&(NOW + 300).to_le_bytes());
+        bytes.extend_from_slice(&issued_at.to_le_bytes());
+        bytes.extend_from_slice(&expires_at.to_le_bytes());
         bytes.extend_from_slice(&READ_STATS_CAPABILITY.to_le_bytes());
         bytes.extend_from_slice(&authority.endpoint_constraints_hash);
         let signature = sign([2; 32], ENDPOINT_SIGNATURE_DOMAIN, &bytes);
@@ -1755,7 +1743,17 @@ mod tests {
         bytes
     }
 
-    fn snapshot(authority: &CurrentHrmNamedService, endpoint: &[u8], sequence: u64) -> Vec<u8> {
+    fn endpoint(authority: &CurrentHrmNamedService, sequence: u64) -> Vec<u8> {
+        endpoint_with_interval(authority, sequence, NOW - 10, NOW + 300)
+    }
+
+    fn snapshot_with_interval(
+        authority: &CurrentHrmNamedService,
+        endpoint: &[u8],
+        sequence: u64,
+        generated_at: u64,
+        expires_at: u64,
+    ) -> Vec<u8> {
         let decoded = EndpointDelegation::decode(endpoint).expect("endpoint");
         let mut bytes = vec![SNAPSHOT_VERSION];
         bytes.extend_from_slice(&authority.network_magic.to_le_bytes());
@@ -1767,8 +1765,8 @@ mod tests {
         bytes.extend_from_slice(&decoded.endpoint_sequence.to_le_bytes());
         bytes.extend_from_slice(&ROUTE_ID);
         bytes.extend_from_slice(&sequence.to_le_bytes());
-        bytes.extend_from_slice(&(NOW - 5).to_le_bytes());
-        bytes.extend_from_slice(&(NOW + 60).to_le_bytes());
+        bytes.extend_from_slice(&generated_at.to_le_bytes());
+        bytes.extend_from_slice(&expires_at.to_le_bytes());
         bytes.extend_from_slice(&[10; 32]);
         bytes.extend_from_slice(&100_u32.to_le_bytes());
         bytes.extend_from_slice(&[11; 32]);
@@ -1784,6 +1782,46 @@ mod tests {
         bytes.push(u8::try_from(signature.len()).expect("signature length"));
         bytes.extend_from_slice(&signature);
         bytes
+    }
+
+    fn snapshot(authority: &CurrentHrmNamedService, endpoint: &[u8], sequence: u64) -> Vec<u8> {
+        snapshot_with_interval(authority, endpoint, sequence, NOW - 5, NOW + 60)
+    }
+
+    fn resign_endpoint(mut bytes: Vec<u8>) -> Vec<u8> {
+        let body_length = EndpointDelegation::decode(&bytes)
+            .expect("structurally valid endpoint")
+            .unsigned
+            .len();
+        bytes.truncate(body_length);
+        let signature = sign([2; 32], ENDPOINT_SIGNATURE_DOMAIN, &bytes);
+        bytes.push(u8::try_from(signature.len()).expect("signature length"));
+        bytes.extend_from_slice(&signature);
+        bytes
+    }
+
+    fn resign_snapshot(mut bytes: Vec<u8>) -> Vec<u8> {
+        let body_length = PoolStatsSnapshot::decode(&bytes)
+            .expect("structurally valid snapshot")
+            .unsigned
+            .len();
+        bytes.truncate(body_length);
+        let signature = sign([3; 32], SNAPSHOT_SIGNATURE_DOMAIN, &bytes);
+        bytes.push(u8::try_from(signature.len()).expect("signature length"));
+        bytes.extend_from_slice(&signature);
+        bytes
+    }
+
+    fn with_redundant_der_integer_zero(signature: &[u8]) -> Vec<u8> {
+        assert_eq!(signature[0], 0x30);
+        assert!(signature[1] < 0x80);
+        assert_eq!(signature[2], 0x02);
+        assert!(signature[3] < 0x80);
+        let mut noncanonical = signature.to_vec();
+        noncanonical[1] += 1;
+        noncanonical[3] += 1;
+        noncanonical.insert(4, 0);
+        noncanonical
     }
 
     fn document(endpoint: &[u8], snapshot: &[u8]) -> Vec<u8> {
@@ -1822,6 +1860,30 @@ mod tests {
             "2727a07fe0cd866ac2a1d92b06c07fa6a067aa02c1edc4b327bff5e755523cb7"
         );
         assert_eq!(request(NOW).expected_name_hash(), name_hash());
+    }
+
+    #[test]
+    fn expected_name_uses_handshake_consensus_grammar_not_service_label_grammar() {
+        let request = HrmPoolStatsRequest::new(b"pool_1", MAGIC, ROUTE_ID, NOW)
+            .expect("interior underscore is a canonical Handshake name");
+        assert_eq!(
+            hex::encode(request.expected_name_hash()),
+            "57cbbbf29ae97cf301aa128c6d4b6fbda7269d491af0a659f57c0b1cfe011360"
+        );
+        for invalid in [
+            b"_pool".as_slice(),
+            b"pool_".as_slice(),
+            b"example".as_slice(),
+            b"invalid".as_slice(),
+            b"local".as_slice(),
+            b"localhost".as_slice(),
+            b"test".as_slice(),
+        ] {
+            assert!(matches!(
+                HrmPoolStatsRequest::new(invalid, MAGIC, ROUTE_ID, NOW),
+                Err(HrmPoolStatsError::InvalidExpectedName)
+            ));
+        }
     }
 
     #[test]
@@ -1897,6 +1959,72 @@ mod tests {
     }
 
     #[test]
+    fn accepts_zero_where_hrm_and_hnsa_define_unsigned_or_digest_fields() {
+        let mut zero_authority = authority();
+        zero_authority.network_magic = 0;
+        zero_authority.hrm_envelope_hash = [0; 32];
+        zero_authority.service_delegation_id = [0; 32];
+        zero_authority.endpoint_constraints_hash = [0; 32];
+        zero_authority.service_resource_id = named_service_resource_id(
+            zero_authority.network_magic,
+            zero_authority.name_hash,
+            zero_authority.service_name.as_bytes(),
+            zero_authority.application_profile_id,
+        );
+        let endpoint = endpoint(&zero_authority, 1);
+        let snapshot = snapshot(&zero_authority, &endpoint, 1);
+        let zero_network_request = HrmPoolStatsRequest::new(NAME, 0, ROUTE_ID, NOW)
+            .expect("network magic is the exact active u32, including zero");
+        let mut state = HrmPoolStatsState::new();
+        let verified = verify(
+            &zero_authority,
+            zero_network_request,
+            &document(&endpoint, &snapshot),
+            &mut state,
+        )
+        .expect("zero-valued unsigned network and digest fields are not sentinels");
+        assert_eq!(verified.network_magic(), 0);
+        assert_eq!(verified.service_delegation_id(), [0; 32]);
+        assert_eq!(
+            HrmPoolStatsState::decode(&state.encode().expect("encode"))
+                .expect("decode zero-valued fields"),
+            state
+        );
+
+        let mut epoch_authority = authority();
+        epoch_authority.trusted_operation_time = 0;
+        epoch_authority.resource_not_before = 0;
+        epoch_authority.resource_expires_at = 1_000;
+        epoch_authority.delegation_not_before = 0;
+        epoch_authority.delegation_expires_at = 600;
+        let epoch_endpoint = endpoint_with_interval(&epoch_authority, 1, 0, 300);
+        let epoch_snapshot = snapshot_with_interval(&epoch_authority, &epoch_endpoint, 1, 0, 60);
+        let mut epoch_state = HrmPoolStatsState::new();
+        verify(
+            &epoch_authority,
+            request(0),
+            &document(&epoch_endpoint, &epoch_snapshot),
+            &mut epoch_state,
+        )
+        .expect("Unix epoch is a valid exact trusted operation time");
+        assert_eq!(epoch_state.trusted_time_high_water(), 0);
+        HrmPoolStatsState::decode(&epoch_state.encode().expect("encode epoch state"))
+            .expect("decode epoch state");
+    }
+
+    #[test]
+    fn rejects_noncanonical_der_before_signature_verification() {
+        let canonical = sign([2; 32], ENDPOINT_SIGNATURE_DOMAIN, b"canonical body");
+        parse_low_s_signature(&canonical, HrmPoolStatsError::EndpointCryptography)
+            .expect("canonical low-S DER");
+        let noncanonical = with_redundant_der_integer_zero(&canonical);
+        assert!(matches!(
+            parse_low_s_signature(&noncanonical, HrmPoolStatsError::EndpointCryptography),
+            Err(HrmPoolStatsError::EndpointCryptography)
+        ));
+    }
+
+    #[test]
     fn rejects_legacy_hsa1_document_shape_and_schema() {
         let authority = authority();
         let endpoint = endpoint(&authority, 1);
@@ -1953,6 +2081,66 @@ mod tests {
     }
 
     #[test]
+    fn enforces_signed_endpoint_interval_capability_and_constraint_rules() {
+        let current = authority();
+        let base = endpoint(&current, 1);
+        let mut cases = Vec::new();
+
+        let mut missing_capability = base.clone();
+        missing_capability[134..138].copy_from_slice(&0_u32.to_le_bytes());
+        cases.push((current.clone(), resign_endpoint(missing_capability)));
+
+        let mut extra_capability_authority = current.clone();
+        extra_capability_authority.allowed_endpoint_capabilities |= 2;
+        let mut extra_capability = endpoint(&extra_capability_authority, 1);
+        extra_capability[134..138].copy_from_slice(&3_u32.to_le_bytes());
+        cases.push((
+            extra_capability_authority,
+            resign_endpoint(extra_capability),
+        ));
+
+        let mut wrong_constraints = base.clone();
+        wrong_constraints[138..170].fill(77);
+        cases.push((current.clone(), resign_endpoint(wrong_constraints)));
+
+        let mut excessive_lifetime = base.clone();
+        excessive_lifetime[126..134].copy_from_slice(&(NOW - 10 + 3_601).to_le_bytes());
+        cases.push((current.clone(), resign_endpoint(excessive_lifetime)));
+
+        let mut outside_resource = base;
+        outside_resource[118..126]
+            .copy_from_slice(&(current.resource_not_before - 1).to_le_bytes());
+        cases.push((current, resign_endpoint(outside_resource)));
+
+        for (authority, endpoint) in cases {
+            let snapshot = snapshot(&authority, &endpoint, 1);
+            let mut state = HrmPoolStatsState::new();
+            assert!(matches!(
+                verify(
+                    &authority,
+                    request(NOW),
+                    &document(&endpoint, &snapshot),
+                    &mut state,
+                ),
+                Err(HrmPoolStatsError::InvalidEndpoint(_))
+            ));
+        }
+
+        for maximum in [
+            MIN_ENDPOINT_LIFETIME_LIMIT - 1,
+            MAX_ENDPOINT_LIFETIME_LIMIT + 1,
+        ] {
+            let mut invalid = authority();
+            invalid.max_endpoint_lifetime = maximum;
+            let mut state = HrmPoolStatsState::new();
+            assert!(matches!(
+                verify(&invalid, request(NOW), b"{}", &mut state),
+                Err(HrmPoolStatsError::InvalidCurrentAuthority)
+            ));
+        }
+    }
+
+    #[test]
     fn rejects_snapshot_profile_route_generation_endpoint_and_expiry_mismatches() {
         let authority = authority();
         let endpoint = endpoint(&authority, 1);
@@ -1989,6 +2177,53 @@ mod tests {
                 &authority,
                 wrong_route,
                 &document(&endpoint, &valid),
+                &mut state,
+            ),
+            Err(HrmPoolStatsError::InvalidSnapshot(_))
+        ));
+    }
+
+    #[test]
+    fn enforces_endpoint_signed_snapshot_context_and_interval_rules() {
+        let authority = authority();
+        let endpoint = endpoint(&authority, 1);
+        let base = snapshot(&authority, &endpoint, 1);
+
+        let mut wrong_route = base.clone();
+        wrong_route[119..151].fill(88);
+        let mut wrong_endpoint_id = base.clone();
+        wrong_endpoint_id[79..111].fill(89);
+        let mut wrong_endpoint_sequence = base.clone();
+        wrong_endpoint_sequence[111..119].copy_from_slice(&2_u64.to_le_bytes());
+        let mut before_endpoint = base;
+        before_endpoint[159..167].copy_from_slice(&(NOW - 11).to_le_bytes());
+
+        for snapshot in [
+            resign_snapshot(wrong_route),
+            resign_snapshot(wrong_endpoint_id),
+            resign_snapshot(wrong_endpoint_sequence),
+            resign_snapshot(before_endpoint),
+        ] {
+            let mut state = HrmPoolStatsState::new();
+            assert!(matches!(
+                verify(
+                    &authority,
+                    request(NOW),
+                    &document(&endpoint, &snapshot),
+                    &mut state,
+                ),
+                Err(HrmPoolStatsError::InvalidSnapshot(_))
+            ));
+        }
+
+        let short_endpoint = endpoint_with_interval(&authority, 1, NOW - 10, NOW + 30);
+        let outside_endpoint = snapshot(&authority, &short_endpoint, 1);
+        let mut state = HrmPoolStatsState::new();
+        assert!(matches!(
+            verify(
+                &authority,
+                request(NOW),
+                &document(&short_endpoint, &outside_endpoint),
                 &mut state,
             ),
             Err(HrmPoolStatsError::InvalidSnapshot(_))
@@ -2065,6 +2300,208 @@ mod tests {
             Err(HrmPoolStatsError::ConflictingAuthority)
         ));
         assert!(state.is_conflicted());
+    }
+
+    #[test]
+    fn greater_service_generation_resets_profile_replacement_scope() {
+        let authority = authority();
+        let initial_endpoint = endpoint(&authority, 9);
+        let initial_snapshot = snapshot(&authority, &initial_endpoint, 9);
+        let mut state = HrmPoolStatsState::new();
+        let historical = verify(
+            &authority,
+            request(NOW),
+            &document(&initial_endpoint, &initial_snapshot),
+            &mut state,
+        )
+        .expect("initial generation");
+
+        let mut replacement = authority.clone();
+        replacement.authority_revision += 1;
+        replacement.hrm_sequence += 1;
+        replacement.hrm_envelope_hash = [33; 32];
+        replacement.service_generation += 1;
+        replacement.service_delegation_id = [34; 32];
+        let replacement_endpoint = endpoint(&replacement, 1);
+        let replacement_snapshot = snapshot(&replacement, &replacement_endpoint, 1);
+        let current = verify(
+            &replacement,
+            request(NOW),
+            &document(&replacement_endpoint, &replacement_snapshot),
+            &mut state,
+        )
+        .expect("greater service generation resets endpoint and record sequence scope");
+        assert_eq!(
+            current.service_generation(),
+            authority.service_generation() + 1
+        );
+        assert_eq!(current.endpoint_sequence(), 1);
+        assert_eq!(current.sequence(), 1);
+        assert!(matches!(
+            historical.reconfirm_current(&authority, request(NOW), &state),
+            Err(HrmPoolStatsError::HistoricalAdmission)
+        ));
+    }
+
+    #[test]
+    fn endpoint_and_snapshot_replacement_are_monotonic_and_equivocation_is_sticky() {
+        let authority = authority();
+        let endpoint_one = endpoint(&authority, 1);
+        let snapshot_one = snapshot(&authority, &endpoint_one, 1);
+        let mut state = HrmPoolStatsState::new();
+        let first = verify(
+            &authority,
+            request(NOW),
+            &document(&endpoint_one, &snapshot_one),
+            &mut state,
+        )
+        .expect("first admission");
+
+        let endpoint_two = endpoint(&authority, 2);
+        let snapshot_two = snapshot(&authority, &endpoint_two, 2);
+        let second = verify(
+            &authority,
+            request(NOW),
+            &document(&endpoint_two, &snapshot_two),
+            &mut state,
+        )
+        .expect("greater endpoint and snapshot sequences replace");
+        assert_eq!(second.endpoint_sequence(), 2);
+        assert_eq!(second.sequence(), 2);
+        assert!(matches!(
+            first.reconfirm_current(&authority, request(NOW), &state),
+            Err(HrmPoolStatsError::HistoricalAdmission)
+        ));
+
+        let mut endpoint_equivocation = endpoint_two.clone();
+        endpoint_equivocation[126..134].copy_from_slice(&(NOW + 299).to_le_bytes());
+        let endpoint_equivocation = resign_endpoint(endpoint_equivocation);
+        let endpoint_equivocation_snapshot = snapshot(&authority, &endpoint_equivocation, 3);
+        assert!(matches!(
+            verify(
+                &authority,
+                request(NOW),
+                &document(&endpoint_equivocation, &endpoint_equivocation_snapshot),
+                &mut state,
+            ),
+            Err(HrmPoolStatsError::ConflictingSequence)
+        ));
+        assert!(state.is_conflicted());
+
+        let mut separate_state = HrmPoolStatsState::new();
+        verify(
+            &authority,
+            request(NOW),
+            &document(&endpoint_one, &snapshot_one),
+            &mut separate_state,
+        )
+        .expect("separate first admission");
+        let mut snapshot_equivocation = snapshot_one;
+        snapshot_equivocation[243..247].copy_from_slice(&99_u32.to_le_bytes());
+        let snapshot_equivocation = resign_snapshot(snapshot_equivocation);
+        assert!(matches!(
+            verify(
+                &authority,
+                request(NOW),
+                &document(&endpoint_one, &snapshot_equivocation),
+                &mut separate_state,
+            ),
+            Err(HrmPoolStatsError::ConflictingSequence)
+        ));
+        assert!(separate_state.is_conflicted());
+    }
+
+    #[test]
+    fn equal_aggregate_revision_cannot_carry_a_changed_hrm_or_service_observation() {
+        let authority = authority();
+        let endpoint = endpoint(&authority, 1);
+        let snapshot = snapshot(&authority, &endpoint, 1);
+
+        for changed in [
+            {
+                let mut changed = authority.clone();
+                changed.hrm_sequence += 1;
+                changed.hrm_envelope_hash = [44; 32];
+                changed
+            },
+            {
+                let mut changed = authority.clone();
+                changed.hrm_sequence += 1;
+                changed.service_generation += 1;
+                changed.service_delegation_id = [45; 32];
+                changed
+            },
+        ] {
+            let mut state = HrmPoolStatsState::new();
+            verify(
+                &authority,
+                request(NOW),
+                &document(&endpoint, &snapshot),
+                &mut state,
+            )
+            .expect("initial authority");
+            assert!(matches!(
+                verify(&changed, request(NOW), b"{}", &mut state),
+                Err(HrmPoolStatsError::ConflictingAuthority)
+            ));
+            assert!(state.is_conflicted());
+        }
+    }
+
+    #[test]
+    fn time_only_advance_is_committed_but_requires_a_fresh_aggregate_revision() {
+        let authority = authority();
+        let endpoint = endpoint(&authority, 1);
+        let snapshot = snapshot(&authority, &endpoint, 1);
+        let mut state = HrmPoolStatsState::new();
+        let admitted = verify(
+            &authority,
+            request(NOW),
+            &document(&endpoint, &snapshot),
+            &mut state,
+        )
+        .expect("initial authority");
+
+        let mut stale_revision = authority.clone();
+        stale_revision.trusted_operation_time = NOW + 1;
+        let mut commits = 0;
+        let result = verify_hrm_and_commit(
+            &stale_revision,
+            request(NOW + 1),
+            &document(&endpoint, &snapshot),
+            &mut state,
+            |previous_generation, encoded| {
+                assert!(previous_generation < HrmPoolStatsState::decode(encoded)?.generation());
+                commits += 1;
+                Ok::<(), HrmPoolStatsError>(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(HrmPoolStatsAdmissionError::Verification(
+                HrmPoolStatsError::AuthorityNotCurrent
+            ))
+        ));
+        assert_eq!(commits, 1);
+        assert_eq!(state.trusted_time_high_water(), NOW + 1);
+        assert_eq!(state.authority_revision(), authority.authority_revision());
+        assert!(matches!(
+            admitted.reconfirm_current(&authority, request(NOW), &state),
+            Err(HrmPoolStatsError::HistoricalAdmission)
+        ));
+
+        let mut acknowledged = stale_revision;
+        acknowledged.authority_revision += 1;
+        let current = verify(
+            &acknowledged,
+            request(NOW + 1),
+            &document(&endpoint, &snapshot),
+            &mut state,
+        )
+        .expect("fresh aggregate revision acknowledges the time transition");
+        current
+            .reconfirm_current(&acknowledged, request(NOW + 1), &state)
+            .expect("fresh time-bound authority is current");
     }
 
     #[test]
