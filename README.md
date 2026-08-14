@@ -147,8 +147,20 @@ verifier-owned roots, requires an exact qualified release pin and durable
 anti-rollback high-water state, and on Linux can launch only a freshly rehashed
 sealed executable image. No test key is production trust. The production
 trust-root, release-pin, and release-floor tables are intentionally empty until
-an independently released wallet service is qualified, and the controller does
-not join the launcher to a transport.
+an independently released wallet service is qualified. Linux source contains a
+dormant native-only composition for an explicitly trusted, pre-existing private
+wallet database: it revalidates retained path identity, passes only the exact
+`--database` argument pair, requires the live child to hold the retained
+database inode, applies a non-value capability ceiling, negotiates the private
+transport, and owns kill-and-wait restart generations. No extension command or
+product configuration can construct that session.
+
+This source composition is not an interoperability claim for the current
+checked-in wallet executable. That executable still selects its locked
+control-only runtime; synchronized HNS reads need a separately trusted unlock,
+exact account, and authenticated node configuration. An exact launched-service
+read fixture and single-process/no-descendant qualification remain release
+requirements.
 
 The provider code validates the approval-schema-v3 closed 12-variant typed
 approval union. Permissions summaries require the minimized `hnsNames` list;

@@ -59,6 +59,10 @@ const MAX_WALLET_READ_ITEMS: usize = 128;
 const MAX_WALLET_PUBLIC_STRING_BYTES: usize = 4_096;
 #[cfg(target_os = "linux")]
 const MAX_WALLET_RECEIVE_TARGET_BYTES: usize = 512;
+#[cfg(target_os = "linux")]
+const MAX_WALLET_DATABASE_NAME_BYTES: usize = 128;
+#[cfg(target_os = "linux")]
+const MAX_WALLET_SERVICE_OPEN_DESCRIPTORS: usize = 4_096;
 const WALLET_APPROVAL_SCHEMA_VERSION: u16 = 3;
 const WALLET_ARTIFACT_MANIFEST_SCHEMA_VERSION: u16 = 2;
 #[cfg(unix)]
@@ -277,6 +281,32 @@ enum NegotiatedWalletServiceCapability {
 }
 
 #[cfg(target_os = "linux")]
+const WALLET_READ_SESSION_REQUIRED_CAPABILITIES: [NegotiatedWalletServiceCapability; 6] = [
+    NegotiatedWalletServiceCapability::CanonicalFraming,
+    NegotiatedWalletServiceCapability::RestartIsolation,
+    NegotiatedWalletServiceCapability::OpaqueAuthorityRegistry,
+    NegotiatedWalletServiceCapability::StructuredApprovals,
+    NegotiatedWalletServiceCapability::TypedEvents,
+    NegotiatedWalletServiceCapability::WalletOperations,
+];
+
+#[cfg(target_os = "linux")]
+// The persistent standalone service reports permission persistence and
+// provider dispatch as process capabilities even for native wallet reads.
+// They may pass hello validation, but the closed request enum below cannot
+// express provider, permission, approval, unlock, lock, or mutation calls.
+const WALLET_READ_SESSION_ALLOWED_CAPABILITIES: [NegotiatedWalletServiceCapability; 8] = [
+    NegotiatedWalletServiceCapability::CanonicalFraming,
+    NegotiatedWalletServiceCapability::RestartIsolation,
+    NegotiatedWalletServiceCapability::OpaqueAuthorityRegistry,
+    NegotiatedWalletServiceCapability::PersistentPermissions,
+    NegotiatedWalletServiceCapability::StructuredApprovals,
+    NegotiatedWalletServiceCapability::TypedEvents,
+    NegotiatedWalletServiceCapability::WalletOperations,
+    NegotiatedWalletServiceCapability::ProviderDispatch,
+];
+
+#[cfg(target_os = "linux")]
 impl NegotiatedWalletServiceCapability {
     fn from_wire_name(value: &str) -> Option<Self> {
         match value {
@@ -292,6 +322,181 @@ impl NegotiatedWalletServiceCapability {
             "browserIntegration" => Some(Self::BrowserIntegration),
             _ => None,
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wallet_read_session_capability_ceiling(
+    admitted_capabilities: &BTreeSet<NegotiatedWalletServiceCapability>,
+) -> io::Result<BTreeSet<NegotiatedWalletServiceCapability>> {
+    if !WALLET_READ_SESSION_REQUIRED_CAPABILITIES
+        .iter()
+        .all(|capability| admitted_capabilities.contains(capability))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "wallet artifact does not admit the required read-session capabilities",
+        ));
+    }
+    let allowed = WALLET_READ_SESSION_ALLOWED_CAPABILITIES
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let ceiling = admitted_capabilities
+        .intersection(&allowed)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if !WALLET_READ_SESSION_REQUIRED_CAPABILITIES
+        .iter()
+        .all(|capability| ceiling.contains(capability))
+        || ceiling.contains(&NegotiatedWalletServiceCapability::ValueMovement)
+        || ceiling.contains(&NegotiatedWalletServiceCapability::BrowserIntegration)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "wallet read-session capability ceiling is invalid",
+        ));
+    }
+    Ok(ceiling)
+}
+
+/// Retained identity for one explicitly configured, pre-existing wallet
+/// database. This type never discovers wallet state and is intentionally not
+/// serializable or exposed through native messaging.
+#[cfg(target_os = "linux")]
+pub(crate) struct TrustedWalletDatabaseConfiguration {
+    database_path: PathBuf,
+    parent_path: PathBuf,
+    parent_directory: File,
+    parent_metadata: fs::Metadata,
+    database_file: File,
+    database_metadata: fs::Metadata,
+    database_name: String,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+impl TrustedWalletDatabaseConfiguration {
+    pub(crate) fn open(database_path: &Path) -> io::Result<Self> {
+        if !database_path.is_absolute()
+            || !database_path
+                .components()
+                .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "wallet database path must be an exact absolute path",
+            ));
+        }
+        let database_name = database_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| valid_wallet_database_name(name))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "wallet database basename is outside the closed filename contract",
+                )
+            })?
+            .to_owned();
+        let parent_path = database_path
+            .parent()
+            .filter(|parent| parent.is_absolute())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "wallet database must have an absolute parent directory",
+                )
+            })?
+            .to_owned();
+        let parent_directory = open_absolute_directory_path_nofollow(&parent_path)?;
+        let parent_metadata = parent_directory.metadata()?;
+        if !private_wallet_database_directory(&parent_directory) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet database parent directory is not owner-private",
+            ));
+        }
+        let database_file = open_file_at_nofollow(&parent_directory, &database_name)?;
+        let database_metadata = database_file.metadata()?;
+        if !private_wallet_database_file(&database_metadata) || database_metadata.len() == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet database is not a nonempty owner-private single-link file",
+            ));
+        }
+        if fs::canonicalize(database_path)? != database_path {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet database path is not canonical",
+            ));
+        }
+        let configuration = Self {
+            database_path: database_path.to_owned(),
+            parent_path,
+            parent_directory,
+            parent_metadata,
+            database_file,
+            database_metadata,
+            database_name,
+        };
+        configuration.revalidate()?;
+        Ok(configuration)
+    }
+
+    fn database_path(&self) -> &Path {
+        &self.database_path
+    }
+
+    fn revalidate(&self) -> io::Result<()> {
+        let result = (|| -> io::Result<()> {
+            let current_parent = open_absolute_directory_path_nofollow(&self.parent_path)?;
+            let current_parent_metadata = current_parent.metadata()?;
+            let retained_parent_metadata = self.parent_directory.metadata()?;
+            if !same_open_directory(&self.parent_metadata, &current_parent_metadata)
+                || !same_open_directory(&self.parent_metadata, &retained_parent_metadata)
+                || !private_wallet_database_directory(&current_parent)
+                || !private_wallet_database_directory(&self.parent_directory)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "wallet database parent identity changed",
+                ));
+            }
+
+            let current_database = open_file_at_nofollow(&current_parent, &self.database_name)?;
+            let retained_path_database =
+                open_file_at_nofollow(&self.parent_directory, &self.database_name)?;
+            let current_database_metadata = current_database.metadata()?;
+            let retained_path_database_metadata = retained_path_database.metadata()?;
+            let retained_database_metadata = self.database_file.metadata()?;
+            if !same_wallet_database_identity(&self.database_metadata, &current_database_metadata)
+                || !same_wallet_database_identity(
+                    &self.database_metadata,
+                    &retained_path_database_metadata,
+                )
+                || !same_wallet_database_identity(
+                    &self.database_metadata,
+                    &retained_database_metadata,
+                )
+                || !private_wallet_database_file(&current_database_metadata)
+                || !private_wallet_database_file(&retained_database_metadata)
+                || current_database_metadata.len() == 0
+                || retained_database_metadata.len() == 0
+                || fs::canonicalize(&self.database_path)? != self.database_path
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "wallet database identity changed",
+                ));
+            }
+            Ok(())
+        })();
+        result.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "trusted wallet database path or identity changed",
+            )
+        })
     }
 }
 
@@ -886,6 +1091,14 @@ struct WalletServiceProcess {
 }
 
 #[cfg(target_os = "linux")]
+fn terminate_wallet_child(child: &mut Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+#[cfg(target_os = "linux")]
 impl WalletServiceProcess {
     fn new(child: Child) -> Self {
         Self { child: Some(child) }
@@ -895,10 +1108,48 @@ impl WalletServiceProcess {
         let Some(mut child) = self.child.take() else {
             return;
         };
-        if child.try_wait().ok().flatten().is_none() {
-            let _ = child.kill();
+        terminate_wallet_child(&mut child);
+    }
+
+    fn attests_open_wallet_database(&mut self, expected: &fs::Metadata) -> io::Result<()> {
+        let child = self.child.as_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "wallet service process is no longer available",
+            )
+        })?;
+        if child.try_wait()?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "wallet service exited before database identity attestation",
+            ));
         }
-        let _ = child.wait();
+        let descriptor_directory = PathBuf::from(format!("/proc/{}/fd", child.id()));
+        let mut matched = false;
+        for (index, entry) in fs::read_dir(descriptor_directory)?.enumerate() {
+            if index >= MAX_WALLET_SERVICE_OPEN_DESCRIPTORS {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "wallet service descriptor table exceeds the admitted bound",
+                ));
+            }
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let Ok(metadata) = fs::metadata(entry.path()) else {
+                continue;
+            };
+            if same_wallet_database_identity(expected, &metadata) {
+                matched = true;
+            }
+        }
+        if !matched || child.try_wait()?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet service did not retain the admitted database identity",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -964,6 +1215,31 @@ impl WalletServiceController<ChildStdout, ChildStdin> {
             restart_generation,
             timeout,
         )
+    }
+
+    fn attest_open_wallet_database(&mut self, expected: &fs::Metadata) -> io::Result<()> {
+        if self.poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "wallet service controller is poisoned",
+            ));
+        }
+        let result = match self.process.as_mut() {
+            Some(process) => process.attests_open_wallet_database(expected),
+            None => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet service process identity is unavailable",
+            )),
+        };
+        if result.is_err() {
+            self.poison();
+        }
+        result.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet service database identity attestation failed",
+            )
+        })
     }
 }
 
@@ -1344,6 +1620,253 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> Drop for WalletServiceController<R, 
     }
 }
 
+/// One admitted native-only read session. Database identity is rebound and the
+/// child's live descriptor table is attested before every operation and after
+/// every nonpoisoning result. A poisoned operation has already killed and
+/// reaped the child; any identity failure does the same before reuse.
+#[cfg(target_os = "linux")]
+struct AdmittedWalletReadSession {
+    controller: SpawnedWalletServiceController,
+    database: TrustedWalletDatabaseConfiguration,
+    restart_generation: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+impl AdmittedWalletReadSession {
+    fn new(
+        mut controller: SpawnedWalletServiceController,
+        database: TrustedWalletDatabaseConfiguration,
+        restart_generation: u64,
+    ) -> io::Result<Self> {
+        let allowed_capabilities = WALLET_READ_SESSION_ALLOWED_CAPABILITIES
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if controller.restart_generation != restart_generation
+            || !WALLET_READ_SESSION_REQUIRED_CAPABILITIES
+                .iter()
+                .all(|capability| controller.capabilities.contains(capability))
+            || !controller.capabilities.is_subset(&allowed_capabilities)
+        {
+            controller.poison();
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet service did not negotiate the native read-session contract",
+            ));
+        }
+        if let Err(error) = database.revalidate() {
+            controller.poison();
+            return Err(error);
+        }
+        controller.attest_open_wallet_database(&database.database_metadata)?;
+        Ok(Self {
+            controller,
+            database,
+            restart_generation,
+        })
+    }
+
+    fn execute<T>(
+        &mut self,
+        operation: impl FnOnce(&mut SpawnedWalletServiceController) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.revalidate_database_boundary()?;
+        let result = operation(&mut self.controller);
+        if !self.controller.poisoned {
+            self.revalidate_database_boundary()?;
+        }
+        result
+    }
+
+    fn revalidate_database_boundary(&mut self) -> io::Result<()> {
+        if let Err(error) = self.database.revalidate() {
+            self.controller.poison();
+            return Err(error);
+        }
+        self.controller
+            .attest_open_wallet_database(&self.database.database_metadata)
+    }
+
+    fn is_poisoned(&self) -> bool {
+        self.controller.poisoned
+    }
+
+    fn read_status(&mut self) -> io::Result<WalletReadOnlyStatus> {
+        self.execute(WalletServiceController::read_status)
+    }
+
+    fn list_accounts(&mut self) -> io::Result<WalletReadOnlyAccountSummary> {
+        self.execute(WalletServiceController::list_accounts)
+    }
+
+    fn read_balance(&mut self) -> io::Result<WalletReadOnlyAmount> {
+        self.execute(WalletServiceController::read_balance)
+    }
+
+    fn read_receive_target(&mut self) -> io::Result<WalletReadOnlyReceiveTarget> {
+        self.execute(WalletServiceController::read_receive_target)
+    }
+
+    fn read_transaction_history(&mut self) -> io::Result<Vec<WalletReadOnlyTransactionSummary>> {
+        self.execute(WalletServiceController::read_transaction_history)
+    }
+
+    fn read_module_status(&mut self) -> io::Result<WalletReadOnlySyncStatus> {
+        self.execute(WalletServiceController::read_module_status)
+    }
+}
+
+/// Generation-owning slot for the private read session. A new start always
+/// drops the prior child first, failed generations are never reused, and a
+/// stale invalidation cannot tear down a newer session.
+#[cfg(target_os = "linux")]
+pub(crate) struct WalletReadSessionLifecycle {
+    next_restart_generation: u64,
+    active: Option<AdmittedWalletReadSession>,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+impl WalletReadSessionLifecycle {
+    pub(crate) const fn new() -> Self {
+        Self {
+            next_restart_generation: 1,
+            active: None,
+        }
+    }
+
+    pub(crate) fn start(
+        &mut self,
+        discovery: &mut WalletAbiDiscovery,
+        database: TrustedWalletDatabaseConfiguration,
+        timeout: Duration,
+    ) -> io::Result<u64> {
+        let restart_generation = self.next_restart_generation;
+        self.next_restart_generation = restart_generation
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("wallet service restart generation exhausted"))?;
+        // Drop is the synchronous kill-and-wait boundary for the previous
+        // process. The allocated generation remains consumed if startup fails.
+        self.active = None;
+        let session =
+            discovery.compose_admitted_read_session(database, restart_generation, timeout)?;
+        self.active = Some(session);
+        Ok(restart_generation)
+    }
+
+    pub(crate) fn invalidate(&mut self, restart_generation: u64) -> bool {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|session| session.restart_generation == restart_generation)
+        {
+            self.active = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn active_session(
+        &mut self,
+        restart_generation: u64,
+    ) -> io::Result<&mut AdmittedWalletReadSession> {
+        match self.active.as_mut() {
+            Some(session) if session.restart_generation == restart_generation => Ok(session),
+            Some(_) => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet read session generation is stale",
+            )),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "wallet read session is not active",
+            )),
+        }
+    }
+
+    fn execute_active<T>(
+        &mut self,
+        restart_generation: u64,
+        operation: impl FnOnce(&mut AdmittedWalletReadSession) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let result = operation(self.active_session(restart_generation)?);
+        if self
+            .active
+            .as_ref()
+            .is_some_and(AdmittedWalletReadSession::is_poisoned)
+        {
+            self.active = None;
+        }
+        result
+    }
+
+    pub(crate) fn read_status(
+        &mut self,
+        restart_generation: u64,
+    ) -> io::Result<WalletReadOnlyStatus> {
+        self.execute_active(restart_generation, AdmittedWalletReadSession::read_status)
+    }
+
+    pub(crate) fn list_accounts(
+        &mut self,
+        restart_generation: u64,
+    ) -> io::Result<WalletReadOnlyAccountSummary> {
+        self.execute_active(restart_generation, AdmittedWalletReadSession::list_accounts)
+    }
+
+    pub(crate) fn read_balance(
+        &mut self,
+        restart_generation: u64,
+    ) -> io::Result<WalletReadOnlyAmount> {
+        self.execute_active(restart_generation, AdmittedWalletReadSession::read_balance)
+    }
+
+    pub(crate) fn read_receive_target(
+        &mut self,
+        restart_generation: u64,
+    ) -> io::Result<WalletReadOnlyReceiveTarget> {
+        self.execute_active(
+            restart_generation,
+            AdmittedWalletReadSession::read_receive_target,
+        )
+    }
+
+    pub(crate) fn read_transaction_history(
+        &mut self,
+        restart_generation: u64,
+    ) -> io::Result<Vec<WalletReadOnlyTransactionSummary>> {
+        self.execute_active(
+            restart_generation,
+            AdmittedWalletReadSession::read_transaction_history,
+        )
+    }
+
+    pub(crate) fn read_module_status(
+        &mut self,
+        restart_generation: u64,
+    ) -> io::Result<WalletReadOnlySyncStatus> {
+        self.execute_active(
+            restart_generation,
+            AdmittedWalletReadSession::read_module_status,
+        )
+    }
+
+    pub(crate) const fn provider_available(&self) -> bool {
+        false
+    }
+
+    pub(crate) const fn value_available(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Default for WalletReadSessionLifecycle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn random_wallet_wire_id<const BYTES: usize>() -> io::Result<String> {
     let mut bytes = [0_u8; BYTES];
@@ -1657,14 +2180,28 @@ impl WalletAbiDiscovery {
         }
     }
 
-    /// Admission-only launcher retained separately from the dormant transport.
-    /// Joining it to a mutable wallet database requires a stable descriptor or
-    /// equivalent child-open identity attestation in a later reviewed tranche.
-    #[cfg(unix)]
-    #[allow(dead_code)]
-    pub(crate) fn launch_admitted_service(&mut self) -> io::Result<Child> {
+    #[cfg(target_os = "linux")]
+    fn compose_admitted_read_session(
+        &mut self,
+        database: TrustedWalletDatabaseConfiguration,
+        restart_generation: u64,
+        timeout: Duration,
+    ) -> io::Result<AdmittedWalletReadSession> {
         match &mut self.state {
-            WalletArtifactState::LaunchAdmitted(artifact) => artifact.launch(),
+            WalletArtifactState::LaunchAdmitted(artifact) => {
+                database.revalidate()?;
+                let admitted_capabilities = artifact.admitted_service_capabilities()?;
+                let capability_ceiling =
+                    wallet_read_session_capability_ceiling(&admitted_capabilities)?;
+                let child = artifact.launch_for_database(&database)?;
+                let controller = SpawnedWalletServiceController::negotiate_spawned(
+                    child,
+                    capability_ceiling,
+                    restart_generation,
+                    timeout,
+                )?;
+                AdmittedWalletReadSession::new(controller, database, restart_generation)
+            }
             _ => Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "wallet artifact has not passed signed release admission",
@@ -1837,35 +2374,36 @@ impl LaunchAdmittedWalletArtifact {
             .collect()
     }
 
-    fn launch(&mut self) -> io::Result<Child> {
+    #[cfg(target_os = "linux")]
+    fn launch_for_database(
+        &mut self,
+        database: &TrustedWalletDatabaseConfiguration,
+    ) -> io::Result<Child> {
+        database.revalidate()?;
         let anti_rollback_lock = acquire_anti_rollback_lock(&self.data_directory)
             .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
         self.revalidate_for_launch_while_locked(&anti_rollback_lock)
             .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
-        #[cfg(target_os = "linux")]
-        {
-            let sealed = sealed_executable_copy(
-                &mut self.artifact_file,
-                &self.artifact_metadata,
-                &self.summary.artifact_sha256,
+        let sealed = sealed_executable_copy(
+            &mut self.artifact_file,
+            &self.artifact_metadata,
+            &self.summary.artifact_sha256,
+        )
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                WalletArtifactRejection::LaunchFailed.code(),
             )
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    WalletArtifactRejection::LaunchFailed.code(),
-                )
-            })?;
-            self.revalidate_for_launch_while_locked(&anti_rollback_lock)
-                .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
-            spawn_sealed_linux_executable(sealed)
+        })?;
+        self.revalidate_for_launch_while_locked(&anti_rollback_lock)
+            .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
+        database.revalidate()?;
+        let mut child = spawn_sealed_linux_executable(sealed, database.database_path())?;
+        if let Err(error) = database.revalidate() {
+            terminate_wallet_child(&mut child);
+            return Err(error);
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "reviewed sealed wallet execution is not available on this platform",
-            ))
-        }
+        Ok(child)
     }
 
     fn revalidate_for_launch_while_locked(
@@ -2463,6 +3001,19 @@ fn valid_artifact_name(value: &str) -> bool {
     false
 }
 
+#[cfg(target_os = "linux")]
+fn valid_wallet_database_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_WALLET_DATABASE_NAME_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+        && Path::new(value).components().count() == 1
+}
+
 #[cfg(unix)]
 fn valid_token(value: &str, maximum: usize) -> bool {
     !value.is_empty()
@@ -2953,6 +3504,39 @@ fn open_directory_nofollow(path: &Path) -> io::Result<File> {
     file_from_descriptor(descriptor)
 }
 
+#[cfg(target_os = "linux")]
+fn open_absolute_directory_path_nofollow(path: &Path) -> io::Result<File> {
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "directory path must be absolute",
+        ));
+    }
+    let mut directory = open_directory_nofollow(Path::new("/"))?;
+    let mut saw_root = false;
+    for component in path.components() {
+        match component {
+            Component::RootDir if !saw_root => saw_root = true,
+            Component::Normal(name) if saw_root => {
+                let name = name.to_str().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "wallet database path is not UTF-8",
+                    )
+                })?;
+                directory = open_directory_at_nofollow(&directory, name)?;
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "wallet database path is not canonical",
+                ));
+            }
+        }
+    }
+    Ok(directory)
+}
+
 #[cfg(unix)]
 fn open_directory_at_nofollow(directory: &File, name: &str) -> io::Result<File> {
     open_at_nofollow(directory, name, libc::O_DIRECTORY)
@@ -3078,6 +3662,31 @@ fn private_directory(directory: &File) -> bool {
     })
 }
 
+#[cfg(target_os = "linux")]
+fn private_wallet_database_directory(directory: &File) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    // SAFETY: geteuid has no arguments or memory-safety preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    directory.metadata().is_ok_and(|metadata| {
+        metadata.is_dir()
+            && metadata.uid() == effective_uid
+            && metadata.permissions().mode() & 0o7777 == 0o700
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn private_wallet_database_file(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    // SAFETY: geteuid has no arguments or memory-safety preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    metadata.is_file()
+        && metadata.uid() == effective_uid
+        && metadata.nlink() == 1
+        && metadata.permissions().mode() & 0o7777 == 0o600
+}
+
 #[cfg(unix)]
 fn private_regular_file(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -3139,6 +3748,20 @@ fn same_open_file(before: &fs::Metadata, after: &fs::Metadata) -> bool {
         && before.mtime_nsec() == after.mtime_nsec()
         && before.ctime() == after.ctime()
         && before.ctime_nsec() == after.ctime_nsec()
+}
+
+#[cfg(target_os = "linux")]
+fn same_wallet_database_identity(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.is_file()
+        && after.is_file()
+        && before.dev() == after.dev()
+        && before.ino() == after.ino()
+        && before.uid() == after.uid()
+        && before.gid() == after.gid()
+        && before.mode() == after.mode()
+        && before.nlink() == after.nlink()
 }
 
 #[cfg(unix)]
@@ -3252,7 +3875,7 @@ fn sealed_executable_copy(
 }
 
 #[cfg(target_os = "linux")]
-fn spawn_sealed_linux_executable(sealed: File) -> io::Result<Child> {
+fn spawn_sealed_linux_executable(sealed: File, database_path: &Path) -> io::Result<Child> {
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
 
@@ -3260,11 +3883,16 @@ fn spawn_sealed_linux_executable(sealed: File) -> io::Result<Child> {
     let executable = format!("/proc/self/fd/{descriptor}");
     let mut command = Command::new(executable);
     command
+        .arg("--database")
+        .arg(database_path)
         .env_clear()
         .current_dir("/")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    // `--database` and the retained configuration's exact absolute path are
+    // the complete child argument list; no service mode or caller input can
+    // append another operation here.
     // SAFETY: the child hook performs only async-signal-safe fcntl calls. It
     // clears close-on-exec on the inherited sealed memfd so the proc-fd path is
     // resolvable by exec and the immutable image remains retained afterward.
@@ -4519,6 +5147,272 @@ mod tests {
         assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn failed_spawned_negotiation_kills_and_reaps_the_service() {
+        let child = Command::new("/bin/cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let process_id = child.id() as libc::pid_t;
+        let admitted = WALLET_READ_SESSION_ALLOWED_CAPABILITIES
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let error = SpawnedWalletServiceController::negotiate_spawned(
+            child,
+            admitted,
+            1,
+            Duration::from_secs(1),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_session_capability_ceiling_is_closed_and_requires_wallet_reads() {
+        let admitted = SERVICE_CAPABILITIES
+            .iter()
+            .map(|capability| {
+                NegotiatedWalletServiceCapability::from_wire_name(capability).unwrap()
+            })
+            .collect::<BTreeSet<_>>();
+        let ceiling = wallet_read_session_capability_ceiling(&admitted).unwrap();
+        assert_eq!(
+            ceiling,
+            WALLET_READ_SESSION_ALLOWED_CAPABILITIES
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
+        assert!(!ceiling.contains(&NegotiatedWalletServiceCapability::ValueMovement));
+        assert!(!ceiling.contains(&NegotiatedWalletServiceCapability::BrowserIntegration));
+
+        let without_wallet_reads = REQUIRED_BASE_CAPABILITIES
+            .iter()
+            .map(|capability| {
+                NegotiatedWalletServiceCapability::from_wire_name(capability).unwrap()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            wallet_read_session_capability_ceiling(&without_wallet_reads)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn admitted_launch_capability_and_negotiation_composition_fails_closed() {
+        let root = test_root("read-composition");
+        let wallet_root = test_root("read-composition-wallet");
+        let signer = test_signer();
+        let artifact_bytes = fs::read("/bin/echo").unwrap();
+        let mut manifest = fixture_manifest(&artifact_bytes, 1, None);
+        manifest.target.capabilities = SERVICE_CAPABILITIES
+            .iter()
+            .map(|capability| (*capability).to_owned())
+            .collect();
+        sign_manifest(&mut manifest, &signer);
+        let manifest_bytes = jcs_bytes(&manifest).unwrap();
+        let release = InstalledRelease {
+            manifest,
+            manifest_bytes,
+            artifact_bytes,
+        };
+        install_raw_release(&root, &release, true);
+        let mut discovery = WalletAbiDiscovery::discover_with_configuration(
+            &root,
+            verifier_configuration(&signer, &release, 1, true, true),
+        );
+        let (_, database) = install_test_wallet_database(&wallet_root);
+        let mut lifecycle = WalletReadSessionLifecycle::new();
+
+        let error = lifecycle
+            .start(&mut discovery, database, Duration::from_secs(1))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(lifecycle.active.is_none());
+        assert_eq!(lifecycle.next_restart_generation, 2);
+        assert!(!lifecycle.provider_available());
+        assert!(!lifecycle.value_available());
+        cleanup(&root);
+        cleanup(&wallet_root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_wallet_database_rejects_aliases_permissions_and_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_root("trusted-database");
+        let (database_path, configuration) = install_test_wallet_database(&root);
+        configuration.revalidate().unwrap();
+
+        assert_eq!(
+            TrustedWalletDatabaseConfiguration::open(Path::new("wallet.sqlite3"))
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let alias = root.join("wallet-alias.sqlite3");
+        symlink(&database_path, &alias).unwrap();
+        assert!(TrustedWalletDatabaseConfiguration::open(&alias).is_err());
+        fs::remove_file(&alias).unwrap();
+
+        let hard_link = root.join("wallet-hard-link.sqlite3");
+        fs::hard_link(&database_path, &hard_link).unwrap();
+        assert_eq!(
+            TrustedWalletDatabaseConfiguration::open(&database_path)
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            configuration.revalidate().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_file(&hard_link).unwrap();
+        configuration.revalidate().unwrap();
+
+        set_mode(&database_path, 0o640);
+        assert_eq!(
+            TrustedWalletDatabaseConfiguration::open(&database_path)
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        set_mode(&database_path, 0o600);
+
+        let detached = root.join("wallet.sqlite3.detached");
+        fs::rename(&database_path, &detached).unwrap();
+        fs::write(&database_path, b"replacement wallet database").unwrap();
+        set_mode(&database_path, 0o600);
+        assert_eq!(
+            configuration.revalidate().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        cleanup(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn trusted_wallet_database_rejects_parent_directory_replacement() {
+        let root = test_root("trusted-database-parent");
+        let detached = root.with_extension("detached");
+        let (_, configuration) = install_test_wallet_database(&root);
+        fs::rename(&root, &detached).unwrap();
+        let _ = install_test_wallet_database(&root);
+        assert_eq!(
+            configuration.revalidate().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        cleanup(&root);
+        cleanup(&detached);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_session_rejects_a_replace_restore_launch_race() {
+        let root = test_root("wallet-read-replace-restore");
+        let (database_path, database) = install_test_wallet_database(&root);
+        let detached = root.join("wallet.sqlite3.detached");
+        fs::rename(&database_path, &detached).unwrap();
+        fs::write(&database_path, b"replacement wallet database").unwrap();
+        set_mode(&database_path, 0o600);
+        let replacement = File::open(&database_path).unwrap();
+        let child = spawn_test_wallet_child_with_database(&replacement);
+        let process_id = child.id() as libc::pid_t;
+        fs::remove_file(&database_path).unwrap();
+        fs::rename(&detached, &database_path).unwrap();
+        database.revalidate().unwrap();
+
+        let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
+        let error = AdmittedWalletReadSession::new(controller, database, 12)
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+        drop(replacement);
+        cleanup(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_generation_cannot_read_or_invalidate_a_newer_wallet_session() {
+        let root = test_root("wallet-read-generation");
+        let (_, database) = install_test_wallet_database(&root);
+        let child = spawn_test_wallet_child_with_database(&database.database_file);
+        let process_id = child.id() as libc::pid_t;
+        let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
+        let session = AdmittedWalletReadSession::new(controller, database, 12).unwrap();
+        let mut lifecycle = WalletReadSessionLifecycle {
+            next_restart_generation: 13,
+            active: Some(session),
+        };
+
+        assert_eq!(
+            lifecycle.read_status(11).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(!lifecycle.invalidate(11));
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(process_id, 0) }, 0);
+        assert!(!lifecycle.provider_available());
+        assert!(!lifecycle.value_available());
+
+        assert!(lifecycle.invalidate(12));
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+        assert_eq!(
+            lifecycle.read_status(12).unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        cleanup(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn poisoned_read_session_is_killed_reaped_and_removed_from_the_lifecycle() {
+        let root = test_root("wallet-read-poisoned-lifecycle");
+        let (_, database) = install_test_wallet_database(&root);
+        let child = spawn_test_wallet_child_with_database(&database.database_file);
+        let process_id = child.id() as libc::pid_t;
+        let controller = test_spawned_wallet_controller(child, 12, Duration::from_millis(20));
+        let session = AdmittedWalletReadSession::new(controller, database, 12).unwrap();
+        let mut lifecycle = WalletReadSessionLifecycle {
+            next_restart_generation: 13,
+            active: Some(session),
+        };
+
+        assert_eq!(
+            lifecycle.read_status(12).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert!(lifecycle.active.is_none());
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+        assert_eq!(
+            lifecycle.read_status(12).unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        cleanup(&root);
+    }
+
     #[test]
     fn jcs_literal_fixes_lexicographic_key_order_and_json_escaping() {
         let value = json!({
@@ -4864,26 +5758,34 @@ mod tests {
     #[test]
     fn retained_parent_binding_rejects_replaced_artifact_directory_at_launch() {
         let root = test_root("launch-path-binding");
+        let wallet_root = test_root("launch-path-binding-wallet");
         let signer = test_signer();
         let release = install_signed_release(&root, &signer, 1, None, true, None);
         let mut admitted = WalletAbiDiscovery::discover_with_configuration(
             &root,
             verifier_configuration(&signer, &release, 1, true, true),
         );
+        let (_, database) = install_test_wallet_database(&wallet_root);
         assert_eq!(admitted.status_json()["artifactState"], "launchAdmitted");
 
         let replaced = root.join("wallet-abi-v2.detached");
         fs::rename(artifact_directory(&root), &replaced).unwrap();
         install_raw_release(&root, &release, true);
-        let error = admitted.launch_admitted_service().unwrap_err();
+        let artifact = match &mut admitted.state {
+            WalletArtifactState::LaunchAdmitted(artifact) => artifact,
+            state => panic!("expected launch admission, got {state:?}"),
+        };
+        let error = artifact.launch_for_database(&database).unwrap_err();
         assert_eq!(error.to_string(), "walletArtifactPathBindingChanged");
         cleanup(&root);
+        cleanup(&wallet_root);
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn retained_stable_root_binding_rejects_replaced_data_directory_at_launch() {
         let root = test_root("stable-root-path-binding");
+        let wallet_root = test_root("stable-root-path-binding-wallet");
         let detached_root = root.with_extension("detached");
         let signer = test_signer();
         let release = install_signed_release(&root, &signer, 1, None, true, None);
@@ -4891,20 +5793,27 @@ mod tests {
             &root,
             verifier_configuration(&signer, &release, 1, true, true),
         );
+        let (_, database) = install_test_wallet_database(&wallet_root);
         assert_eq!(admitted.status_json()["artifactState"], "launchAdmitted");
 
         fs::rename(&root, &detached_root).unwrap();
         install_raw_release(&root, &release, true);
-        let error = admitted.launch_admitted_service().unwrap_err();
+        let artifact = match &mut admitted.state {
+            WalletArtifactState::LaunchAdmitted(artifact) => artifact,
+            state => panic!("expected launch admission, got {state:?}"),
+        };
+        let error = artifact.launch_for_database(&database).unwrap_err();
         assert_eq!(error.to_string(), "walletArtifactPathBindingChanged");
         cleanup(&root);
         cleanup(&detached_root);
+        cleanup(&wallet_root);
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn first_admission_immediately_launches_only_from_a_sealed_copy() {
         let root = test_root("sealed-launch");
+        let wallet_root = test_root("sealed-launch-wallet");
         let signer = test_signer();
         let artifact_bytes = fs::read("/bin/true").unwrap();
         let release = install_signed_release(&root, &signer, 1, None, true, Some(artifact_bytes));
@@ -4912,11 +5821,50 @@ mod tests {
             &root,
             verifier_configuration(&signer, &release, 1, true, true),
         );
+        let (_, database) = install_test_wallet_database(&wallet_root);
         assert_eq!(admitted.status_json()["artifactState"], "launchAdmitted");
         assert!(root.join(WALLET_ANTI_ROLLBACK_STATE).is_file());
-        let mut child = admitted.launch_admitted_service().unwrap();
+        let artifact = match &mut admitted.state {
+            WalletArtifactState::LaunchAdmitted(artifact) => artifact,
+            state => panic!("expected launch admission, got {state:?}"),
+        };
+        let mut child = artifact.launch_for_database(&database).unwrap();
         assert!(child.wait().unwrap().success());
         cleanup(&root);
+        cleanup(&wallet_root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn admitted_launcher_passes_only_the_exact_trusted_database_arguments() {
+        let root = test_root("sealed-database-argv");
+        let wallet_root = test_root("sealed-database-argv-wallet");
+        let signer = test_signer();
+        let artifact_bytes = fs::read("/bin/echo").unwrap();
+        let release = install_signed_release(&root, &signer, 1, None, true, Some(artifact_bytes));
+        let mut admitted = WalletAbiDiscovery::discover_with_configuration(
+            &root,
+            verifier_configuration(&signer, &release, 1, true, true),
+        );
+        let (database_path, database) = install_test_wallet_database(&wallet_root);
+        let artifact = match &mut admitted.state {
+            WalletArtifactState::LaunchAdmitted(artifact) => artifact,
+            state => panic!("expected launch admission, got {state:?}"),
+        };
+
+        let output = artifact
+            .launch_for_database(&database)
+            .unwrap()
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("--database {}\n", database_path.display())
+        );
+        assert!(output.stderr.is_empty());
+        cleanup(&root);
+        cleanup(&wallet_root);
     }
 
     fn test_signer() -> Ed25519KeyPair {
@@ -5128,6 +6076,72 @@ mod tests {
 
     fn make_read_only(path: &Path) {
         set_mode(path, 0o400);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn install_test_wallet_database(root: &Path) -> (PathBuf, TrustedWalletDatabaseConfiguration) {
+        fs::create_dir_all(root).unwrap();
+        set_mode(root, 0o700);
+        let database_path = root.join("wallet.sqlite3");
+        fs::write(&database_path, b"pre-existing wallet database fixture").unwrap();
+        set_mode(&database_path, 0o600);
+        let configuration = TrustedWalletDatabaseConfiguration::open(&database_path).unwrap();
+        (database_path, configuration)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn spawn_test_wallet_child_with_database(database_file: &File) -> Child {
+        use std::os::unix::process::CommandExt;
+
+        let descriptor = database_file.as_raw_fd();
+        let mut command = Command::new("/bin/sleep");
+        command
+            .arg("30")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // SAFETY: the child hook performs only async-signal-safe fcntl calls
+        // against a descriptor inherited from the live fixture file.
+        unsafe {
+            command.pre_exec(move || {
+                let flags = libc::fcntl(descriptor, libc::F_GETFD);
+                if flags < 0
+                    || libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.spawn().unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_spawned_wallet_controller(
+        mut child: Child,
+        restart_generation: u64,
+        timeout: Duration,
+    ) -> SpawnedWalletServiceController {
+        let reader = child.stdout.take().unwrap();
+        let writer = child.stdin.take().unwrap();
+        set_nonblocking_fd(reader.as_raw_fd()).unwrap();
+        set_nonblocking_fd(writer.as_raw_fd()).unwrap();
+        WalletServiceController {
+            reader,
+            writer,
+            process: Some(WalletServiceProcess::new(child)),
+            timeout,
+            host_session_id: URL_SAFE_NO_PAD.encode([7_u8; 32]),
+            service_session_id: URL_SAFE_NO_PAD.encode([8_u8; 32]),
+            restart_generation,
+            next_host_sequence: 1,
+            next_service_sequence: 1,
+            capabilities: WALLET_READ_SESSION_REQUIRED_CAPABILITIES
+                .into_iter()
+                .collect(),
+            selected_hns_account: None,
+            poisoned: false,
+        }
     }
 
     fn cleanup(root: &Path) {

@@ -270,8 +270,9 @@ Linux launch rebinds every retained directory/file inode to its installed path,
 rehashes while copying to a sealed memfd, and executes only that sealed
 descriptor with an empty environment and private pipes. macOS and Windows
 launch remain unavailable until reviewed platform equivalents exist. The
-controller does not call this launcher until private transport, runtime
-negotiation, public projection, and opaque engine authority are released, so
+private Linux source can call this launcher only through its exact-database
+read-session composition; `NativeHostController` does not construct that
+session. Public projection and opaque engine authority remain unreleased, so
 overall provider availability and value movement remain false.
 Every launch reparses the retained signed manifest bytes and rechecks
 publication, not-before, and expiry against a fresh wall-clock sample before
@@ -394,6 +395,7 @@ qnames, qtypes, request timing, and source IP.
 | Wallet manifest changes shape, versions, capabilities, or signing bytes | Consume exact schema v2 with denied unknown fields; require full-file and signature-omitted JCS, recomputed payload hash, fixed ABI/protocol/schema/frame values, closed unique capabilities, and all five base capabilities |
 | Artifact supplies a key or relies on a matching hash | Ignore artifact-supplied trust; require verifier-owned release-line Ed25519 root, exact qualified manifest/artifact pin, and compiled minimum sequence |
 | Local path, symlink, or directory replacement substitutes a wallet artifact | Relative no-follow retained handles, parent-to-child inode rebinding, immutable single-link files, bounded same-handle hashes, and Linux execution only from a freshly rehashed sealed memfd |
+| Configured wallet path is aliased, replaced, shared, or redirected between admission and a read | Accept one explicit canonical absolute path only; walk ancestors no-follow; retain owner-private parent/database handles; rebind device/inode/owner/mode/link identity around launch, negotiation, and every read; after hello, boundedly attest that the immediate child holds the retained base inode; poison, kill, wait, and remove the generation on change. This detects but cannot prevent a pre-hello wrong-inode open/migration, does not attest SQLite sidecars or exclusive use, and assumes same-UID state tampering is outside the isolation boundary |
 | Artifact-directory replacement or restart attempts a wallet downgrade | Keep canonical per-release-line high-water state under the stable parent data directory; require strict sequence increase and predecessor-manifest linkage, with compiled floor/pin as the non-owner-state authority |
 | Concurrent wallet admissions regress a sequence or lose another release line | Serialize the complete state transaction with one stable-parent interprocess lock; retain it through launch state/time/path checks, sealed copy, and spawn |
 | Cached admission launches after expiry or local clock rollback | Reparse retained signed manifest bytes and re-evaluate publication/not-before/expiry at every launch |
@@ -417,10 +419,17 @@ commit/tag.
 
 The wallet join has additional release gates: publish and independently review
 a signed service artifact; provision the production root, exact release pin,
-and line floor; qualify the Linux sealed launcher and private child-pipe
-transport; implement equivalent macOS and Windows ownership/execution
+and line floor; qualify the Linux sealed launcher, exact-database composition,
+and private child-pipe transport; implement equivalent macOS and Windows
+ownership/execution
 boundaries; release the browser-engine opaque-authority and public-projection
 adapters; exercise persistent runtime restart/upgrade/downgrade behavior; and
 prove browser uninstall preserves independent wallet state. The admission
 source and negative tests do not satisfy those product gates. Until they do,
 every transport/provider/value gate remains false.
+
+Linux qualification must additionally prove the exact service's operation-level
+read set and trusted unlock/account/node join, not infer it from the coarse
+`walletOperations` hello capability. The qualified artifact must remain one
+process with no inherited database-holding descendants because lifecycle
+termination owns and waits only for the immediate child.

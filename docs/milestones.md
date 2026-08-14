@@ -175,8 +175,8 @@ change.
   This did not run the full repository gate, a release build or package,
   installed-browser coverage, or product qualification. Production trust
   roots, release pins, and floors remain empty, and macOS/Windows execution,
-  private transport, opaque engine authority, provider projection, and product
-  qualification remain release blockers.
+  private-transport product integration, opaque engine authority, provider
+  projection, and product qualification remain release blockers.
 - The Chromium popup now renders a strictly sanitized, display-only projection
   of native wallet artifact admission. It accepts the exact ABI-v2 status
   contract and internally consistent stage/reason/metadata combinations, while
@@ -189,8 +189,20 @@ change.
   balance, receive target, bounded transaction history, and exact-ready module
   status. Request/response classes and session sequences remain correlated,
   malformed or non-HNS data poisons the private session, and independent value
-  calls do not claim a coherent snapshot. No launcher, database configuration,
-  extension request, provider, approval, or value path invokes these reads.
+  calls do not claim a coherent snapshot.
+- A dormant native-only Linux composition now joins signed-artifact launch,
+  one explicit retained owner-private database identity, exact
+  `--database <path>` arguments, a manifest-derived non-value capability
+  ceiling, ABI negotiation, and a monotonic kill-and-wait generation slot.
+  Database/path identity is rechecked around launch, negotiation, and every
+  read, and the live child must retain that exact database inode. Poisoned
+  reads remove their killed/reaped generation. No extension request, product
+  configuration, provider, approval, unlock, mutation, or value path invokes
+  the session; all public gates stay false.
+- Exact launched-service reads are not yet demonstrated. The checked-in wallet
+  executable still selects its locked control runtime; the HNS read runtime
+  needs trusted unlock/account/authenticated-node inputs, and broad
+  `walletOperations` negotiation does not qualify individual methods.
 
 Passing portable source gates is not a substitute for those release gates.
 
@@ -221,12 +233,16 @@ false and the popup remains unverified.
 
 Retain only the browser-specific listener, native-messaging, CA/TLS, lifecycle,
 installer, and approval UI here. The first wallet product slice remains
-non-value status, lock, and capability controls; private transport, production
-wallet trust roots, native approval rendering, and installed-browser
-qualification must land before provider installation. HNSR transport,
+non-value status, lock, and capability controls; private-transport product
+integration, production wallet trust roots, native approval rendering, and
+installed-browser qualification must land before provider installation. HNSR
+transport,
 discovery and persistence, value movement, settlement, and P2P marketplace
 controls are separate later gates and remain disabled.
 
-The current wallet-readiness panel completes only pre-transport artifact-status
-presentation. Actual lock and module status requires joining a qualified wallet
-release to the private read-only transport and remains a separate gated tranche.
+The current wallet-readiness panel completes only artifact-status presentation.
+Source-level native launch/read composition now exists, but actual lock and
+module presentation still requires a qualified production wallet release, an
+explicit trusted configuration source, lifecycle ownership in the native host,
+a new reviewed native/UI projection, and installed-browser qualification. It
+remains a separate gated tranche.

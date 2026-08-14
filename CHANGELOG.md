@@ -15,10 +15,20 @@ All notable changes to this project will be documented in this file.
   It negotiates ABI-v2 sessions and exposes only correlated, deadline-bounded
   read-only status plus singleton selected-account HNS balance, receive-target,
   transaction-history, and module-status calls. Each value call is an
-  independent synchronized read, not a coherent multi-call snapshot. The
-  controller is deliberately not joined to artifact launch or database
-  configuration; production trust/pin/floor tables and every provider/value
-  availability gate remain empty or false.
+  independent synchronized read, not a coherent multi-call snapshot.
+- Compose that private Linux read controller with signed-artifact launch around
+  one explicitly configured pre-existing wallet database. The dormant native
+  API retains and revalidates the exact owner-private path identity, launches
+  with only `--database <exact-path>`, negotiates beneath a closed non-value
+  capability ceiling, verifies that the live child actually holds that admitted
+  database inode, and rotates a kill-and-wait restart generation. No extension
+  command invokes it; production trust/pin/floor tables and every public
+  transport/provider/value gate remain empty or false.
+- Keep exact wallet-service interoperability explicitly unclaimed. The current
+  checked-in service executable selects its locked control runtime, while the
+  synchronized HNS reads require a trusted unlock plus account and authenticated
+  node configuration. This tranche has no positive launched-service read and
+  broad `walletOperations` negotiation alone is not method qualification.
 - Require an independently entered canonical HNS name before the popup contacts
   a MeshMine public-statistics endpoint. The extension validates the exact
   lowercase label, derives its SHA3-256 name hash locally, and persists it only
@@ -30,6 +40,14 @@ All notable changes to this project will be documented in this file.
   stages, unbounded release metadata, and any asserted transport, runtime, or
   provider availability before status reaches the popup. The panel adds no
   native command, launch, storage, provider, approval, unlock, or value path.
+- Reject relative, aliased, noncanonical, shared, empty, multiply linked, or
+  replaced wallet database paths before native-only launch and around every
+  read. A bounded live-child descriptor check detects a wrong base inode after
+  hello and before the session is admitted. It does not attest SQLite sidecars,
+  prevent pre-hello open/migration side effects, or treat same-UID tampering as
+  an isolated threat. Failed negotiation, poisoned reads, and exact-generation
+  invalidation synchronously kill, reap, and remove the immediate private
+  child; stale invalidation cannot stop a newer one.
 - Stop deriving or probing a MeshMine endpoint from the active browser tab.
   Invalid expected names now fail before network I/O, and a failed or changed
   selection clears earlier display-only values instead of leaving stale pool

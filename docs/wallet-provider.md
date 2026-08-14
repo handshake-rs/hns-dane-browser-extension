@@ -200,11 +200,47 @@ malformed output, or drop. Its private read surface includes wallet status,
 singleton HNS-account selection, balance, receive target, transaction history,
 and exact-ready module status. Module and account selectors are fixed by the
 controller, responses are HNS-only and bounded, and separately synchronized
-value calls are not represented as one coherent snapshot. Even a service hello
-containing provider or value capabilities cannot make those browser product
-gates true. This controller is deliberately not joined to the artifact
-launcher or to database configuration. No production path invokes it while
-the verifier-owned trust, qualification, and floor tables remain empty.
+value calls are not represented as one coherent snapshot.
+
+The dormant Linux native API composes admitted launch and negotiation only for
+one explicitly configured, pre-existing wallet database. Its typed
+configuration retains an absolute canonical path plus owner-private parent/file
+handles, rejects symlinks, aliases, shared permissions, empty files and hard
+links, and revalidates path-to-inode identity before launch, after spawn and
+hello, and around each request. The sealed executable receives only
+`--database <exact-configured-path>`. After hello and around nonpoisoning reads,
+the host also requires the live child's descriptor table to contain the
+retained database inode, rejecting a pathname replace/restore launch race. The
+manifest-derived read-session ceiling requires `walletOperations` and the five
+ABI foundations, tolerates only the persistent-permission/provider-dispatch
+scaffolding of the standalone service, and excludes value and
+browser-integration capabilities. The request type has no corresponding
+provider, approval, unlock, lock, or mutation operation.
+
+The checked-in wallet-service executable does not yet satisfy this whole read
+surface: it starts the locked persistent-control runtime, which supports status
+and control operations but not the account/balance/receive/history/module set.
+The synchronized HNS runtime requires trusted account and authenticated
+loopback-node configuration, while this browser enum deliberately has no unlock
+secret. Therefore `walletOperations` negotiation is not treated as
+operation-level qualification, and there is not yet a successful exact-service
+sealed-launch/read fixture.
+
+One private lifecycle slot assigns nonzero monotonic restart generations,
+synchronously kills and waits for an older child before replacement, consumes
+failed generations, and ignores stale-generation invalidation of a newer
+session. A poisoned read removes its killed/reaped generation instead of
+leaving an unusable active slot. Even a negotiated provider-scaffolding
+capability cannot make a browser product gate true. No `NativeRequest`,
+service-worker message, popup, or page path constructs this configuration or
+session, and no production path invokes it while verifier-owned trust,
+qualification, and floor tables remain empty.
+
+The descriptor check is bounded to the immediate child's base database inode.
+It detects a wrong open after hello but cannot undo an earlier open/migration,
+does not attest SQLite sidecars or exclusive use, and relies on the documented
+same-UID threat boundary. Exact release qualification must also require a
+single-process artifact with no surviving database-holding descendants.
 
 ## Lifecycle, upgrade, and removal
 
@@ -258,9 +294,10 @@ The native host therefore parses typed command envelopes only to return an
 explicit unavailable error. With empty production trust and qualification
 tables, artifact authenticity is false; service transport, runtime negotiation,
 engine authority, overall provider availability, and value movement are also
-false. The controller never invokes the admission-only launcher, never treats
-caller-supplied authority fields as authentication, never exports secrets,
-advertises `handshakeWalletProvider: false`, and injects no MAIN-world provider.
+false. `NativeHostController` never constructs the dormant read-session
+configuration or invokes its sealed launcher, never treats caller-supplied
+authority fields as authentication, never exports secrets, advertises
+`handshakeWalletProvider: false`, and injects no MAIN-world provider.
 The DANE runtime continues to work independently.
 
 ## Focused verifier evidence

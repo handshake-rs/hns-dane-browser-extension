@@ -336,9 +336,52 @@ surface covers wallet status, one exact HNS account admitted by
 `listAccounts`, and HNS balance, receive target, transaction history, and
 module status. The controller supplies no caller-selected account or module,
 and each value call has only its own synchronization authority rather than a
-shared snapshot across calls. It is deliberately not joined to artifact launch
-or database configuration, and negotiating provider or value capabilities does
-not satisfy browser authority, projection, release, or availability gates.
+shared snapshot across calls.
+
+A dormant Linux-only native composition now joins that controller to admitted
+artifact launch around one typed, explicitly supplied, pre-existing wallet
+database. It accepts only an absolute canonical UTF-8 path with a closed
+basename, walks every parent component without following symlinks, retains the
+owner-private `0700` parent and nonempty owner-only `0600` single-link database
+handles, and rebinds their device/inode/owner/mode/link identity before launch,
+after spawn and negotiation, and around each read. Database length and write
+timestamps may change under SQLite without changing the retained identity. The
+sealed child receives exactly `--database <configured-absolute-path>` with no
+additional mode or caller arguments. After negotiation and before and after
+nonpoisoning reads, the host also scans the live child's Linux descriptor table
+and requires a descriptor for the retained database inode. This makes a
+wrong base-database open detectable after hello, before the session is admitted,
+even when the pathname has already been restored before the host rechecks it.
+The scan is bounded and covers the immediate child's base-database descriptors;
+it does not attest SQLite sidecars, prevent an open/migration side effect before
+hello, prove exclusive descriptor use, or turn same-UID filesystem tampering
+into a supported isolation boundary.
+
+The manifest-derived negotiation ceiling requires the five foundation
+capabilities plus `walletOperations`, admits only the persistent-permission and
+provider-dispatch scaffolding currently reported by the standalone persistent
+service, and excludes `valueMovement` and `browserIntegration`. The controller
+request enum itself remains a closed wallet-read allowlist and has no provider,
+unlock, lock, approval, or mutation variant. A generation-owning slot kills and
+waits for the prior child before restart, never reuses a failed generation, and
+does not let a stale invalidation stop a newer session. Path change, malformed
+hello/frame, timeout, EOF, or drop poisons and reaps the child; a poisoned read
+also removes that generation from the active lifecycle slot.
+
+The checked-in wallet-service executable currently opens the database into its
+locked control runtime. That runtime can return status but does not provide the
+account/balance/receive/history/module read set. The synchronized HNS runtime
+also needs trusted account and authenticated loopback-node configuration, and
+the browser's closed read enum intentionally supplies no unlock secret. Thus
+`walletOperations` is only a coarse negotiation capability, not proof of exact
+method support. A positive sealed launch through the exact service, trusted
+unlock/configuration join, operation-level release qualification, and a
+single-process/no-inherited-descendant invariant remain required before product
+integration.
+
+This composition is not installed in `NativeHostController`: no native-message
+variant supplies a database path or invokes it. Negotiating provider scaffolding
+does not satisfy browser authority, projection, release, or availability gates.
 
 No production trust root, release pin, or release floor is configured yet, and
 test keys are compiled only for tests. No independently released service,

@@ -98,9 +98,11 @@ after all of the following are reviewed from immutable release evidence:
 4. The focused verifier suite covers canonical bytes, signature/root failure,
    mutable files, wrong native format, restart, state tamper, downgrade after
    complete ABI-directory replacement, concurrent sequence admission,
-   path/root replacement, cached expiry/clock rollback, and sealed execution.
-   The complete repository gate and Linux target qualification then pass at
-   the exact browser commit.
+   path/root replacement, cached expiry/clock rollback, sealed execution,
+   external database alias/replacement, replace/restore child-descriptor
+   attestation, exact service arguments, stale generations, and negotiation or
+   poisoned-read kill-and-wait. The complete repository gate and Linux target
+   qualification then pass at the exact browser commit.
 
 The focused verifier filter passed at exact source
 `a39f8759c0161b5e49cb93c0c5aea1f0298e3108`: 17 passed, 0 failed, and
@@ -117,12 +119,18 @@ The current tables are empty. Linux is the only implemented sealed-execution
 boundary; macOS and Windows must stay unavailable until equivalent reviewed
 ownership and immutable-execution mechanisms land. Even a launch-admitted
 artifact must not make provider or value gates true until the private
-child-pipe transport, exact runtime negotiation, browser-engine opaque
-authority, public approval projection, restart lifecycle, and installed-browser
-qualification all pass.
+exact-database/child-pipe composition, runtime negotiation, browser-engine
+opaque authority, public approval projection, restart lifecycle, and
+installed-browser qualification all pass.
 The focused filter is not the full repository gate, a release build/package,
 installed-browser testing, or wallet product qualification and does not
 authorize populating the production trust-root, release-pin, or floor tables.
+It also does not prove exact wallet-service interoperability: the current
+checked-in executable selects a locked control runtime, not the synchronized
+HNS read runtime. Release requires an exact positive sealed-launch/read fixture,
+a trusted unlock/account/authenticated-node configuration design, explicit
+method qualification beyond coarse `walletOperations`, and evidence that the
+qualified artifact is single-process and leaves no database-holding descendant.
 
 ## Setup application packages
 

@@ -120,7 +120,8 @@ executable. The private host/service contract is ABI 2 while the website-facing
 provider schema remains 1. The native host does not search for a wallet
 elsewhere. Admission requires verifier-owned signer, exact release, and
 anti-rollback floor configuration; all production tables are currently empty,
-and the controller does not invoke the Linux sealed-execution primitive.
+and no Setup, extension-message, or production controller path constructs the
+dormant Linux native-only read session or invokes sealed execution.
 
 That version directory may contain only the staged adapter manifest and
 artifact. Wallet databases, seeds, encryption keys, backups, logs, approvals,
