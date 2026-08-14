@@ -131,13 +131,16 @@ installed-browser qualification all pass.
 The focused filter is not the full repository gate, a release build/package,
 installed-browser testing, or wallet product qualification and does not
 authorize populating the production trust-root, release-pin, or floor tables.
-It also does not prove exact wallet-service interoperability: the current
-checked-in executable selects a locked control runtime, not the synchronized
-HNS read runtime, and does not advertise `hnsReadOperationsV1`; broad
-`walletOperations` alone fails browser read-session admission. Release requires
-a newly signed and exactly pinned marker-bearing manifest, a matching hello, an
-exact positive sealed-launch/read fixture, a trusted unlock/account/
-authenticated-node configuration design, and evidence that the qualified
+The Linux source fixture now proves the browser-side sealed-launch/read
+boundary with an exact marker-bearing test manifest and hello, all six reads,
+restart kill/reap, stale-generation rejection, and database-inode fail-closed
+cleanup. It does not prove exact released-wallet-service interoperability: the
+current checked-in executable selects a locked control runtime, not the
+synchronized HNS read runtime, and does not advertise `hnsReadOperationsV1`;
+broad `walletOperations` alone fails browser read-session admission. Release
+still requires a newly signed and exactly pinned real-service manifest and
+matching hello, a trusted unlock/account/authenticated-node configuration,
+positive reads through that exact artifact, and evidence that the qualified
 artifact is single-process and leaves no database-holding descendant.
 
 ## Setup application packages

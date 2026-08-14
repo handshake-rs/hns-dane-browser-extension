@@ -29,12 +29,19 @@ All notable changes to this project will be documented in this file.
   a kill-and-wait restart generation. No extension command invokes it;
   production trust/pin/floor tables and every public transport/provider/value
   gate remain empty or false.
-- Keep exact wallet-service interoperability explicitly unclaimed. The current
-  checked-in service executable selects its locked control runtime, while the
-  synchronized HNS reads require a trusted unlock plus account and authenticated
-  node configuration. It does not advertise `hnsReadOperationsV1`, so broad
-  `walletOperations` alone fails read-session admission. This tranche has no
-  positive launched-service read, production release pin, or product gate.
+- Add a Linux-only native interoperability fixture for the dormant read
+  session. The test installs the compiled fixture as a signed, exactly pinned
+  artifact, launches its sealed copy with the opaque FD3 bootstrap and exact
+  database argument, negotiates the exact `hnsReadOperationsV1` marker, and
+  completes all six HNS reads. Restart kills and reaps the prior child, stale
+  generations cannot read or invalidate the replacement, and database-inode
+  replacement kills, reaps, and removes the active session.
+- Keep released wallet-service interoperability explicitly unclaimed. The
+  checked-in service executable still selects its locked control runtime,
+  while synchronized HNS reads require a trusted unlock plus account and
+  authenticated node configuration. It does not advertise
+  `hnsReadOperationsV1`, so broad `walletOperations` alone fails read-session
+  admission. The fixture adds no production release pin or product gate.
 - Require an independently entered canonical HNS name before the popup contacts
   a MeshMine public-statistics endpoint. The extension validates the exact
   lowercase label, derives its SHA3-256 name hash locally, and persists it only

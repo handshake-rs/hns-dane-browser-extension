@@ -4185,6 +4185,18 @@ mod tests {
     const TEST_ARTIFACT_NAME: &str = "hns-wallet-service";
     #[cfg(target_os = "linux")]
     const LOW_FD_SPAWN_HELPER_ENV: &str = "HNS_WALLET_LOW_FD_SPAWN_HELPER";
+    #[cfg(target_os = "linux")]
+    const POSITIVE_WALLET_READ_BOOTSTRAP: &[u8] = b"chromium-wallet-read-bootstrap-v1";
+    #[cfg(target_os = "linux")]
+    const POSITIVE_WALLET_READ_CAPABILITIES: [&str; 7] = [
+        "canonicalFraming",
+        "restartIsolation",
+        "opaqueAuthorityRegistry",
+        "structuredApprovals",
+        "typedEvents",
+        "walletOperations",
+        "hnsReadOperationsV1",
+    ];
 
     struct InstalledRelease {
         manifest: WalletArtifactManifest,
@@ -6169,6 +6181,119 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn sealed_fixture_completes_the_exact_hns_read_session_and_fails_closed() {
+        let root = test_root("positive-read-composition");
+        let wallet_root = test_root("positive-read-composition-wallet");
+        let fixture_root = test_root("positive-read-composition-fixture");
+        let signer = test_signer();
+        let artifact_bytes = compile_linux_wallet_read_fixture(&fixture_root);
+        let mut manifest = fixture_manifest(&artifact_bytes, 1, None);
+        manifest.target.capabilities = POSITIVE_WALLET_READ_CAPABILITIES
+            .iter()
+            .map(|capability| (*capability).to_owned())
+            .collect();
+        sign_manifest(&mut manifest, &signer);
+        let manifest_bytes = jcs_bytes(&manifest).unwrap();
+        let release = InstalledRelease {
+            manifest,
+            manifest_bytes,
+            artifact_bytes,
+        };
+        install_raw_release(&root, &release, true);
+        let mut discovery = WalletAbiDiscovery::discover_with_configuration(
+            &root,
+            verifier_configuration(&signer, &release, 1, true, true),
+        );
+        assert_eq!(discovery.status_json()["artifactState"], "launchAdmitted");
+
+        let (database_path, first_database) = install_test_wallet_database(&wallet_root);
+        let (mut first_source, mut first_bootstrap_write) =
+            test_wallet_bootstrap_source(1, first_database);
+        first_bootstrap_write
+            .write_all(POSITIVE_WALLET_READ_BOOTSTRAP)
+            .unwrap();
+        drop(first_bootstrap_write);
+
+        let mut lifecycle = WalletReadSessionLifecycle::new();
+        let first_generation = lifecycle
+            .start(&mut discovery, &mut first_source, Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(first_generation, 1);
+        assert_eq!(first_source.claimed_generations, [first_generation]);
+        let first_process_id = active_wallet_child_pid(&lifecycle);
+
+        let view = lifecycle.read_all(first_generation).unwrap();
+        assert!(!view.status.locked);
+        assert_eq!(view.status.active_wallet, Some([7_u8; 16]));
+        assert_eq!(
+            view.status.enabled_modules(),
+            &[WalletReadOnlyModule::Handshake]
+        );
+        assert!(!view.status.mainnet_settlement_enabled);
+        assert_eq!(view.account.account_id, [9_u8; 16]);
+        assert_eq!(view.account.module, WalletReadOnlyModule::Handshake);
+        assert_eq!(view.account.label, "Fixture HNS");
+        assert_eq!(view.balance.asset, WalletReadOnlyAsset::Hns);
+        assert_eq!(view.balance.base_units.get(), 42);
+        assert_eq!(view.receive_target.account, [9_u8; 16]);
+        assert_eq!(view.receive_target.display, "rs1qsealedfixture");
+        assert_eq!(view.receive_target.derivation_index, 3);
+        assert!(view.transactions.is_empty());
+        assert_eq!(view.module_status.phase, WalletReadOnlySyncPhase::Ready);
+        assert_eq!(view.module_status.validated_height, 144);
+        assert_eq!(view.module_status.scanned_height, 144);
+        assert_eq!(view.module_status.target_height, Some(144));
+        assert!(!lifecycle.provider_available());
+        assert!(!lifecycle.value_available());
+
+        let second_database = TrustedWalletDatabaseConfiguration::open(&database_path).unwrap();
+        let (mut second_source, mut second_bootstrap_write) =
+            test_wallet_bootstrap_source(2, second_database);
+        second_bootstrap_write
+            .write_all(POSITIVE_WALLET_READ_BOOTSTRAP)
+            .unwrap();
+        drop(second_bootstrap_write);
+        let second_generation = lifecycle
+            .start(&mut discovery, &mut second_source, Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(second_generation, 2);
+        assert_eq!(second_source.claimed_generations, [second_generation]);
+        let second_process_id = active_wallet_child_pid(&lifecycle);
+        assert_ne!(first_process_id, second_process_id);
+        assert_wallet_child_killed_and_reaped(first_process_id);
+
+        assert_eq!(
+            lifecycle.read_status(first_generation).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(!lifecycle.invalidate(first_generation));
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(second_process_id, 0) }, 0);
+
+        let detached_database = wallet_root.join("wallet.sqlite3.detached");
+        fs::rename(&database_path, &detached_database).unwrap();
+        fs::write(&database_path, b"replacement wallet database fixture").unwrap();
+        set_mode(&database_path, 0o600);
+        assert_eq!(
+            lifecycle.read_status(second_generation).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(lifecycle.active.is_none());
+        assert_wallet_child_killed_and_reaped(second_process_id);
+        assert_eq!(
+            lifecycle.read_status(second_generation).unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert!(!lifecycle.provider_available());
+        assert!(!lifecycle.value_available());
+
+        cleanup(&root);
+        cleanup(&wallet_root);
+        cleanup(&fixture_root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn trusted_wallet_database_rejects_aliases_permissions_and_replacement() {
         use std::os::unix::fs::symlink;
 
@@ -7009,6 +7134,29 @@ mod tests {
         bytes
     }
 
+    #[cfg(target_os = "linux")]
+    fn compile_linux_wallet_read_fixture(root: &Path) -> Vec<u8> {
+        fs::create_dir_all(root).unwrap();
+        set_mode(root, 0o700);
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/wallet-read-service.c");
+        let executable = root.join("wallet-read-service");
+        let output = Command::new("cc")
+            .args(["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "unable to compile the Linux wallet read fixture\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read(executable).unwrap()
+    }
+
     fn artifact_directory(root: &Path) -> PathBuf {
         root.join(WALLET_ARTIFACT_DIRECTORY)
     }
@@ -7098,6 +7246,35 @@ mod tests {
             selected_hns_account: None,
             poisoned: false,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn active_wallet_child_pid(lifecycle: &WalletReadSessionLifecycle) -> libc::pid_t {
+        lifecycle
+            .active
+            .as_ref()
+            .and_then(|session| session.controller.process.as_ref())
+            .and_then(|process| process.child.as_ref())
+            .map(|child| child.id() as libc::pid_t)
+            .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_wallet_child_killed_and_reaped(process_id: libc::pid_t) {
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+        let mut status = 0;
+        // SAFETY: process_id was the immediate child owned and synchronously
+        // waited by the lifecycle, and status remains live for this call.
+        assert_eq!(
+            unsafe { libc::waitpid(process_id, &mut status, libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
     }
 
     fn cleanup(root: &Path) {

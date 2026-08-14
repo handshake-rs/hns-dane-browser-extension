@@ -208,12 +208,20 @@ change.
   unlock, mutation, or value path invokes the session; all public gates stay
   false. This first lease is launch authorization only, not ongoing broker
   revocation or wallet-database exclusivity.
-- Exact launched-service reads are not yet demonstrated. The checked-in wallet
-  executable still selects its locked control runtime; the HNS read runtime
-  needs trusted unlock/account/authenticated-node inputs, and it does not
-  advertise `hnsReadOperationsV1`. Broad `walletOperations` alone now fails
-  read-session admission. The exact marker excludes workflow and value
-  operations and still requires a positive interoperability fixture.
+- A Linux-only native fixture now demonstrates the complete dormant browser
+  boundary: test-signed exact release admission, sealed launch, the expected
+  opaque FD3 bootstrap, exact database argv and retained inode, ABI negotiation
+  with `hnsReadOperationsV1`, and the fixed six HNS reads. The same test proves
+  synchronous kill/reap on restart, stale-generation rejection without
+  invalidating the replacement, and fail-closed kill/reap/removal after a
+  database-inode replacement. It leaves the production lease source and all
+  provider/value/public gates false.
+- Exact interoperability with the checked-in wallet executable is still not
+  demonstrated. It selects its locked control runtime; the HNS read runtime
+  needs trusted unlock/account/authenticated-node inputs and does not advertise
+  `hnsReadOperationsV1`. Broad `walletOperations` alone therefore still fails
+  read-session admission. The source fixture is browser-boundary evidence, not
+  a qualified wallet-service release or installed-product result.
 
 Passing portable source gates is not a substitute for those release gates.
 
