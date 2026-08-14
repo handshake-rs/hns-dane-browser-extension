@@ -5351,6 +5351,31 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn read_session_rejects_a_child_without_the_admitted_database_descriptor() {
+        let root = test_root("wallet-read-missing-database-fd");
+        let (_, database) = install_test_wallet_database(&root);
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let process_id = child.id() as libc::pid_t;
+        let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
+
+        let error = AdmittedWalletReadSession::new(controller, database, 12)
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        // SAFETY: signal zero performs only an existence check for this PID.
+        assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+        cleanup(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn stale_generation_cannot_read_or_invalidate_a_newer_wallet_session() {
         let root = test_root("wallet-read-generation");
         let (_, database) = install_test_wallet_database(&root);
