@@ -340,17 +340,28 @@ shared snapshot across calls. The additive private `hnsReadOperationsV1`
 marker freezes exactly those six operations and excludes workflow status.
 
 A dormant Linux-only native composition now joins that controller to admitted
-artifact launch around one typed, explicitly supplied, pre-existing wallet
-database. It accepts only an absolute canonical UTF-8 path with a closed
-basename, walks every parent component without following symlinks, retains the
-owner-private `0700` parent and nonempty owner-only `0600` single-link database
-handles, and rebinds their device/inode/owner/mode/link identity before launch,
-after spawn and negotiation, and around each read. Database length and write
-timestamps may change under SQLite without changing the retained identity. The
-sealed child receives exactly `--database <configured-absolute-path>` with no
-additional mode or caller arguments. After negotiation and before and after
-nonpoisoning reads, the host also scans the live child's Linux descriptor table
-and requires a descriptor for the retained database inode. This makes a
+artifact launch around one single-use `WalletBootstrapLease` obtained for the
+new restart generation. The lease owns one typed, explicitly supplied,
+pre-existing wallet database configuration and one opaque read-only
+close-on-exec pipe end. Discovery cannot proceed without it, a source cannot
+replay it, and launch failure consumes and closes it. The browser never parses
+the opaque packet. The launcher installs a collision-safe copy at fixed child
+descriptor 3 and moves the sealed executable descriptor away from that slot
+when necessary; the original bootstrap descriptor remains close-on-exec.
+Standard input/output remain exclusively ABI-v2 framing, the environment is
+empty, and the sealed child receives exactly
+`--database <configured-absolute-path>` with no additional mode or caller
+arguments.
+
+The database configuration accepts only an absolute canonical UTF-8 path with
+a closed basename, walks every parent component without following symlinks,
+retains the owner-private `0700` parent and nonempty owner-only `0600`
+single-link database handles, and rebinds their device/inode/owner/mode/link
+identity before launch, after spawn and negotiation, and around each read.
+Database length and write timestamps may change under SQLite without changing
+the retained identity. After negotiation and before and after nonpoisoning
+reads, the host also scans the live child's Linux descriptor table and requires
+a descriptor for the retained database inode. This makes a
 wrong base-database open detectable after hello, before the session is admitted,
 even when the pathname has already been restored before the host rechecks it.
 The scan is bounded and covers the immediate child's base-database descriptors;
@@ -370,6 +381,11 @@ not let a stale invalidation stop a newer session. Path change, malformed
 hello/frame, timeout, EOF, or drop poisons and reaps the child; a poisoned read
 also removes that generation from the active lifecycle slot.
 
+`WalletBootstrapLease` currently means authorization for one launch attempt,
+not a renewable broker session or an ongoing revocation/database-exclusivity
+lease. Descriptor closure does not prove that no process or descendant retains
+wallet state. Those semantics require a future wallet-owned lifecycle protocol.
+
 The checked-in wallet-service executable currently opens the database into its
 locked control runtime. That runtime can return status but does not provide the
 account/balance/receive/history/module read set and does not advertise
@@ -384,8 +400,10 @@ single-process/no-inherited-descendant invariant remain required before product
 integration.
 
 This composition is not installed in `NativeHostController`: no native-message
-variant supplies a database path or invokes it. Negotiating provider scaffolding
-does not satisfy browser authority, projection, release, or availability gates.
+variant supplies a database path, a bootstrap packet, or invokes it. Its
+production bootstrap source is deliberately unavailable. Negotiating provider
+scaffolding does not satisfy browser authority, projection, release, or
+availability gates.
 
 No production trust root, release pin, or release floor is configured yet, and
 test keys are compiled only for tests. No independently released service,

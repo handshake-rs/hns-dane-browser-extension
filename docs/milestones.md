@@ -193,16 +193,21 @@ change.
   exact six operations in their fixed order and returns one minimized view
   while explicitly retaining those per-operation synchronization semantics.
 - A dormant native-only Linux composition now joins signed-artifact launch,
-  one explicit retained owner-private database identity, exact
-  `--database <path>` arguments, a manifest-derived non-value capability
-  ceiling requiring both `walletOperations` and the exact-six-operation
-  `hnsReadOperationsV1` marker, ABI negotiation, and a monotonic kill-and-wait
-  generation slot.
+  one generation-bound single-use `WalletBootstrapLease`, one explicit retained
+  owner-private database identity, exact `--database <path>` arguments, a
+  manifest-derived non-value capability ceiling requiring both
+  `walletOperations` and the exact-six-operation `hnsReadOperationsV1` marker,
+  ABI negotiation, and a monotonic kill-and-wait generation slot. The opaque
+  bootstrap packet is neither read nor parsed by the browser; its read-only
+  close-on-exec pipe is collision-safely installed only at child descriptor 3,
+  while stdin/stdout stay ABI-only and the child environment stays empty.
   Database/path identity is rechecked around launch, negotiation, and every
   read, and the live child must retain that exact database inode. Poisoned
-  reads remove their killed/reaped generation. No extension request, product
-  configuration, provider, approval, unlock, mutation, or value path invokes
-  the session; all public gates stay false.
+  reads remove their killed/reaped generation. The production source supplies
+  no lease. No extension request, product configuration, provider, approval,
+  unlock, mutation, or value path invokes the session; all public gates stay
+  false. This first lease is launch authorization only, not ongoing broker
+  revocation or wallet-database exclusivity.
 - Exact launched-service reads are not yet demonstrated. The checked-in wallet
   executable still selects its locked control runtime; the HNS read runtime
   needs trusted unlock/account/authenticated-node inputs, and it does not

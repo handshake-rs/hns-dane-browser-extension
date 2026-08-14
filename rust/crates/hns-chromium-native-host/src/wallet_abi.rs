@@ -23,12 +23,14 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::ffi::CString;
+#[cfg(target_os = "linux")]
+use std::fmt;
 #[cfg(unix)]
 use std::fs::{self, File};
 #[cfg(unix)]
 use std::io::{self, Read, Seek, SeekFrom, Write};
 #[cfg(target_os = "linux")]
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 #[cfg(unix)]
 use std::path::Component;
 use std::path::{Path, PathBuf};
@@ -63,6 +65,12 @@ const MAX_WALLET_RECEIVE_TARGET_BYTES: usize = 512;
 const MAX_WALLET_DATABASE_NAME_BYTES: usize = 128;
 #[cfg(target_os = "linux")]
 const MAX_WALLET_SERVICE_OPEN_DESCRIPTORS: usize = 4_096;
+/// Fixed child-only descriptor reserved for the opaque wallet bootstrap
+/// packet. Standard input and output remain exclusively private ABI v2.
+#[cfg(target_os = "linux")]
+const WALLET_BOOTSTRAP_DESCRIPTOR: RawFd = 3;
+#[cfg(target_os = "linux")]
+const FIRST_WALLET_CHILD_AUXILIARY_DESCRIPTOR: RawFd = WALLET_BOOTSTRAP_DESCRIPTOR + 1;
 const WALLET_APPROVAL_SCHEMA_VERSION: u16 = 3;
 const WALLET_ARTIFACT_MANIFEST_SCHEMA_VERSION: u16 = 2;
 #[cfg(unix)]
@@ -504,6 +512,117 @@ impl TrustedWalletDatabaseConfiguration {
             )
         })
     }
+}
+
+/// One trusted, single-use launch authorization for a pre-existing wallet
+/// database. The descriptor contents are owned by the independently released
+/// wallet service and are deliberately opaque to this browser repository.
+///
+/// This type is not serializable, is not exposed through native messaging,
+/// and reveals neither descriptor identity nor packet contents through Debug.
+#[cfg(target_os = "linux")]
+pub(crate) struct WalletBootstrapLease {
+    restart_generation: u64,
+    database: TrustedWalletDatabaseConfiguration,
+    bootstrap_read: File,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+impl WalletBootstrapLease {
+    pub(crate) fn new(
+        restart_generation: u64,
+        database: TrustedWalletDatabaseConfiguration,
+        bootstrap_read: File,
+    ) -> io::Result<Self> {
+        if restart_generation == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "wallet bootstrap lease restart generation must be nonzero",
+            ));
+        }
+        require_wallet_bootstrap_read_descriptor(&bootstrap_read)?;
+        Ok(Self {
+            restart_generation,
+            database,
+            bootstrap_read,
+        })
+    }
+
+    fn into_launch_parts(
+        self,
+        expected_restart_generation: u64,
+    ) -> io::Result<(TrustedWalletDatabaseConfiguration, File)> {
+        if self.restart_generation != expected_restart_generation {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet bootstrap lease restart generation mismatch",
+            ));
+        }
+        Ok((self.database, self.bootstrap_read))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl fmt::Debug for WalletBootstrapLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WalletBootstrapLease")
+            .field("restart_generation", &"<bound>")
+            .field("database", &"<retained identity>")
+            .field("bootstrap", &"<opaque single-use descriptor>")
+            .finish()
+    }
+}
+
+/// Native-only source of a one-shot bootstrap lease. Production deliberately
+/// supplies only the unavailable implementation below until a separately
+/// authenticated platform broker is reviewed and qualified.
+#[cfg(target_os = "linux")]
+pub(crate) trait WalletBootstrapSource {
+    /// Transfers a fresh lease for exactly this restart generation. A source
+    /// must never reissue a lease consumed by an earlier generation.
+    fn take_lease(&mut self, restart_generation: u64) -> io::Result<Option<WalletBootstrapLease>>;
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Default)]
+#[allow(dead_code)]
+pub(crate) struct UnavailableWalletBootstrapSource;
+
+#[cfg(target_os = "linux")]
+impl WalletBootstrapSource for UnavailableWalletBootstrapSource {
+    fn take_lease(&mut self, _restart_generation: u64) -> io::Result<Option<WalletBootstrapLease>> {
+        Ok(None)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn require_wallet_bootstrap_read_descriptor(descriptor: &File) -> io::Result<()> {
+    let file_descriptor = descriptor.as_raw_fd();
+    // SAFETY: both fcntl calls inspect the live descriptor borrowed above and
+    // do not retain pointers or mutate memory.
+    let descriptor_flags = unsafe { libc::fcntl(file_descriptor, libc::F_GETFD) };
+    let status_flags = unsafe { libc::fcntl(file_descriptor, libc::F_GETFL) };
+    let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: fstat initializes the supplied stat buffer on success and does
+    // not retain its pointer.
+    let stat_result = unsafe { libc::fstat(file_descriptor, status.as_mut_ptr()) };
+    if descriptor_flags < 0 || status_flags < 0 || stat_result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the successful fstat above initialized the complete value.
+    let status = unsafe { status.assume_init() };
+    if descriptor_flags & libc::FD_CLOEXEC == 0
+        || status_flags & libc::O_ACCMODE != libc::O_RDONLY
+        || status.st_mode & libc::S_IFMT != libc::S_IFIFO
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "wallet bootstrap descriptor must be a close-on-exec read-only pipe",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -1796,7 +1915,7 @@ impl WalletReadSessionLifecycle {
     pub(crate) fn start(
         &mut self,
         discovery: &mut WalletAbiDiscovery,
-        database: TrustedWalletDatabaseConfiguration,
+        bootstrap_source: &mut dyn WalletBootstrapSource,
         timeout: Duration,
     ) -> io::Result<u64> {
         let restart_generation = self.next_restart_generation;
@@ -1806,8 +1925,16 @@ impl WalletReadSessionLifecycle {
         // Drop is the synchronous kill-and-wait boundary for the previous
         // process. The allocated generation remains consumed if startup fails.
         self.active = None;
+        let lease = bootstrap_source
+            .take_lease(restart_generation)?
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "trusted wallet bootstrap lease is unavailable",
+                )
+            })?;
         let session =
-            discovery.compose_admitted_read_session(database, restart_generation, timeout)?;
+            discovery.compose_admitted_read_session(lease, restart_generation, timeout)?;
         self.active = Some(session);
         Ok(restart_generation)
     }
@@ -2245,17 +2372,18 @@ impl WalletAbiDiscovery {
     #[cfg(target_os = "linux")]
     fn compose_admitted_read_session(
         &mut self,
-        database: TrustedWalletDatabaseConfiguration,
+        lease: WalletBootstrapLease,
         restart_generation: u64,
         timeout: Duration,
     ) -> io::Result<AdmittedWalletReadSession> {
+        let (database, bootstrap_read) = lease.into_launch_parts(restart_generation)?;
         match &mut self.state {
             WalletArtifactState::LaunchAdmitted(artifact) => {
                 database.revalidate()?;
                 let admitted_capabilities = artifact.admitted_service_capabilities()?;
                 let capability_ceiling =
                     wallet_read_session_capability_ceiling(&admitted_capabilities)?;
-                let child = artifact.launch_for_database(&database)?;
+                let child = artifact.launch_for_database(&database, bootstrap_read)?;
                 let controller = SpawnedWalletServiceController::negotiate_spawned(
                     child,
                     capability_ceiling,
@@ -2440,7 +2568,9 @@ impl LaunchAdmittedWalletArtifact {
     fn launch_for_database(
         &mut self,
         database: &TrustedWalletDatabaseConfiguration,
+        bootstrap_read: File,
     ) -> io::Result<Child> {
+        require_wallet_bootstrap_read_descriptor(&bootstrap_read)?;
         database.revalidate()?;
         let anti_rollback_lock = acquire_anti_rollback_lock(&self.data_directory)
             .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
@@ -2460,7 +2590,8 @@ impl LaunchAdmittedWalletArtifact {
         self.revalidate_for_launch_while_locked(&anti_rollback_lock)
             .map_err(|reason| io::Error::new(io::ErrorKind::PermissionDenied, reason.code()))?;
         database.revalidate()?;
-        let mut child = spawn_sealed_linux_executable(sealed, database.database_path())?;
+        let mut child =
+            spawn_sealed_linux_executable(sealed, database.database_path(), bootstrap_read)?;
         if let Err(error) = database.revalidate() {
             terminate_wallet_child(&mut child);
             return Err(error);
@@ -3937,11 +4068,23 @@ fn sealed_executable_copy(
 }
 
 #[cfg(target_os = "linux")]
-fn spawn_sealed_linux_executable(sealed: File, database_path: &Path) -> io::Result<Child> {
+fn spawn_sealed_linux_executable(
+    sealed: File,
+    database_path: &Path,
+    bootstrap_read: File,
+) -> io::Result<Child> {
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
 
+    require_wallet_bootstrap_read_descriptor(&bootstrap_read)?;
+    // Command configures descriptors 0-2 for the private ABI and descriptor 3
+    // for the bootstrap packet. Keep both inherited backing descriptors above
+    // that complete reserved range before Command's child-side remapping.
+    let sealed = duplicate_file_at_or_above(sealed, FIRST_WALLET_CHILD_AUXILIARY_DESCRIPTOR)?;
+    let bootstrap_read =
+        duplicate_file_at_or_above(bootstrap_read, FIRST_WALLET_CHILD_AUXILIARY_DESCRIPTOR)?;
     let descriptor = sealed.as_raw_fd();
+    let bootstrap_descriptor = bootstrap_read.as_raw_fd();
     let executable = format!("/proc/self/fd/{descriptor}");
     let mut command = Command::new(executable);
     command
@@ -3953,21 +4096,76 @@ fn spawn_sealed_linux_executable(sealed: File, database_path: &Path) -> io::Resu
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     // `--database` and the retained configuration's exact absolute path are
-    // the complete child argument list; no service mode or caller input can
-    // append another operation here.
-    // SAFETY: the child hook performs only async-signal-safe fcntl calls. It
-    // clears close-on-exec on the inherited sealed memfd so the proc-fd path is
-    // resolvable by exec and the immutable image remains retained afterward.
+    // the complete child argument list. The opaque one-shot bootstrap enters
+    // only through fixed descriptor 3; standard input starts with the ABI-v2
+    // host hello, and no service mode or caller input can append an operation.
+    // SAFETY: the child hook performs only async-signal-safe dup2/fcntl calls.
+    // It clears close-on-exec on the sealed memfd and installs only the opaque
+    // pipe read end at the fixed child descriptor. The original pipe end keeps
+    // close-on-exec and disappears during exec when it differs from the target.
+    // Rust 1.92's Unix Command path builds stdio before its exec-error channel,
+    // performs the stdio dup2 calls before pre_exec, and cannot use posix_spawn
+    // when this callback is present. Consequently a low-FD stdin pipe may
+    // temporarily occupy descriptor 3, but its child end is already retained
+    // at descriptor 0 before this callback atomically replaces descriptor 3.
+    // The isolated low-FD regression below pins that ordering assumption.
     unsafe {
-        command.pre_exec(move || {
-            let flags = libc::fcntl(descriptor, libc::F_GETFD);
-            if flags < 0 || libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
+        command
+            .pre_exec(move || install_wallet_child_descriptors(descriptor, bootstrap_descriptor));
     }
     command.spawn()
+}
+
+#[cfg(target_os = "linux")]
+fn install_wallet_child_descriptors(
+    sealed_descriptor: RawFd,
+    bootstrap_descriptor: RawFd,
+) -> io::Result<()> {
+    // SAFETY: this helper is called after fork with live inherited
+    // descriptors. fcntl and dup2 are async-signal-safe and retain no pointer.
+    unsafe {
+        let sealed_flags = libc::fcntl(sealed_descriptor, libc::F_GETFD);
+        if sealed_flags < 0
+            || libc::fcntl(
+                sealed_descriptor,
+                libc::F_SETFD,
+                sealed_flags & !libc::FD_CLOEXEC,
+            ) < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        if bootstrap_descriptor != WALLET_BOOTSTRAP_DESCRIPTOR
+            && libc::dup2(bootstrap_descriptor, WALLET_BOOTSTRAP_DESCRIPTOR) < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let bootstrap_flags = libc::fcntl(WALLET_BOOTSTRAP_DESCRIPTOR, libc::F_GETFD);
+        if bootstrap_flags < 0
+            || libc::fcntl(
+                WALLET_BOOTSTRAP_DESCRIPTOR,
+                libc::F_SETFD,
+                bootstrap_flags & !libc::FD_CLOEXEC,
+            ) < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn duplicate_file_at_or_above(file: File, minimum: RawFd) -> io::Result<File> {
+    if file.as_raw_fd() >= minimum {
+        return Ok(file);
+    }
+    // SAFETY: fcntl duplicates the live descriptor and transfers no ownership
+    // until the successful raw descriptor is wrapped immediately below.
+    let duplicate = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, minimum) };
+    if duplicate < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: duplicate is a new owned descriptor returned by fcntl.
+    Ok(unsafe { File::from_raw_fd(duplicate) })
 }
 
 #[cfg(all(test, unix))]
@@ -3985,11 +4183,121 @@ mod tests {
     const TEST_KEY_ID: &str = "wallet-release-test";
     const TEST_RELEASE_LINE: &str = "wallet-service-stable";
     const TEST_ARTIFACT_NAME: &str = "hns-wallet-service";
+    #[cfg(target_os = "linux")]
+    const LOW_FD_SPAWN_HELPER_ENV: &str = "HNS_WALLET_LOW_FD_SPAWN_HELPER";
 
     struct InstalledRelease {
         manifest: WalletArtifactManifest,
         manifest_bytes: Vec<u8>,
         artifact_bytes: Vec<u8>,
+    }
+
+    #[cfg(target_os = "linux")]
+    struct OneShotWalletBootstrapSource {
+        lease: Option<WalletBootstrapLease>,
+        claimed_generations: Vec<u64>,
+    }
+
+    #[cfg(target_os = "linux")]
+    struct TemporarilyVacantDescriptor {
+        target: RawFd,
+        saved: Option<RawFd>,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl TemporarilyVacantDescriptor {
+        fn new(target: RawFd) -> Self {
+            // SAFETY: fcntl and close operate on descriptor values only. A
+            // successful duplicate is owned by the returned guard.
+            unsafe {
+                let flags = libc::fcntl(target, libc::F_GETFD);
+                let saved = if flags >= 0 {
+                    let duplicate = libc::fcntl(target, libc::F_DUPFD_CLOEXEC, 64);
+                    assert!(duplicate >= 0);
+                    assert_eq!(libc::close(target), 0);
+                    Some(duplicate)
+                } else {
+                    assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+                    None
+                };
+                assert_eq!(libc::fcntl(target, libc::F_GETFD), -1);
+                assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+                Self { target, saved }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for TemporarilyVacantDescriptor {
+        fn drop(&mut self) {
+            if let Some(saved) = self.saved.take() {
+                // SAFETY: saved is the live duplicate owned by this guard;
+                // dup2 restores target and close then releases the duplicate.
+                unsafe {
+                    assert_eq!(libc::dup2(saved, self.target), self.target);
+                    assert_eq!(libc::close(saved), 0);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    impl WalletBootstrapSource for OneShotWalletBootstrapSource {
+        fn take_lease(
+            &mut self,
+            restart_generation: u64,
+        ) -> io::Result<Option<WalletBootstrapLease>> {
+            self.claimed_generations.push(restart_generation);
+            Ok(self.lease.take())
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_wallet_bootstrap_pipe() -> (File, File) {
+        let mut descriptors = [-1; 2];
+        // SAFETY: pipe2 initializes both descriptors on success. Each is
+        // wrapped exactly once immediately below.
+        assert_eq!(
+            unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+        // SAFETY: successful pipe2 returned two newly owned descriptors.
+        unsafe {
+            (
+                File::from_raw_fd(descriptors[0]),
+                File::from_raw_fd(descriptors[1]),
+            )
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_wallet_bootstrap_source(
+        restart_generation: u64,
+        database: TrustedWalletDatabaseConfiguration,
+    ) -> (OneShotWalletBootstrapSource, File) {
+        let (bootstrap_read, bootstrap_write) = test_wallet_bootstrap_pipe();
+        let lease =
+            WalletBootstrapLease::new(restart_generation, database, bootstrap_read).unwrap();
+        (
+            OneShotWalletBootstrapSource {
+                lease: Some(lease),
+                claimed_generations: Vec::new(),
+            },
+            bootstrap_write,
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_pipe_has_no_readers(writer: &File) {
+        let mut descriptor = libc::pollfd {
+            fd: writer.as_raw_fd(),
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        // SAFETY: poll borrows one initialized pollfd for the duration of the
+        // call and retains no pointer.
+        assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 0) }, 1);
+        assert_ne!(descriptor.revents & libc::POLLERR, 0);
     }
 
     #[cfg(target_os = "linux")]
@@ -5403,6 +5711,344 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn wallet_read_lifecycle_requires_one_generation_bound_bootstrap_lease() {
+        let root = test_root("required-bootstrap-lease");
+        let wallet_root = test_root("required-bootstrap-lease-wallet");
+        fs::create_dir_all(&root).unwrap();
+        set_mode(&root, 0o700);
+        let mut discovery = WalletAbiDiscovery::discover(&root);
+        let (_, database) = install_test_wallet_database(&wallet_root);
+        let (mut source, bootstrap_write) = test_wallet_bootstrap_source(1, database);
+        let mut lifecycle = WalletReadSessionLifecycle::new();
+
+        assert_eq!(
+            lifecycle
+                .start(&mut discovery, &mut source, Duration::from_secs(1))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_pipe_has_no_readers(&bootstrap_write);
+        assert_eq!(
+            lifecycle
+                .start(&mut discovery, &mut source, Duration::from_secs(1))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert_eq!(source.claimed_generations, [1, 2]);
+        assert_eq!(lifecycle.next_restart_generation, 3);
+        assert!(lifecycle.active.is_none());
+
+        let mut unavailable = UnavailableWalletBootstrapSource;
+        assert!(unavailable.take_lease(3).unwrap().is_none());
+        cleanup(&root);
+        cleanup(&wallet_root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_bootstrap_lease_rejects_zero_stale_and_future_restart_generations() {
+        let root = test_root("generation-bound-bootstrap-lease");
+        let wallet_root = test_root("generation-bound-bootstrap-lease-wallet");
+        fs::create_dir_all(&root).unwrap();
+        set_mode(&root, 0o700);
+        let mut discovery = WalletAbiDiscovery::discover(&root);
+        let (database_path, database) = install_test_wallet_database(&wallet_root);
+        let (bootstrap_read, bootstrap_write) = test_wallet_bootstrap_pipe();
+        assert_eq!(
+            WalletBootstrapLease::new(0, database, bootstrap_read)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_pipe_has_no_readers(&bootstrap_write);
+
+        for lease_generation in [1, 3] {
+            let database = TrustedWalletDatabaseConfiguration::open(&database_path).unwrap();
+            let (bootstrap_read, bootstrap_write) = test_wallet_bootstrap_pipe();
+            let lease =
+                WalletBootstrapLease::new(lease_generation, database, bootstrap_read).unwrap();
+            let error = discovery
+                .compose_admitted_read_session(lease, 2, Duration::from_secs(1))
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                error.to_string(),
+                "wallet bootstrap lease restart generation mismatch"
+            );
+            assert_pipe_has_no_readers(&bootstrap_write);
+        }
+
+        cleanup(&root);
+        cleanup(&wallet_root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wallet_bootstrap_lease_is_opaque_and_requires_a_private_pipe_read_end() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let wallet_root = test_root("opaque-bootstrap-lease");
+        let (database_path, database) = install_test_wallet_database(&wallet_root);
+        let (bootstrap_read, mut bootstrap_write) = test_wallet_bootstrap_pipe();
+        let secret = "bootstrap-secret-must-not-appear";
+        bootstrap_write.write_all(secret.as_bytes()).unwrap();
+        let lease = WalletBootstrapLease::new(7, database, bootstrap_read).unwrap();
+        let debug = format!("{lease:?}");
+        assert!(!debug.contains(secret));
+        assert!(!debug.contains(database_path.to_str().unwrap()));
+        assert!(!debug.contains("fd:"));
+        assert!(!debug.contains("7"));
+        assert!(debug.contains("<bound>"));
+        assert!(debug.contains("<retained identity>"));
+        assert!(debug.contains("<opaque single-use descriptor>"));
+        drop(lease);
+        assert_pipe_has_no_readers(&bootstrap_write);
+
+        let regular = File::open(&database_path).unwrap();
+        assert_eq!(
+            require_wallet_bootstrap_read_descriptor(&regular)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let (read, write) = test_wallet_bootstrap_pipe();
+        assert_eq!(
+            require_wallet_bootstrap_read_descriptor(&write)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let descriptor = read.as_raw_fd();
+        // SAFETY: fcntl mutates only the live test descriptor's close-on-exec
+        // flag and retains no pointer.
+        assert_eq!(unsafe { libc::fcntl(descriptor, libc::F_SETFD, 0) }, 0);
+        assert_eq!(
+            require_wallet_bootstrap_read_descriptor(&read)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            fs::metadata(&database_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        cleanup(&wallet_root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reserved_child_descriptor_collision_is_duplicated_close_on_exec() {
+        use std::os::unix::fs::MetadataExt;
+
+        let (read, _write) = test_wallet_bootstrap_pipe();
+        let reserved = read.as_raw_fd();
+        let expected = read.metadata().unwrap();
+        let duplicated = duplicate_file_at_or_above(read, reserved + 1).unwrap();
+        assert!(duplicated.as_raw_fd() > reserved);
+        let actual = duplicated.metadata().unwrap();
+        assert_eq!(
+            (actual.dev(), actual.ino()),
+            (expected.dev(), expected.ino())
+        );
+        // SAFETY: fcntl inspects the live duplicate and retains no pointer.
+        let flags = unsafe { libc::fcntl(duplicated.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn child_mapping_inherits_only_fixed_bootstrap_fd_and_keeps_stdin_separate() {
+        use std::os::unix::fs::MetadataExt;
+
+        let sealed = duplicate_file_at_or_above(
+            File::open("/bin/true").unwrap(),
+            FIRST_WALLET_CHILD_AUXILIARY_DESCRIPTOR,
+        )
+        .unwrap();
+        let (bootstrap_read, mut bootstrap_write) = test_wallet_bootstrap_pipe();
+        let bootstrap_read =
+            duplicate_file_at_or_above(bootstrap_read, FIRST_WALLET_CHILD_AUXILIARY_DESCRIPTOR)
+                .unwrap();
+        let expected_bootstrap = bootstrap_read.metadata().unwrap();
+        bootstrap_write
+            .write_all(b"opaque-wallet-bootstrap")
+            .unwrap();
+        let (abi_stdin_read, _abi_stdin_write) = test_wallet_bootstrap_pipe();
+        let (result_read, result_write) = test_wallet_bootstrap_pipe();
+        let sealed_descriptor = sealed.as_raw_fd();
+        let original_bootstrap_descriptor = bootstrap_read.as_raw_fd();
+        let abi_stdin_descriptor = abi_stdin_read.as_raw_fd();
+        let expected_device = expected_bootstrap.dev();
+        let expected_inode = expected_bootstrap.ino();
+
+        // SAFETY: after fork, the child executes only async-signal-safe libc
+        // calls before _exit. It does not touch allocator or lock state.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0);
+        if child == 0 {
+            // SAFETY: the forked child performs only async-signal-safe libc
+            // calls, uses valid inherited descriptors, and exits without
+            // unwinding or touching allocator-backed state.
+            unsafe {
+                let mut success = libc::dup2(abi_stdin_descriptor, 0) == 0;
+                success &= install_wallet_child_descriptors(
+                    sealed_descriptor,
+                    original_bootstrap_descriptor,
+                )
+                .is_ok();
+                let mut fixed = std::mem::MaybeUninit::<libc::stat>::uninit();
+                let mut stdin = std::mem::MaybeUninit::<libc::stat>::uninit();
+                success &= libc::fstat(WALLET_BOOTSTRAP_DESCRIPTOR, fixed.as_mut_ptr()) == 0;
+                success &= libc::fstat(0, stdin.as_mut_ptr()) == 0;
+                if success {
+                    let fixed = fixed.assume_init();
+                    let stdin = stdin.assume_init();
+                    success &= (fixed.st_dev, fixed.st_ino) == (expected_device, expected_inode);
+                    success &= (stdin.st_dev, stdin.st_ino) != (expected_device, expected_inode);
+                    let fixed_flags = libc::fcntl(WALLET_BOOTSTRAP_DESCRIPTOR, libc::F_GETFD);
+                    let sealed_flags = libc::fcntl(sealed_descriptor, libc::F_GETFD);
+                    success &= fixed_flags >= 0 && fixed_flags & libc::FD_CLOEXEC == 0;
+                    success &= sealed_flags >= 0 && sealed_flags & libc::FD_CLOEXEC == 0;
+                    if original_bootstrap_descriptor != WALLET_BOOTSTRAP_DESCRIPTOR {
+                        let original_flags =
+                            libc::fcntl(original_bootstrap_descriptor, libc::F_GETFD);
+                        success &= original_flags >= 0 && original_flags & libc::FD_CLOEXEC != 0;
+                    }
+                }
+                let result = u8::from(success);
+                let _ = libc::write(result_write.as_raw_fd(), (&result as *const u8).cast(), 1);
+                libc::_exit(i32::from(!success));
+            }
+        }
+
+        drop(result_write);
+        drop(bootstrap_read);
+        let mut result_read = result_read;
+        let mut result = [0_u8; 1];
+        result_read.read_exact(&mut result).unwrap();
+        let mut status = 0;
+        // SAFETY: child is the live PID returned by fork and status points to
+        // one initialized integer for the duration of waitpid.
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+        assert_eq!(result, [1]);
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+        assert_pipe_has_no_readers(&bootstrap_write);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn low_fd_command_spawn_preserves_stdio_and_fixed_bootstrap_descriptor() {
+        const EXACT_TEST_NAME: &str = "wallet_abi::tests::low_fd_command_spawn_preserves_stdio_and_fixed_bootstrap_descriptor";
+
+        if std::env::var_os(LOW_FD_SPAWN_HELPER_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .env(LOW_FD_SPAWN_HELPER_ENV, "1")
+                .args([
+                    "--exact",
+                    EXACT_TEST_NAME,
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated low-FD helper failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let root = test_root("low-fd-wallet-bootstrap-spawn");
+        fs::create_dir_all(&root).unwrap();
+        let executable_path = root.join("wallet-bootstrap-fd-fixture");
+        let database_path = root.join("wallet.sqlite3");
+        fs::write(
+            &executable_path,
+            b"#!/bin/sh\n\
+              [ \"$#\" -eq 2 ] || exit 91\n\
+              [ \"$1\" = \"--database\" ] || exit 92\n\
+              [ \"${HNS_WALLET_LOW_FD_SPAWN_HELPER+x}\" != x ] || exit 93\n\
+              IFS= read -r bootstrap <&3 || exit 94\n\
+              IFS= read -r abi <&0 || exit 95\n\
+              printf '%s\\n%s\\n%s\\n' \"$2\" \"$bootstrap\" \"$abi\"\n",
+        )
+        .unwrap();
+        set_mode(&executable_path, 0o500);
+
+        // Run this branch only in the isolated re-exec above. Making FD 3
+        // vacant forces Rust Command's first stdin-pipe end into that slot.
+        // Rust duplicates it to FD 0 before invoking our pre_exec callback,
+        // which then replaces FD 3 with the opaque bootstrap pipe.
+        let vacant = TemporarilyVacantDescriptor::new(WALLET_BOOTSTRAP_DESCRIPTOR);
+        let sealed = File::open(&executable_path).unwrap();
+        assert_eq!(sealed.as_raw_fd(), WALLET_BOOTSTRAP_DESCRIPTOR);
+        let (bootstrap_read, mut bootstrap_write) = test_wallet_bootstrap_pipe();
+        bootstrap_write.write_all(b"opaque-bootstrap\n").unwrap();
+        drop(bootstrap_write);
+
+        let mut child =
+            spawn_sealed_linux_executable(sealed, &database_path, bootstrap_read).unwrap();
+        drop(vacant);
+        let mut child_stdin = child.stdin.take().unwrap();
+        child_stdin.write_all(b"abi-stdin\n").unwrap();
+        drop(child_stdin);
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{}\nopaque-bootstrap\nabi-stdin\n", database_path.display())
+        );
+        cleanup(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn failed_spawn_closes_the_consumed_bootstrap_read_end() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = test_root("failed-wallet-bootstrap-exec");
+        fs::create_dir_all(&root).unwrap();
+        let non_executable = root.join("not-an-executable");
+        fs::write(&non_executable, b"not an executable image").unwrap();
+        set_mode(&non_executable, 0o600);
+        let sealed = File::open(&non_executable).unwrap();
+        let (bootstrap_read, bootstrap_write) = test_wallet_bootstrap_pipe();
+        assert_eq!(
+            spawn_sealed_linux_executable(
+                sealed,
+                Path::new("/tmp/wallet-bootstrap.sqlite3"),
+                bootstrap_read,
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_pipe_has_no_readers(&bootstrap_write);
+
+        let sealed = File::open("/bin/true").unwrap();
+        let (bootstrap_read, bootstrap_write) = test_wallet_bootstrap_pipe();
+        let invalid_path = PathBuf::from(OsString::from_vec(
+            b"/tmp/wallet-bootstrap\0invalid.sqlite3".to_vec(),
+        ));
+        assert_eq!(
+            spawn_sealed_linux_executable(sealed, &invalid_path, bootstrap_read)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_pipe_has_no_readers(&bootstrap_write);
+        cleanup(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn read_session_capability_ceiling_is_closed_and_requires_wallet_reads() {
         let admitted = SERVICE_CAPABILITIES
             .iter()
@@ -5495,10 +6141,15 @@ mod tests {
             verifier_configuration(&signer, &release, 1, true, true),
         );
         let (_, database) = install_test_wallet_database(&wallet_root);
+        let (mut bootstrap_source, _bootstrap_write) = test_wallet_bootstrap_source(1, database);
         let mut lifecycle = WalletReadSessionLifecycle::new();
 
         let error = lifecycle
-            .start(&mut discovery, database, Duration::from_secs(1))
+            .start(
+                &mut discovery,
+                &mut bootstrap_source,
+                Duration::from_secs(1),
+            )
             .unwrap_err();
         // The intentionally incompatible /bin/echo fixture may either exit
         // before the hello write or return its non-ABI argv bytes first.
@@ -5509,6 +6160,7 @@ mod tests {
         ));
         assert!(lifecycle.active.is_none());
         assert_eq!(lifecycle.next_restart_generation, 2);
+        assert_eq!(bootstrap_source.claimed_generations, [1]);
         assert!(!lifecycle.provider_available());
         assert!(!lifecycle.value_available());
         cleanup(&root);
@@ -6069,7 +6721,10 @@ mod tests {
             WalletArtifactState::LaunchAdmitted(artifact) => artifact,
             state => panic!("expected launch admission, got {state:?}"),
         };
-        let error = artifact.launch_for_database(&database).unwrap_err();
+        let (bootstrap_read, _bootstrap_write) = test_wallet_bootstrap_pipe();
+        let error = artifact
+            .launch_for_database(&database, bootstrap_read)
+            .unwrap_err();
         assert_eq!(error.to_string(), "walletArtifactPathBindingChanged");
         cleanup(&root);
         cleanup(&wallet_root);
@@ -6096,7 +6751,10 @@ mod tests {
             WalletArtifactState::LaunchAdmitted(artifact) => artifact,
             state => panic!("expected launch admission, got {state:?}"),
         };
-        let error = artifact.launch_for_database(&database).unwrap_err();
+        let (bootstrap_read, _bootstrap_write) = test_wallet_bootstrap_pipe();
+        let error = artifact
+            .launch_for_database(&database, bootstrap_read)
+            .unwrap_err();
         assert_eq!(error.to_string(), "walletArtifactPathBindingChanged");
         cleanup(&root);
         cleanup(&detached_root);
@@ -6122,7 +6780,10 @@ mod tests {
             WalletArtifactState::LaunchAdmitted(artifact) => artifact,
             state => panic!("expected launch admission, got {state:?}"),
         };
-        let mut child = artifact.launch_for_database(&database).unwrap();
+        let (bootstrap_read, _bootstrap_write) = test_wallet_bootstrap_pipe();
+        let mut child = artifact
+            .launch_for_database(&database, bootstrap_read)
+            .unwrap();
         assert!(child.wait().unwrap().success());
         cleanup(&root);
         cleanup(&wallet_root);
@@ -6145,9 +6806,10 @@ mod tests {
             WalletArtifactState::LaunchAdmitted(artifact) => artifact,
             state => panic!("expected launch admission, got {state:?}"),
         };
+        let (bootstrap_read, _bootstrap_write) = test_wallet_bootstrap_pipe();
 
         let output = artifact
-            .launch_for_database(&database)
+            .launch_for_database(&database, bootstrap_read)
             .unwrap()
             .wait_with_output()
             .unwrap();

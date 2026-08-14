@@ -52,9 +52,13 @@ explicit typed absolute-path configuration; it performs no search, persists no
 path, and exposes no extension command. It retains and revalidates private
 path/inode identity and supplies that exact path only to the admitted child as
 `--database <path>`, then requires the resulting child to retain that same
-database inode. The current production verifier has no wallet trust root,
-release pin, or floor, so no production controller constructs the configuration
-or launches a wallet artifact, and it exports no wallet result.
+database inode. Each dormant launch also consumes a private opaque bootstrap
+pipe without reading, parsing, logging, or exposing its packet; the fixed child
+descriptor is separate from ABI-only stdin/stdout. This is single-use launch
+authorization, not an ongoing revocation or database-exclusivity lease. The
+current production verifier has no wallet trust root, release pin, floor, or
+available bootstrap source, so no production controller constructs the
+configuration or launches a wallet artifact, and it exports no wallet result.
 
 The browser-owned anti-rollback record contains only release line/sequence/ID,
 signer ID, and manifest/artifact digests; it contains no wallet state or secret.

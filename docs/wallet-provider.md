@@ -206,20 +206,29 @@ The additive private `hnsReadOperationsV1` capability freezes exactly those
 six operations; it does not include a workflow-status operation.
 
 The dormant Linux native API composes admitted launch and negotiation only for
-one explicitly configured, pre-existing wallet database. Its typed
-configuration retains an absolute canonical path plus owner-private parent/file
-handles, rejects symlinks, aliases, shared permissions, empty files and hard
-links, and revalidates path-to-inode identity before launch, after spawn and
-hello, and around each request. The sealed executable receives only
-`--database <exact-configured-path>`. After hello and around nonpoisoning reads,
-the host also requires the live child's descriptor table to contain the
-retained database inode, rejecting a pathname replace/restore launch race. The
-manifest-derived read-session ceiling requires both `walletOperations` and
-`hnsReadOperationsV1` plus the five ABI foundations, tolerates only the
-persistent-permission/provider-dispatch scaffolding of the standalone service,
-and excludes value and browser-integration capabilities. The runtime hello and
-every request require both operation markers. The request type has no
-corresponding workflow, provider, approval, unlock, lock, or mutation operation.
+one explicitly configured, pre-existing wallet database. Every restart
+generation must first consume one private `WalletBootstrapLease` from its
+source. That launch-authorization type owns the retained database configuration
+and one opaque, read-only, close-on-exec pipe end. The browser neither reads nor
+parses the packet. Linux launch installs a collision-safe copy only at child
+descriptor 3, keeps the original close-on-exec, and moves the sealed executable
+descriptor if necessary. Standard input and output remain exclusively ABI-v2
+framing, the child argv remains exactly
+`--database <exact-configured-path>`, and the environment remains empty.
+
+The typed database configuration retains an absolute canonical path plus
+owner-private parent/file handles, rejects symlinks, aliases, shared
+permissions, empty files and hard links, and revalidates path-to-inode identity
+before launch, after spawn and hello, and around each request. After hello and
+around nonpoisoning reads, the host also requires the live child's descriptor
+table to contain the retained database inode, rejecting a pathname
+replace/restore launch race. The manifest-derived read-session ceiling requires
+both `walletOperations` and `hnsReadOperationsV1` plus the five ABI foundations,
+tolerates only the persistent-permission/provider-dispatch scaffolding of the
+standalone service, and excludes value and browser-integration capabilities.
+The runtime hello and every request require both operation markers. The request
+type has no corresponding workflow, provider, approval, unlock, lock, or
+mutation operation.
 
 The checked-in wallet-service executable does not advertise
 `hnsReadOperationsV1` and therefore cannot enter a browser read session: it
@@ -239,8 +248,16 @@ session. A poisoned read removes its killed/reaped generation instead of
 leaving an unusable active slot. Even a negotiated provider-scaffolding
 capability cannot make a browser product gate true. No `NativeRequest`,
 service-worker message, popup, or page path constructs this configuration or
-session, and no production path invokes it while verifier-owned trust,
-qualification, and floor tables remain empty.
+session. The production bootstrap source is deliberately unavailable, and no
+production path invokes it while verifier-owned trust, qualification, and floor
+tables remain empty.
+
+This first `WalletBootstrapLease` is single-use launch authorization only. Its
+consumption and descriptor lifetime do not provide ongoing broker revocation,
+wallet-database exclusivity, migration exclusion, or an independently renewable
+database lease. Those controls require a later wallet-owned protocol and
+lifecycle design; the immediate-child inode checks retain their narrower
+detection-only meaning.
 
 The descriptor check is bounded to the immediate child's base database inode.
 It detects a wrong open after hello but cannot undo an earlier open/migration,

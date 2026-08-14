@@ -271,9 +271,22 @@ rehashes while copying to a sealed memfd, and executes only that sealed
 descriptor with an empty environment and private pipes. macOS and Windows
 launch remain unavailable until reviewed platform equivalents exist. The
 private Linux source can call this launcher only through its exact-database
-read-session composition; `NativeHostController` does not construct that
-session. Public projection and opaque engine authority remain unreleased, so
-overall provider availability and value movement remain false.
+read-session composition, and each restart generation must consume one
+`WalletBootstrapLease`. The lease joins the retained database identity to an
+opaque read-only close-on-exec pipe; the browser does not parse its packet.
+Launch maps it collision-safely to fixed child descriptor 3 while leaving
+stdin/stdout exclusively for ABI-v2 frames, argv exactly
+`--database <path>`, and the environment empty. Failure consumes the lease and
+closes the pipe end. `NativeHostController` does not construct that session and
+the production source returns no lease. Public projection and opaque engine
+authority remain unreleased, so overall provider availability and value
+movement remain false.
+
+This single-use lease authorizes one launch attempt; it is not an ongoing
+revocation channel, a wallet-database exclusivity lock, or proof that no other
+process or descendant retains the database. Those remain separate future
+broker/wallet responsibilities.
+
 Every launch reparses the retained signed manifest bytes and rechecks
 publication, not-before, and expiry against a fresh wall-clock sample before
 and after path/state work; expiry or clock rollback fails closed.
@@ -396,6 +409,7 @@ qnames, qtypes, request timing, and source IP.
 | Artifact supplies a key or relies on a matching hash | Ignore artifact-supplied trust; require verifier-owned release-line Ed25519 root, exact qualified manifest/artifact pin, and compiled minimum sequence |
 | Local path, symlink, or directory replacement substitutes a wallet artifact | Relative no-follow retained handles, parent-to-child inode rebinding, immutable single-link files, bounded same-handle hashes, and Linux execution only from a freshly rehashed sealed memfd |
 | Configured wallet path is aliased, replaced, shared, or redirected between admission and a read | Accept one explicit canonical absolute path only; walk ancestors no-follow; retain owner-private parent/database handles; rebind device/inode/owner/mode/link identity around launch, negotiation, and every read; after hello, boundedly attest that the immediate child holds the retained base inode; poison, kill, wait, and remove the generation on change. This detects but cannot prevent a pre-hello wrong-inode open/migration, does not attest SQLite sidecars or exclusive use, and assumes same-UID state tampering is outside the isolation boundary |
+| A restart launches without fresh wallet bootstrap authority or replays one | Require a generation-bound, single-use `WalletBootstrapLease`; consume it before discovery/launch; accept only an opaque read-only close-on-exec FIFO; map it collision-safely to child descriptor 3 while preserving ABI-only stdin/stdout; keep the production source unavailable. This authorizes one launch attempt only and is not ongoing revocation or database exclusivity. |
 | Artifact-directory replacement or restart attempts a wallet downgrade | Keep canonical per-release-line high-water state under the stable parent data directory; require strict sequence increase and predecessor-manifest linkage, with compiled floor/pin as the non-owner-state authority |
 | Concurrent wallet admissions regress a sequence or lose another release line | Serialize the complete state transaction with one stable-parent interprocess lock; retain it through launch state/time/path checks, sealed copy, and spawn |
 | Cached admission launches after expiry or local clock rollback | Reparse retained signed manifest bytes and re-evaluate publication/not-before/expiry at every launch |
