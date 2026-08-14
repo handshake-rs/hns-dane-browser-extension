@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require registry inputs or the exact reviewed HNS source revisions."""
+"""Require registry inputs or the exact reviewed browser-engine revision."""
 
 from __future__ import annotations
 
@@ -24,8 +24,6 @@ ENGINE_REQUIREMENTS = {
 }
 ENGINE_GIT_URL = "https://github.com/handshake-rs/hns-dane-engine.git"
 ENGINE_REVISION = "65c397e8347f37085ea67d2c9c745ce896328e64"
-HNS_RS_GIT_URL = "https://github.com/handshake-rs/hns-rs.git"
-HNS_RS_REVISION = "b24b66c382de53330ec21dd3137e056a2bea3e2d"
 APPROVED_ENGINE_GIT = {
     package: ("0.2.1", ENGINE_REVISION)
     for package in {
@@ -58,26 +56,11 @@ APPROVED_ENGINE_GIT = {
         "hns-icann-dane",
         "hns-namespace-resolution",
         "hns-resolution-policy",
-        "hns-light-chain",
-    }
-}
-APPROVED_HNS_RS_GIT = {
-    package: ("0.2.0", HNS_RS_REVISION)
-    for package in {
-        "hns-covenants",
-        "hns-encoding",
-        "hns-header-consensus",
-        "hns-primitives",
-        "hns-service-authority",
-        "hns-urkel-proof",
     }
 }
 APPROVED_CARGO_GIT = {
     package: (version, ENGINE_GIT_URL, revision)
     for package, (version, revision) in APPROVED_ENGINE_GIT.items()
-} | {
-    package: (version, HNS_RS_GIT_URL, revision)
-    for package, (version, revision) in APPROVED_HNS_RS_GIT.items()
 }
 CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 ENGINE_PACKAGES = frozenset(ENGINE_VERSIONS)
@@ -266,7 +249,7 @@ def main() -> int:
         return 1
     print(
         "Cargo source policy permits registry inputs plus the exact reviewed "
-        "hns-dane-engine and hns-rs revisions and pins the canonical packages."
+        "hns-dane-engine revision and pins the canonical packages."
     )
     return 0
 

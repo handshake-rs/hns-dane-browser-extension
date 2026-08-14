@@ -67,8 +67,10 @@ test("native host exchanges bounded framed schema and monotonic events", () => {
     assert.equal(responses[0].result.capabilities.meshminePoolStatsVerifierCore, true);
     assert.equal(
       responses[0].result.capabilities.meshminePoolStatsVerifierSchemaVersion,
-      1
+      2
     );
+    assert.equal(responses[0].result.capabilities.meshmineHrmAuthorityAdapter, false);
+    assert.equal(responses[0].result.capabilities.meshmineLegacyHsa1Accepted, false);
     assert.equal(responses[0].result.capabilities.meshmineVerifiedPoolStats, false);
     assert.equal(responses[0].result.capabilities.handshakeWalletProvider, false);
     assert.equal(responses[0].result.walletAbi.available, false);

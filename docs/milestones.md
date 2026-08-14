@@ -56,26 +56,26 @@ change.
 
 ### MeshMine public-feed verifier core
 
-- `hns-meshmine-pool-stats` implements the private `0xff00` read-only profile
-  over the canonical non-forgeable `VerifiedHnsResource` and exact
-  `hns-service-authority` types.
-- The independently supplied HNS name and configured network, current
-  single-string `hsa1` authority, name hash, current height/time, zero flags, zero detached
-  constraints, exact read-statistics capability, authorization ID, delegation
-  ID, endpoint sequence, endpoint key, snapshot signature, and lifetime are
-  all bound before a minimized value exists.
-- Its bounded canonical state retains authorization, delegation, global
-  per-operator snapshot, resource/policy generation, trusted-time, and
-  terminal conflict/capacity history. The public
-  entry returns a verified value only after a caller-provided atomic
-  compare-generation commit accepts every mutation, including mutations made
-  on a failing verification.
-- This is an enabling core, not product availability. The existing Chromium
-  proof/cache authority cannot manufacture the required private
-  `VerifiedHnsResource`, and no authenticated rollback-resistant native store
-  or message/UI join exists. Native capabilities keep
-  `meshmineVerifiedPoolStats` false, JavaScript remains display-only, and HNSR
-  stays disabled.
+- `hns-meshmine-pool-stats` implements schema 2 of the private `0xff00`
+  read-only profile over an opaque current HRM/HNSA named-service authority.
+  The authority has no public constructor until a sole trusted broker can
+  validate and durably settle the complete current HRM aggregate.
+- The core binds exact network/name/profile, HRM root and current revision,
+  service resource/delegation IDs and generation, service key and constraints,
+  one trusted operation time and lease generation, a canonical low-S
+  service-signed endpoint delegation, independent route ID, endpoint ID and
+  sequence, and a canonical low-S endpoint-signed snapshot and lifetime.
+- Its bounded profile-local state retains endpoint and global per-operator
+  replacement history plus trusted-time and current-authority observations.
+  It returns a minimized value only after a caller-provided compare-generation
+  commit accepts every mutation. That checksum is corruption detection, not a
+  substitute for the broker's authenticated aggregate, rollback floor,
+  pending-transition retry, or fenced lease.
+- The superseded `hsa1`/fixed service-authorization code and `hns-rs`
+  dependency are removed. Native capabilities report schema 2 while keeping
+  the HRM adapter and verified-feed capabilities false and explicitly
+  reporting that legacy `hsa1` is not accepted. JavaScript remains
+  display-only, and HNSR stays disabled.
 
 ### Desktop Setup and signed macOS distribution
 
@@ -232,23 +232,24 @@ separate explicit field, validates and hashes it before network I/O, and never
 derives an endpoint from the active tab. That local selection is not yet a
 native authority input and does not authenticate a feed.
 
-Join the existing Chromium proof/sync runtime to the verifier without
-fabricating `hns-light-chain::VerifiedHnsResource`. This requires either one
-canonical proof authority shared by browsing and HNSA or a new engine-reviewed
-adapter that preserves the private chainwork, current-anchor, exact-name, and
-resource guarantees. The product must bind the independently selected name to
-that native authority, add a serialized atomic and authenticated
-rollback-resistant state store for the verifier's canonical blob, and expose
-one native request that returns only the minimized committed snapshot. The
-configured HTTP endpoint and proof objects served by it remain untrusted
-transport input, never identity or state authority.
+Join the existing Chromium proof/sync runtime to one subject-wide HRM/HNSA
+broker without fabricating current authority. The broker must validate the
+authenticated `hrm1` selection, deterministic envelope, controller signature,
+complete snapshot, exact named-service resource/delegation and generation,
+withdrawal/reorganization rules, and trusted time; atomically persist its
+authenticated aggregate with an initialized marker and external revision
+floor; and hold a fenced namespace lease through dependent use. Only that
+broker may gain an internal constructor for the opaque verifier authority.
+The configured HTTP endpoint and objects it serves remain untrusted transport
+input, never identity or state authority.
 
-Installed-browser qualification must cover valid admission, malformed and
-expired objects, identity mismatch, clock rollback, serial/sequence rollback,
-sticky equal-sequence conflict across native-host restart, commit failure, and
-authority rotation under a greater resource generation. Until that adapter,
-store, request, UI, and qualification land, `meshmineVerifiedPoolStats` remains
-false and the popup remains unverified.
+Installed-browser qualification must cover HRM replacement, withdrawal and
+accepted reorganization, malformed/noncanonical objects, every identity,
+network, profile, route, endpoint and generation mismatch, clock/sequence
+rollback, equal-sequence conflict across restart, ambiguous commit retry,
+lease loss, authority rotation, and expiry. Until that broker, store, request,
+UI, profile review, and qualification land, `meshmineHrmAuthorityAdapter` and
+`meshmineVerifiedPoolStats` remain false and the popup remains unverified.
 
 Retain only the browser-specific listener, native-messaging, CA/TLS, lifecycle,
 installer, and approval UI here. The first wallet product slice remains

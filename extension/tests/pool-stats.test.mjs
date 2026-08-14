@@ -43,14 +43,27 @@ test("pool statistics parser rejects trailing and oversized inputs", () => {
   assert.throws(() => parsePoolStatsDocument(trailing), /Trailing/);
 
   const oversized = documentFixture();
-  oversized.service_authorization = "aa".repeat(1025);
-  assert.throws(() => parsePoolStatsDocument(oversized), /service authorization/);
+  oversized.endpoint_delegation = "aa".repeat(321);
+  assert.throws(() => parsePoolStatsDocument(oversized), /endpoint delegation/);
 
   const zeroEndpointSequence = documentFixture();
   const bytes = Buffer.from(zeroEndpointSequence.snapshot, "hex");
-  bytes.fill(0, 71, 79);
+  bytes.fill(0, 111, 119);
   zeroEndpointSequence.snapshot = bytes.toString("hex");
   assert.throws(() => parsePoolStatsDocument(zeroEndpointSequence), /snapshot fields/);
+});
+
+test("pool statistics parser rejects the superseded hsa1 document model", () => {
+  const legacy = documentFixture();
+  legacy.schema = "meshmine-pool-stats-v1";
+  legacy.profile_id = legacy.application_profile_id;
+  legacy.service_authorization = "aa";
+  delete legacy.application_profile_id;
+  assert.throws(() => parsePoolStatsDocument(legacy), /Unsupported/);
+
+  const mixed = documentFixture();
+  mixed.service_authorization = "aa";
+  assert.throws(() => parsePoolStatsDocument(mixed), /Unsupported/);
 });
 
 test("pool endpoint normalization strips paths and rejects credentials", () => {
@@ -102,18 +115,21 @@ function documentFixture() {
     }
   };
   const fixed = (value, length) => parts.push(...new Array(length).fill(value));
-  u8(1);
+  u8(2);
   little(0x5b6ef2d3, 4);
   little(0xff00, 2);
   fixed(1, 32);
   fixed(2, 32);
+  little(3, 8);
+  fixed(3, 32);
   little(1, 8);
+  fixed(4, 32);
   little(9, 8);
   little(1_700_000_000, 8);
   little(1_700_000_060, 8);
-  fixed(3, 32);
+  fixed(5, 32);
   little(100, 4);
-  fixed(4, 32);
+  fixed(6, 32);
   little(2, 4);
   little(3, 4);
   little(5, 8);
@@ -125,10 +141,9 @@ function documentFixture() {
   u8(1);
   u8(0x30);
   return {
-    schema: "meshmine-pool-stats-v1",
+    schema: "meshmine-pool-stats-hrm-v1",
     service_name: "pool-stats",
-    profile_id: 0xff00,
-    service_authorization: "aa",
+    application_profile_id: 0xff00,
     endpoint_delegation: "bb",
     snapshot: Buffer.from(parts).toString("hex")
   };

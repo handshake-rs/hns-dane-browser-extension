@@ -13,10 +13,12 @@ or release gate has passed.
   https://github.com/handshake-rs/hns-dane-engine
 - Engine source used here:
   exact Git revision recorded in `rust/Cargo.toml`
-- Canonical HNSA authority types:
-  https://github.com/handshake-rs/hns-rs
-- HNSA authority source used here:
-  exact Git revision recorded in `rust/Cargo.toml`
+- HRM/HNSA drafts used for the dormant profile boundary:
+  `references/HIPs/HIP-xxxx-HRM.md` and
+  `references/HIPs/HIP-xxxx-HNSA.md` in the ecosystem workspace
+- Canonical HRM/HNSA Rust publication:
+  not yet consumed; the local opaque adapter remains unavailable until exact
+  released types and vectors are reviewed
 - MeshMine public pool-statistics profile:
   https://github.com/handshake-rs/MeshMine/blob/main/specs/pool-stats-profile.md
 - Handshake full node:

@@ -15,7 +15,7 @@ upstream release.
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
 | Consolidated engine source | Git `65c397e8347f37085ea67d2c9c745ce896328e64`, version `0.2.1` |
-| HNSA authority source | `hns-rs` Git `b24b66c382de53330ec21dd3137e056a2bea3e2d`, version `0.2.0` |
+| MeshMine HNSA profile core | Local dormant schema 2; no production HRM authority adapter |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
 | rcgen | `0.14.8` |
@@ -39,15 +39,15 @@ adapters from the one exact, final dated engine Git revision shown above:
 - `hns-resolution-policy`.
 
 The committed Cargo lock, source-policy verifier, notice generator, cargo-deny
-policy, and CI gates must change together for an intentional engine or HNSA
-authority upgrade. The native MeshMine verifier core is source-complete for
-the private read-only profile, but the product has no compatible Chromium
-`VerifiedHnsResource` adapter, authenticated rollback-resistant store, native
-request/UI join, or exact-artifact installed-browser qualification. Verified
-HNSA feed display therefore remains unavailable. HNSR transport, discovery,
-and persistence remain explicitly disabled. Version alignment and exact Git
-pins prepare a candidate; they do not publish it or satisfy those product
-gates.
+policy, and CI gates must change together for an intentional engine upgrade or
+future canonical HRM/HNSA dependency. The native MeshMine profile core mirrors
+the current drafts, but its authority type is deliberately unconstructible by
+product callers. The product has no complete current-HRM validator, sole
+authority broker, authenticated aggregate store and external floor, fenced
+lease, native request/UI join, published-vector reconciliation, or
+exact-artifact installed-browser qualification. Verified HNSA feed display
+therefore remains unavailable. HNSR transport, discovery, and persistence
+remain explicitly disabled.
 
 ## Moving-source review
 

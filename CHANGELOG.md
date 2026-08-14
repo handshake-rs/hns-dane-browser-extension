@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Replace the dormant MeshMine verifier's superseded `hsa1` and fixed
+  `ServiceAuthorizationV1` model with an HRM-backed HNSA schema-2 core. Its
+  opaque current-authority input binds the exact subject, network, HRM root and
+  revision, service resource/delegation IDs and generation, controller policy,
+  trusted operation time, and broker lease generation. The profile verifier
+  then canonically parses and verifies the service-signed endpoint delegation
+  and endpoint-signed record, including exact application profile, route,
+  endpoint ID/sequence, capabilities, constraints, generation, and expiry.
+- Add explicit native capabilities reporting that no HRM authority adapter is
+  available and legacy `hsa1` is not accepted. The opaque authority has no
+  public constructor, the verified-feed capability remains false, and no
+  provider, HNSR, wallet, value, or marketplace gate is enabled.
 - Add a display-only Chromium wallet-readiness panel. The service worker
   projects the native `walletAbi` status through an exact closed schema, and
   the popup reports staged-artifact admission while clearly marking wallet
@@ -49,6 +61,10 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+- Remove the extension workspace's `hns-rs`/legacy service-authority dependency
+  and its Git-source allowlist entry. Strict Rust and display-only JavaScript
+  parsers reject the old schema and mixed legacy fields instead of treating
+  them as fallback authority.
 - Reject a private HNS read session when either the signed manifest or runtime
   hello omits `walletOperations` or `hnsReadOperationsV1`, and recheck both
   markers before every request. Regression tests freeze the marker to the six

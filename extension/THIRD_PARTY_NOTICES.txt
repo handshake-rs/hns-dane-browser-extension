@@ -16,12 +16,12 @@ Supported desktop Rust target closure counts:
   hns-browser-setup @ x86_64-apple-darwin: 209 external Cargo components
   hns-browser-setup @ x86_64-pc-windows-msvc: 205 external Cargo components
   hns-browser-setup @ x86_64-unknown-linux-gnu: 289 external Cargo components
-  hns-chromium-native-host @ aarch64-apple-darwin: 195 external Cargo components
-  hns-chromium-native-host @ aarch64-pc-windows-msvc: 201 external Cargo components
-  hns-chromium-native-host @ aarch64-unknown-linux-musl: 195 external Cargo components
-  hns-chromium-native-host @ x86_64-apple-darwin: 195 external Cargo components
-  hns-chromium-native-host @ x86_64-pc-windows-msvc: 201 external Cargo components
-  hns-chromium-native-host @ x86_64-unknown-linux-musl: 195 external Cargo components
+  hns-chromium-native-host @ aarch64-apple-darwin: 188 external Cargo components
+  hns-chromium-native-host @ aarch64-pc-windows-msvc: 194 external Cargo components
+  hns-chromium-native-host @ aarch64-unknown-linux-musl: 188 external Cargo components
+  hns-chromium-native-host @ x86_64-apple-darwin: 188 external Cargo components
+  hns-chromium-native-host @ x86_64-pc-windows-msvc: 194 external Cargo components
+  hns-chromium-native-host @ x86_64-unknown-linux-musl: 188 external Cargo components
 
 License entries reproduce the expression or license-file declaration in verified package
 metadata. Texts come from checksum-verified registry packages, exact policy-approved Git
@@ -31,19 +31,19 @@ Inclusion here does not imply endorsement by the component authors.
 Generator schema: 6
 Generated input SHA-256:
   scripts/generate-third-party-notices.py = ded2084725e77cabf668fb131777c59e9fe8ddc3c4b530eba6e55fc4f48a7baa
-  scripts/verify_cargo_git_policy.py = 1688fbf5aa0f73216e35667c11d06ed84208892033c2f64fa2065468022a875a
+  scripts/verify_cargo_git_policy.py = 8dfcb1399b387ea9a22392d757bbd46c6b2a961b8dd721e2a4129002fedf8a35
   release/license-texts/BSL-1.0.txt = c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566
   release/license-texts/CC0-1.0.txt = 8c5bfd05728b98356d25742d60344c8f39a82faacf5758451c2628b0f9f9773f
-  rust/Cargo.toml = 56d5ff94d274b236b474258f913e57b54836a9041ba9433fe2584e4be1230a72
-  rust/Cargo.lock = 2aeb363af1070d8e3aaff46d3e9b9b79d7325fd8f174096844923cf3386b8ddc
+  rust/Cargo.toml = b45876f0bf321164f41508bbca497d52ab544f6bb06fd6a3519b39098b7eb49a
+  rust/Cargo.lock = a13fe16a709cfe6663e05699d67c409e505be51b9f0c19d3c72ed42798fe6742
   extension/manifest.json = 72f115f15fc535701d318abeb47d46746fb21684851543231db16a26ff786e6a
   package.json = 15a81f37fc265dd26edec5c62615a98363e8cf70d70af858a05efbb6a5b1f7ad
   rust/crates/hns-browser-setup/Cargo.toml = f18f125de18678fa95e2429fe454c9a9fc2ef735c66ef5cad3f0750a7a651bb2
   rust/crates/hns-chromium-native-host/Cargo.toml = fd91c86f3618f94a8fc2b45d70f51a0fca67cc4734bd8fbf7aca073050fd4019
   rust/crates/hns-chromium-platform-runtime/Cargo.toml = d0600a601098c2f0cb2119fa33ea115711fa2a4d4fb5929bf27b8c22e4fddff9
-  rust/crates/hns-meshmine-pool-stats/Cargo.toml = f0a46335239367ac12e0b15a487ced2737612adbab056bf4ee6b836b251ce4dc
+  rust/crates/hns-meshmine-pool-stats/Cargo.toml = eaac3989e687f206a384081795f07dbc7d4936e5e278c6423126976ad58508f4
 
-RUST COMPONENTS (448)
+RUST COMPONENTS (441)
   accesskit 0.24.1 | MIT OR Apache-2.0
   accesskit_atspi_common 0.18.1 | MIT OR Apache-2.0
   accesskit_consumer 0.35.0 | MIT OR Apache-2.0
@@ -225,17 +225,10 @@ RUST COMPONENTS (448)
   hns-browser-transport 0.2.1 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-browser-urkel 0.2.1 | license-file ../../LICENSE-POLYFORM-NONCOMMERCIAL
   hns-cache 0.2.1 | MIT OR Apache-2.0
-  hns-covenants 0.2.0 | MIT OR Apache-2.0
   hns-dns-wire 0.2.1 | MIT OR Apache-2.0
-  hns-encoding 0.2.0 | MIT OR Apache-2.0
-  hns-header-consensus 0.2.0 | MIT OR Apache-2.0
   hns-icann-dane 0.2.1 | MIT OR Apache-2.0
-  hns-light-chain 0.2.1 | MIT OR Apache-2.0
   hns-namespace-resolution 0.2.1 | MIT OR Apache-2.0
-  hns-primitives 0.2.0 | MIT OR Apache-2.0
   hns-resolution-policy 0.2.1 | MIT OR Apache-2.0
-  hns-service-authority 0.2.0 | MIT OR Apache-2.0
-  hns-urkel-proof 0.2.0 | MIT OR Apache-2.0
   http 1.4.2 | MIT OR Apache-2.0
   httparse 1.10.1 | MIT OR Apache-2.0
   icu_collections 2.2.0 | Unicode-3.0
@@ -666,17 +659,10 @@ Applies to:
   - Rust crate hns-browser-observability 0.2.1
   - Rust crate hns-browser-runtime 0.2.1
   - Rust crate hns-cache 0.2.1
-  - Rust crate hns-covenants 0.2.0
   - Rust crate hns-dns-wire 0.2.1
-  - Rust crate hns-encoding 0.2.0
-  - Rust crate hns-header-consensus 0.2.0
   - Rust crate hns-icann-dane 0.2.1
-  - Rust crate hns-light-chain 0.2.1
   - Rust crate hns-namespace-resolution 0.2.1
-  - Rust crate hns-primitives 0.2.0
   - Rust crate hns-resolution-policy 0.2.1
-  - Rust crate hns-service-authority 0.2.0
-  - Rust crate hns-urkel-proof 0.2.0
   - Rust crate objc-sys 0.3.5
   - Rust crate objc2 0.5.2
   - Rust crate objc2 0.6.4
@@ -3356,17 +3342,10 @@ Applies to:
   - Rust crate hns-browser-observability 0.2.1
   - Rust crate hns-browser-runtime 0.2.1
   - Rust crate hns-cache 0.2.1
-  - Rust crate hns-covenants 0.2.0
   - Rust crate hns-dns-wire 0.2.1
-  - Rust crate hns-encoding 0.2.0
-  - Rust crate hns-header-consensus 0.2.0
   - Rust crate hns-icann-dane 0.2.1
-  - Rust crate hns-light-chain 0.2.1
   - Rust crate hns-namespace-resolution 0.2.1
-  - Rust crate hns-primitives 0.2.0
   - Rust crate hns-resolution-policy 0.2.1
-  - Rust crate hns-service-authority 0.2.0
-  - Rust crate hns-urkel-proof 0.2.0
   - Rust crate khronos_api 3.1.0
   - Rust crate kurbo 0.13.1
   - Rust crate lru-slab 0.1.2

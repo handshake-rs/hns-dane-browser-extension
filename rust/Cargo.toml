@@ -36,8 +36,6 @@ hns-browser-runtime = { version = "=0.2.1", git = "https://github.com/handshake-
 hns-icann-dane = { version = "=0.2.1", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "65c397e8347f37085ea67d2c9c745ce896328e64" }
 hns-namespace-resolution = { version = "=0.2.1", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "65c397e8347f37085ea67d2c9c745ce896328e64" }
 hns-resolution-policy = { version = "=0.2.1", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "65c397e8347f37085ea67d2c9c745ce896328e64" }
-hns-light-chain = { version = "=0.2.1", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "65c397e8347f37085ea67d2c9c745ce896328e64" }
-hns-service-authority = { version = "=0.2.0", git = "https://github.com/handshake-rs/hns-rs.git", rev = "b24b66c382de53330ec21dd3137e056a2bea3e2d" }
 hns-loopback-proxy = { package = "hns-browser-loopback-proxy", version = "=0.2.1", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "65c397e8347f37085ea67d2c9c745ce896328e64", default-features = false, features = ["chromium"] }
 h2 = "0.4"
 h3 = "0.0.8"

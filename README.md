@@ -104,38 +104,30 @@ malformed objects, and labels every decoded value unverified. The feed endpoint
 is not an identity authority: an authorization contains a name hash, not a
 reversible HNS label.
 
-The native Rust workspace now contains a profile-specific verifier core for
-MeshMine's private `0xff00` `pool-stats` profile. Its only production entry
-accepts an independently supplied lowercase HNS name and configured Handshake
-network plus the canonical engine's non-forgeable
-`hns-light-chain::VerifiedHnsResource`. It requires a
-current proof-backed, single-string `hsa1` record for that exact name, verifies
-the root-signed service authorization and service-signed endpoint delegation
-under the exact read-only capability/flags/constraints policy, verifies the
-endpoint snapshot signature and lifetime, and returns no raw proof, key, HNSA
-object, or signature. A bounded state retains authorization serial, endpoint
-sequence, global per-operator snapshot sequence, resource/policy generation
-and trusted-time high-water, and sticky
-equal-sequence conflict/capacity state. The API cannot release a verified value
-until a caller-provided compare-generation commit durably accepts the complete
-state. Its minimized result expires at the earlier of snapshot or proof-anchor
-expiry and is reusable only while its admission generation still matches the
-persisted state. Counts, mode, tip, and production eligibility remain
-authenticated operator claims, never consensus or settlement authority.
+The native Rust workspace now contains a schema-2 verifier core for MeshMine's
+private `0xff00` `pool-stats` application profile under current HRM-backed
+HNSA semantics. It accepts only an opaque broker-issued current named-service
+authority bound to the exact network, name hash, HRM sequence/envelope hash,
+authority revision and trusted operation time, service resource and delegation
+IDs/generation, service key, intervals, capabilities, constraints, and fenced
+lease generation. It then verifies the canonical service-signed HNSA endpoint
+delegation and an endpoint-signed profile record that also binds an
+independently selected route ID, endpoint-delegation ID/sequence, profile,
+generation, and expiry. Commit-before-release state retains endpoint and
+operator replacement history; minimized values contain no keys, signatures,
+or raw authority objects. Counts, mode, tip, and production eligibility remain
+authenticated operator claims, never consensus, wallet, or settlement facts.
 
-That verifier is intentionally not connected to the popup. The Chromium
-runtime currently owns `hns-browser-resolver::VerifiedResourceValue`, while
-the HNSA contract requires `hns-light-chain::VerifiedHnsResource` with private
-chainwork and currency authority; there is no safe conversion or constructor.
-No authenticated rollback-resistant state store or native-message admission
-has been joined either. The native hello capability therefore reports verifier
-core schema 1 but `meshmineVerifiedPoolStats: false`, and the popup continues
-to label every feed unverified. Before making a display-only request, the
-popup now requires the expected exact lowercase HNS label as input independent
-of the HTTP endpoint and derives its SHA3-256 name hash locally. It never
-infers or probes an endpoint from the active tab. This prepares a bounded
-future verifier input but does not authenticate the label: the HTTP endpoint,
-operator response, and JavaScript parser advance none of the native state.
+This verifier is deliberately dormant. `CurrentHrmNamedService` has no public
+constructor because the Chromium product does not yet have the sole trusted
+subject-wide HRM/HNSA broker, authenticated aggregate store, external revision
+floor, fenced operation lease, or current-HRM adapter required to issue it.
+Native hello therefore reports schema 2, `meshmineHrmAuthorityAdapter: false`,
+`meshmineLegacyHsa1Accepted: false`, and
+`meshmineVerifiedPoolStats: false`. The popup parses only the new bounded
+schema but still labels every value unverified; it advances no native state and
+cannot turn an HTTP response into authority. The superseded `hsa1` and fixed
+service-authorization path has been removed rather than retained as fallback.
 
 ## Optional wallet provider
 

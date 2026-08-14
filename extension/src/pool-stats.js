@@ -1,8 +1,8 @@
 import { hnsNameHash } from "./hns-name-hash.js";
 
 const MAX_RESPONSE_BYTES = 16 * 1024;
-const MAX_HNSA_HEX_LENGTH = 2 * 1024;
-const MAX_SNAPSHOT_HEX_LENGTH = 2 * 512;
+const MAX_ENDPOINT_HEX_LENGTH = 2 * 320;
+const MAX_SNAPSHOT_HEX_LENGTH = 2 * 640;
 const REQUEST_TIMEOUT_MS = 5_000;
 const PROFILE_ID = 0xff00;
 const MODES = ["Bootstrapping", "Mining", "Degraded", "Fallback", "Draining", "Stopped"];
@@ -53,16 +53,25 @@ export function expectedPoolAuthority(name) {
 }
 
 export function parsePoolStatsDocument(document) {
+  const expectedFields = [
+    "application_profile_id",
+    "endpoint_delegation",
+    "schema",
+    "service_name",
+    "snapshot"
+  ];
   if (
     !document ||
-    document.schema !== "meshmine-pool-stats-v1" ||
+    typeof document !== "object" ||
+    Array.isArray(document) ||
+    JSON.stringify(Object.keys(document).sort()) !== JSON.stringify(expectedFields) ||
+    document.schema !== "meshmine-pool-stats-hrm-v1" ||
     document.service_name !== "pool-stats" ||
-    document.profile_id !== PROFILE_ID
+    document.application_profile_id !== PROFILE_ID
   ) {
     throw new Error("Unsupported MeshMine pool document");
   }
-  boundedHex(document.service_authorization, MAX_HNSA_HEX_LENGTH, "service authorization");
-  boundedHex(document.endpoint_delegation, MAX_HNSA_HEX_LENGTH, "endpoint delegation");
+  boundedHex(document.endpoint_delegation, MAX_ENDPOINT_HEX_LENGTH, "endpoint delegation");
   const bytes = boundedHex(document.snapshot, MAX_SNAPSHOT_HEX_LENGTH, "snapshot");
   return decodeSnapshot(bytes);
 }
@@ -156,12 +165,15 @@ function decodeSnapshot(bytes) {
     return result;
   };
 
-  if (u8() !== 1) throw new Error("Unsupported pool snapshot version");
+  if (u8() !== 2) throw new Error("Unsupported pool snapshot version");
   const networkMagic = u32();
   if (u16() !== PROFILE_ID) throw new Error("Pool snapshot profile mismatch");
-  const authorizationId = hex(32);
-  const delegationId = hex(32);
+  const serviceResourceId = hex(32);
+  const serviceDelegationId = hex(32);
+  const serviceGeneration = u64();
+  const endpointDelegationId = hex(32);
   const endpointSequence = u64();
+  const routeId = hex(32);
   const sequence = u64();
   const generatedAt = u64();
   const expiresAt = u64();
@@ -189,8 +201,11 @@ function decodeSnapshot(bytes) {
   if (
     !MODES[modeValue] ||
     productionValue > 1 ||
-    /^0+$/.test(authorizationId) ||
-    /^0+$/.test(delegationId) ||
+    /^0+$/.test(serviceResourceId) ||
+    /^0+$/.test(serviceDelegationId) ||
+    serviceGeneration === 0n ||
+    /^0+$/.test(endpointDelegationId) ||
+    /^0+$/.test(routeId) ||
     /^0+$/.test(operatorId) ||
     endpointSequence === 0n ||
     sequence === 0n
@@ -203,7 +218,12 @@ function decodeSnapshot(bytes) {
   return {
     verified: false,
     networkMagic,
+    serviceResourceId,
+    serviceDelegationId,
+    serviceGeneration,
+    endpointDelegationId,
     endpointSequence,
+    routeId,
     sequence,
     generatedAt,
     expiresAt,

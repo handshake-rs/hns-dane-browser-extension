@@ -101,13 +101,18 @@ if ! grep -Fq 'p2pDnsRelay: false' extension/src/policy.js ||
 fi
 
 wallet_source="rust/crates/hns-chromium-native-host/src/wallet_abi.rs"
+meshmine_source="rust/crates/hns-meshmine-pool-stats/src/lib.rs"
 required_disabled_boundaries=(
   "$runtime_source|hnsr: CanonicalHnsrPolicy::disabled(),"
   "$runtime_source|market_gossip: false,"
   "$native_host_source|hnsr: HnsrPolicy::disabled(),"
   "$native_host_source|market_gossip: false,"
   "$native_host_source|\"handshakeWalletProvider\": false"
+  "$native_host_source|\"meshmineHrmAuthorityAdapter\": MESHMINE_HRM_AUTHORITY_ADAPTER_AVAILABLE"
+  "$native_host_source|\"meshmineLegacyHsa1Accepted\": MESHMINE_LEGACY_HSA1_ACCEPTED"
   "$native_host_source|\"meshmineVerifiedPoolStats\": false"
+  "$meshmine_source|pub const HRM_AUTHORITY_ADAPTER_AVAILABLE: bool = false;"
+  "$meshmine_source|pub const LEGACY_HSA1_ACCEPTED: bool = false;"
   "$wallet_source|const PRODUCTION_WALLET_TRUST_ROOTS: &[ProductionWalletTrustRoot] = &[];"
   "$wallet_source|const PRODUCTION_QUALIFIED_WALLET_RELEASES: &[ProductionQualifiedWalletRelease] = &[];"
   "$wallet_source|const PRODUCTION_WALLET_RELEASE_FLOORS: &[ProductionWalletReleaseFloor] = &[];"

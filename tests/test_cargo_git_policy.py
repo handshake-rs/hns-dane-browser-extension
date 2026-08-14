@@ -16,8 +16,6 @@ from verify_cargo_git_policy import (  # noqa: E402
     ENGINE_REQUIREMENTS,
     ENGINE_REVISION,
     ENGINE_VERSIONS,
-    HNS_RS_GIT_URL,
-    HNS_RS_REVISION,
     MIGRATED_LOCAL_CRATES,
     CargoSourcePolicyError,
     verify_repository,
@@ -48,12 +46,6 @@ class CargoSourcePolicyTests(unittest.TestCase):
             f'git = "{ENGINE_GIT_URL}", rev = "{ENGINE_REVISION}" }}'
             for package in sorted(ENGINE_PACKAGES)
         )
-        dependencies += (
-            '\nhns-light-chain = { version = "=0.2.1", '
-            f'git = "{ENGINE_GIT_URL}", rev = "{ENGINE_REVISION}" }}\n'
-            'hns-service-authority = { version = "=0.2.0", '
-            f'git = "{HNS_RS_GIT_URL}", rev = "{HNS_RS_REVISION}" }}'
-        )
         (root / "rust/Cargo.toml").write_text(
             f"[workspace.dependencies]\n{dependencies}\n",
             encoding="utf-8",
@@ -64,16 +56,6 @@ class CargoSourcePolicyTests(unittest.TestCase):
             f'version = "{ENGINE_VERSIONS[package]}"\n'
             f'source = "git+{ENGINE_GIT_URL}?rev={ENGINE_REVISION}#{ENGINE_REVISION}"\n'
             for package in sorted(ENGINE_PACKAGES)
-        )
-        locked_packages += (
-            "\n[[package]]\n"
-            'name = "hns-light-chain"\n'
-            'version = "0.2.1"\n'
-            f'source = "git+{ENGINE_GIT_URL}?rev={ENGINE_REVISION}#{ENGINE_REVISION}"\n'
-            "\n[[package]]\n"
-            'name = "hns-service-authority"\n'
-            'version = "0.2.0"\n'
-            f'source = "git+{HNS_RS_GIT_URL}?rev={HNS_RS_REVISION}#{HNS_RS_REVISION}"\n'
         )
         (root / "rust/Cargo.lock").write_text(
             f"version = 4\n\n{locked_packages}",
@@ -91,7 +73,7 @@ class CargoSourcePolicyTests(unittest.TestCase):
     def verify_fixture(self, root: Path) -> None:
         verify_repository(root, [Path("rust/Cargo.toml")])
 
-    def test_accepts_exact_reviewed_engine_and_hns_rs_revisions(self) -> None:
+    def test_accepts_exact_reviewed_engine_revision(self) -> None:
         temporary, root = self.create_fixture()
         with temporary:
             self.verify_fixture(root)
@@ -144,21 +126,6 @@ class CargoSourcePolicyTests(unittest.TestCase):
                 manifest.read_text(encoding="utf-8").replace(
                     ENGINE_REVISION,
                     "a" * 40,
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(CargoSourcePolicyError, "exact reviewed"):
-                self.verify_fixture(root)
-
-    def test_rejects_split_hns_rs_manifest_revision(self) -> None:
-        temporary, root = self.create_fixture()
-        with temporary:
-            manifest = root / "rust/Cargo.toml"
-            manifest.write_text(
-                manifest.read_text(encoding="utf-8").replace(
-                    HNS_RS_REVISION,
-                    "b" * 40,
                     1,
                 ),
                 encoding="utf-8",

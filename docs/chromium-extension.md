@@ -90,10 +90,14 @@ validates and hashes the label before contacting the endpoint, never derives
 or probes an endpoint from the active tab, and stores the pair only after an
 explicit successful load. A failed load clears earlier displayed values.
 
+The bounded display parser accepts only the new
+`meshmine-pool-stats-hrm-v1` shape and schema-2 profile record; it rejects the
+superseded `hsa1`/fixed-service-authorization document and mixed legacy fields.
 This is preparation for the native verifier boundary, not verification. The
-current browser path does not bind that name to proof-backed HNSA authority or
-an authenticated rollback-resistant state commit. The endpoint, its claimed
-identity, and every displayed value therefore remain explicitly unverified.
+current browser path does not bind that name to complete current HRM/HNSA
+authority, a broker lease, or an authenticated rollback-resistant state
+commit. The endpoint, its claimed identity, and every displayed value therefore
+remain explicitly unverified.
 
 ## Security-result boundary
 

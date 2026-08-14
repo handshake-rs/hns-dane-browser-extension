@@ -24,7 +24,11 @@ use hns_chromium_platform_runtime::{
     normalize_configured_hns_doh_resolver,
 };
 use hns_loopback_proxy::LocalCertificateAuthority;
-use hns_meshmine_pool_stats::VERIFIER_SCHEMA_VERSION as MESHMINE_POOL_STATS_VERIFIER_SCHEMA_VERSION;
+use hns_meshmine_pool_stats::{
+    HRM_AUTHORITY_ADAPTER_AVAILABLE as MESHMINE_HRM_AUTHORITY_ADAPTER_AVAILABLE,
+    LEGACY_HSA1_ACCEPTED as MESHMINE_LEGACY_HSA1_ACCEPTED,
+    VERIFIER_SCHEMA_VERSION as MESHMINE_POOL_STATS_VERIFIER_SCHEMA_VERSION,
+};
 use hns_resolution_policy::{
     DnsRelayRequesterPolicy, EvidenceState as CanonicalEvidenceState, HnsrPolicy,
     Network as CanonicalNetwork, ObliviousDnsPolicy, PolicyConfig, ProviderPolicy,
@@ -1732,6 +1736,8 @@ impl NativeHostController {
                                 "userConfiguredRecursiveHnsDoh": true,
                                 "meshminePoolStatsVerifierCore": true,
                                 "meshminePoolStatsVerifierSchemaVersion": MESHMINE_POOL_STATS_VERIFIER_SCHEMA_VERSION,
+                                "meshmineHrmAuthorityAdapter": MESHMINE_HRM_AUTHORITY_ADAPTER_AVAILABLE,
+                                "meshmineLegacyHsa1Accepted": MESHMINE_LEGACY_HSA1_ACCEPTED,
                                 "meshmineVerifiedPoolStats": false,
                                 "handshakeWalletProvider": false,
                                 "p2pDnsRelay": true,
@@ -3261,6 +3267,8 @@ mod tests {
             result["capabilities"]["meshminePoolStatsVerifierSchemaVersion"],
             MESHMINE_POOL_STATS_VERIFIER_SCHEMA_VERSION
         );
+        assert_eq!(result["capabilities"]["meshmineHrmAuthorityAdapter"], false);
+        assert_eq!(result["capabilities"]["meshmineLegacyHsa1Accepted"], false);
         assert_eq!(result["capabilities"]["meshmineVerifiedPoolStats"], false);
         assert_eq!(result["capabilities"]["hnsr"], false);
 

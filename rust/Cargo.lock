@@ -2043,41 +2043,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "hns-covenants"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
-dependencies = [
- "blake2",
- "hns-encoding",
- "hns-primitives",
- "sha3",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "hns-dns-wire"
 version = "0.2.1"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
-
-[[package]]
-name = "hns-encoding"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
-dependencies = [
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "hns-header-consensus"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
-dependencies = [
- "blake2",
- "hns-encoding",
- "hns-primitives",
- "sha3",
- "thiserror 2.0.19",
-]
 
 [[package]]
 name = "hns-icann-dane"
@@ -2085,29 +2053,16 @@ version = "0.2.1"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
 
 [[package]]
-name = "hns-light-chain"
-version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
-dependencies = [
- "hns-covenants",
- "hns-encoding",
- "hns-header-consensus",
- "hns-primitives",
- "hns-urkel-proof",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "hns-meshmine-pool-stats"
 version = "0.6.1"
 dependencies = [
  "blake2",
  "hex",
- "hns-light-chain",
- "hns-service-authority",
  "k256",
  "serde",
  "serde_json",
+ "sha2",
+ "sha3",
  "thiserror 2.0.19",
 ]
 
@@ -2117,40 +2072,9 @@ version = "0.2.1"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
 
 [[package]]
-name = "hns-primitives"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
-dependencies = [
- "hex",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "hns-resolution-policy"
 version = "0.2.1"
 source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
-
-[[package]]
-name = "hns-service-authority"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
-dependencies = [
- "blake2",
- "hns-encoding",
- "k256",
- "thiserror 2.0.19",
- "zeroize",
-]
-
-[[package]]
-name = "hns-urkel-proof"
-version = "0.2.0"
-source = "git+https://github.com/handshake-rs/hns-rs.git?rev=b24b66c382de53330ec21dd3137e056a2bea3e2d#b24b66c382de53330ec21dd3137e056a2bea3e2d"
-dependencies = [
- "blake2",
- "hns-primitives",
- "thiserror 2.0.19",
-]
 
 [[package]]
 name = "http"

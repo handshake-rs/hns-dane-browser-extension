@@ -21,11 +21,11 @@ the manifest, lockfile, source-policy verifier, and notices:
 The local Chromium adapter, loopback listener, native messaging, per-install
 CA, lifecycle, storage, and origin transport remain product code.
 
-The MeshMine public-feed verifier core separately pins
-`hns-light-chain 0.2.1` to that engine revision and
-`hns-service-authority 0.2.0` to exact `hns-rs` revision
-`b24b66c382de53330ec21dd3137e056a2bea3e2d`. Source policy and the lock reject
-moving or registry substitutions for either authority type.
+The MeshMine public-feed verifier no longer consumes the superseded
+`hns-service-authority`/`hsa1` model or any `hns-rs` dependency. Its HRM-backed
+authority is an opaque local type with no public constructor; only a future
+subject-wide native broker may issue it after current HRM/HNSA validation and
+durable acknowledgement.
 
 The setup application is a distribution boundary, not a browser trust anchor.
 Every released target embeds the native host and canonical header bootstrap
@@ -75,54 +75,47 @@ metadata, not an extension of its validity.
 
 ### MeshMine public pool statistics
 
-The native verifier does not accept an HTTP endpoint, operator label, response
-origin, JavaScript verdict, raw name hash, or decoded resource as HNSA
-authority. Its public entry requires the independent exact lowercase HNS name,
-configured Handshake network, and a non-forgeable current
-`VerifiedHnsResource`. From that resource it admits
-one canonical `hsa1` string and verifies the exact `pool-stats`/`0xff00`
-identity, zero flags and constraints, read-only capability, authorization and
-delegation signatures, current height/time, endpoint key/sequence, and strict
-low-S endpoint snapshot signature and lifetime.
+The native profile verifier does not accept an HTTP endpoint, response origin,
+JavaScript verdict, raw name hash, or decoded DNS resource as HRM/HNSA
+authority. It requires an opaque `CurrentHrmNamedService` bound to the exact
+network/name, HRM sequence and envelope hash, current aggregate revision and
+trusted operation time, service resource/delegation IDs and generation,
+service key, validity intervals, capability/constraint policy, and fenced
+lease generation. That type has no public constructor: only a future trusted
+subject-wide broker may issue it after complete current-HRM validation and
+durable acknowledgement.
 
-Authorization serial, endpoint delegation sequence, global per-operator
-snapshot sequence/digest, resource/policy generation and trusted-time
-high-water, and sticky equal-sequence conflict
-or bounded-capacity exhaustion live in one canonical checksummed state. The
-checksum detects corruption only. The API exposes a minimized verified value
-only after a platform commit compares the previously loaded generation and
-durably accepts the entire mutation; that commit must add atomicity,
-authenticity, rollback resistance, and per-name/network serialization. Failed inputs
-can still advance trusted time or terminal conflict state and therefore still
-require a commit.
+Beneath that boundary, schema 2 canonically parses the HRM-backed HNSA endpoint
+delegation, verifies its strict-DER low-S service-controller signature under
+the exact HNSA domain, and matches network, service IDs/generation, endpoint
+key/sequence, time, lifetime, capabilities, and constraints. The endpoint-
+signed application record separately binds those values, the calculated
+endpoint-delegation ID, private profile `0xff00`, an independently selected
+route ID, record sequence, and expiry under a distinct profile domain. The old
+`hsa1`, fixed service authorization, and old document schema are rejected, not
+fallbacks.
 
-The minimized result carries its verification time, resource and policy
-generations, committed admission generation, signed snapshot expiry, and an
-effective validity deadline capped by proof-anchor expiry. Cached use requires
-both current trusted time and an exact persisted admission-generation match;
-any later authorization, delegation, revocation, snapshot, conflict, or
-context mutation invalidates it. Reported tips, counts, mode, and
-`production_eligible` are authenticated operator claims, not chain consensus,
-payment, or settlement facts.
+Endpoint and global per-operator sequence/digest history, current authority
+observation, trusted-time high-water, and sticky conflict/capacity state live
+in one canonical checksummed profile state. A minimized result is released
+only after compare-generation commit of every mutation and must reconfirm the
+exact authority revision, lease generation, trusted time, state generation,
+and validity before use. The checksum detects corruption only; the embedding
+must add atomic authenticated storage, external rollback floors, exact retry
+of ambiguous writes, and subject-wide serialization. Reported tips, counts,
+mode, and `production_eligible` remain operator claims, not consensus, payment,
+wallet, or settlement facts.
 
-A higher valid service-authorization serial resets delegation-sequence scope,
-while the global operator sequence survives service and endpoint-key rotation.
-A newer valid delegation with capability `0` is committed as a revocation
-before the feed becomes unavailable, so an older read-capable delegation
-cannot be replayed. Only a different proof-backed `hsa1` authority at a greater
-resource generation resets operator history and terminal authority state.
-
-No such platform store or Chromium proof-authority adapter is joined. The
-existing cache type lacks the private chainwork/currency constructor required
-by `VerifiedHnsResource`, so treating it as equivalent would fabricate trust.
-The native protocol reports `meshmineVerifiedPoolStats: false`; the popup's
-bounded JavaScript decoder remains explicitly unverified and advances no
-native state. The popup requires an independently entered canonical HNS label,
-hashes it locally before contacting the separately entered endpoint, and never
-probes the active tab as a pool endpoint. This is identity-selection input,
-not proof: no displayed identity or value becomes verified until the native
-authority and store join exists. HNSR, private/admin feeds, wallet/value
-operations, provider roles, settlement, and marketplaces remain unavailable.
+No complete HRM validator, authority broker, store, constructor, native
+message, or UI join exists. The local endpoint/profile implementation mirrors
+the current drafts but must be reconciled with canonical published crates and
+cross-language vectors before any adapter is enabled. Native capabilities
+therefore report `meshmineHrmAuthorityAdapter: false`,
+`meshmineLegacyHsa1Accepted: false`, and
+`meshmineVerifiedPoolStats: false`; the JavaScript decoder remains explicitly
+unverified and advances no native state. HNSR, private/admin feeds,
+wallet/value operations, provider roles, settlement, and marketplaces remain
+unavailable.
 
 Direct authoritative UDP/TCP 53 remains first when usable. A positive matching
 TEST-NET canary reply stops futile TCP and remaining direct-server attempts
