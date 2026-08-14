@@ -1052,6 +1052,21 @@ impl WalletReadOnlySyncStatus {
     }
 }
 
+/// One native-only projection assembled by executing the frozen six-operation
+/// HNS read contract in order. Each value-bearing operation has its own live
+/// synchronization authority; this aggregate deliberately does not claim one
+/// cross-operation chain snapshot.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WalletReadOnlyView {
+    pub(crate) status: WalletReadOnlyStatus,
+    pub(crate) account: WalletReadOnlyAccountSummary,
+    pub(crate) balance: WalletReadOnlyAmount,
+    pub(crate) receive_target: WalletReadOnlyReceiveTarget,
+    pub(crate) transactions: Vec<WalletReadOnlyTransactionSummary>,
+    pub(crate) module_status: WalletReadOnlySyncStatus,
+}
+
 #[cfg(target_os = "linux")]
 fn valid_wallet_public_string(value: &str, maximum: usize) -> bool {
     !value.is_empty()
@@ -1470,6 +1485,38 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
         Ok(status)
     }
 
+    /// Execute every operation promised by the exact HNS read marker and
+    /// retain only its minimized native projection. A locked or not-yet-ready
+    /// runtime is an availability result, not a protocol violation; malformed
+    /// or substituted responses still poison the controller in the individual
+    /// operation validators.
+    #[allow(dead_code)]
+    pub(crate) fn read_all(&mut self) -> io::Result<WalletReadOnlyView> {
+        let status = self.read_status()?;
+        if status.locked
+            || status.active_wallet.is_none()
+            || status.enabled_modules() != [WalletReadOnlyModule::Handshake]
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet HNS read runtime is not unlocked and ready",
+            ));
+        }
+        let account = self.list_accounts()?;
+        let balance = self.read_balance()?;
+        let receive_target = self.read_receive_target()?;
+        let transactions = self.read_transaction_history()?;
+        let module_status = self.read_module_status()?;
+        Ok(WalletReadOnlyView {
+            status,
+            account,
+            balance,
+            receive_target,
+            transactions,
+            module_status,
+        })
+    }
+
     fn require_selected_hns_account(&self) -> io::Result<[u8; 16]> {
         if self.poisoned {
             return Err(io::Error::new(
@@ -1721,6 +1768,10 @@ impl AdmittedWalletReadSession {
     fn read_module_status(&mut self) -> io::Result<WalletReadOnlySyncStatus> {
         self.execute(WalletServiceController::read_module_status)
     }
+
+    fn read_all(&mut self) -> io::Result<WalletReadOnlyView> {
+        self.execute(WalletServiceController::read_all)
+    }
 }
 
 /// Generation-owning slot for the private read session. A new start always
@@ -1856,6 +1907,10 @@ impl WalletReadSessionLifecycle {
             restart_generation,
             AdmittedWalletReadSession::read_module_status,
         )
+    }
+
+    pub(crate) fn read_all(&mut self, restart_generation: u64) -> io::Result<WalletReadOnlyView> {
+        self.execute_active(restart_generation, AdmittedWalletReadSession::read_all)
     }
 
     pub(crate) const fn provider_available(&self) -> bool {
@@ -4348,11 +4403,11 @@ mod tests {
         assert!(!controller.provider_available());
         assert!(!controller.value_available());
 
-        let first = controller.read_status().unwrap();
-        assert!(first.locked);
-        assert!(first.active_wallet.is_none());
-        assert!(first.enabled_modules().is_empty());
-        assert!(!first.mainnet_settlement_enabled);
+        assert_eq!(
+            controller.read_all().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(!controller.poisoned);
 
         let second = controller.read_status().unwrap();
         assert!(!second.locked);
@@ -4512,45 +4567,49 @@ mod tests {
             io::ErrorKind::PermissionDenied
         );
 
-        let status = controller.read_status().unwrap();
-        assert!(!status.locked);
-        assert_eq!(status.active_wallet, Some([7_u8; 16]));
-        assert_eq!(status.enabled_modules(), &[WalletReadOnlyModule::Handshake]);
-
-        let account = controller.list_accounts().unwrap();
-        assert_eq!(account.account_id, [9_u8; 16]);
-        assert_eq!(account.module, WalletReadOnlyModule::Handshake);
-        assert_eq!(account.label, "Primary HNS");
-        assert!(account.receive_display.is_none());
-
-        let balance = controller.read_balance().unwrap();
-        assert_eq!(balance.asset, WalletReadOnlyAsset::Hns);
-        assert_eq!(balance.base_units.get(), u128::MAX);
-
-        let target = controller.read_receive_target().unwrap();
-        assert_eq!(target.account, [9_u8; 16]);
-        assert_eq!(target.display, "rs1qchromiumwallet");
-        assert_eq!(target.derivation_index, 7);
-
-        let history = controller.read_transaction_history().unwrap();
-        assert_eq!(history.len(), 2);
-        assert_eq!(history[0].txid, [0xab; 32]);
+        let view = controller.read_all().unwrap();
+        assert!(!view.status.locked);
+        assert_eq!(view.status.active_wallet, Some([7_u8; 16]));
         assert_eq!(
-            history[0].status,
+            view.status.enabled_modules(),
+            &[WalletReadOnlyModule::Handshake]
+        );
+
+        assert_eq!(view.account.account_id, [9_u8; 16]);
+        assert_eq!(view.account.module, WalletReadOnlyModule::Handshake);
+        assert_eq!(view.account.label, "Primary HNS");
+        assert!(view.account.receive_display.is_none());
+
+        assert_eq!(view.balance.asset, WalletReadOnlyAsset::Hns);
+        assert_eq!(view.balance.base_units.get(), u128::MAX);
+
+        assert_eq!(view.receive_target.account, [9_u8; 16]);
+        assert_eq!(view.receive_target.display, "rs1qchromiumwallet");
+        assert_eq!(view.receive_target.derivation_index, 7);
+
+        assert_eq!(view.transactions.len(), 2);
+        assert_eq!(view.transactions[0].txid, [0xab; 32]);
+        assert_eq!(
+            view.transactions[0].status,
             WalletReadOnlyTransactionStatus::Confirmed
         );
-        assert_eq!(history[0].fee.map(WalletReadOnlyBaseUnits::get), Some(2));
-        assert_eq!(history[0].block_height, Some(100));
-        assert_eq!(history[0].first_seen_unix, Some(1_700_000_000));
-        assert_eq!(history[0].confirmation_count, 6);
-        assert_eq!(history[1].status, WalletReadOnlyTransactionStatus::Mempool);
+        assert_eq!(
+            view.transactions[0].fee.map(WalletReadOnlyBaseUnits::get),
+            Some(2)
+        );
+        assert_eq!(view.transactions[0].block_height, Some(100));
+        assert_eq!(view.transactions[0].first_seen_unix, Some(1_700_000_000));
+        assert_eq!(view.transactions[0].confirmation_count, 6);
+        assert_eq!(
+            view.transactions[1].status,
+            WalletReadOnlyTransactionStatus::Mempool
+        );
 
-        let module_status = controller.read_module_status().unwrap();
-        assert_eq!(module_status.phase, WalletReadOnlySyncPhase::Ready);
-        assert_eq!(module_status.validated_height, 100);
-        assert_eq!(module_status.scanned_height, 100);
-        assert_eq!(module_status.target_height, Some(100));
-        assert!(module_status.last_error.is_none());
+        assert_eq!(view.module_status.phase, WalletReadOnlySyncPhase::Ready);
+        assert_eq!(view.module_status.validated_height, 100);
+        assert_eq!(view.module_status.scanned_height, 100);
+        assert_eq!(view.module_status.target_height, Some(100));
+        assert!(view.module_status.last_error.is_none());
         assert!(!controller.provider_available());
         assert!(!controller.value_available());
         drop(controller);
@@ -5441,7 +5500,13 @@ mod tests {
         let error = lifecycle
             .start(&mut discovery, database, Duration::from_secs(1))
             .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        // The intentionally incompatible /bin/echo fixture may either exit
+        // before the hello write or return its non-ABI argv bytes first.
+        // Both outcomes must fail closed and consume the generation.
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::BrokenPipe | io::ErrorKind::InvalidData
+        ));
         assert!(lifecycle.active.is_none());
         assert_eq!(lifecycle.next_restart_generation, 2);
         assert!(!lifecycle.provider_available());

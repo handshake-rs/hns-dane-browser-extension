@@ -189,7 +189,9 @@ change.
   balance, receive target, bounded transaction history, and exact-ready module
   status. Request/response classes and session sequences remain correlated,
   malformed or non-HNS data poisons the private session, and independent value
-  calls do not claim a coherent snapshot.
+  calls do not claim a coherent snapshot. A native-only aggregate executes the
+  exact six operations in their fixed order and returns one minimized view
+  while explicitly retaining those per-operation synchronization semantics.
 - A dormant native-only Linux composition now joins signed-artifact launch,
   one explicit retained owner-private database identity, exact
   `--database <path>` arguments, a manifest-derived non-value capability

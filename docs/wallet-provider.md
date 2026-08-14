@@ -198,11 +198,12 @@ closed capabilities bounded by a caller-supplied admitted ceiling, exact
 limits, and kill-and-wait child cleanup on EOF, timeout, write failure,
 malformed output, or drop. Its private read surface includes wallet status,
 singleton HNS-account selection, balance, receive target, transaction history,
-and exact-ready module status. Module and account selectors are fixed by the
-controller, responses are HNS-only and bounded, and separately synchronized
-value calls are not represented as one coherent snapshot. The additive private
-`hnsReadOperationsV1` capability freezes exactly those six operations; it does
-not include a workflow-status operation.
+and exact-ready module status. One native-only helper executes that exact set
+in order and returns a minimized view; module and account selectors are fixed
+by the controller, responses are HNS-only and bounded, and the helper does not
+misrepresent separately synchronized value calls as one coherent snapshot.
+The additive private `hnsReadOperationsV1` capability freezes exactly those
+six operations; it does not include a workflow-status operation.
 
 The dormant Linux native API composes admitted launch and negotiation only for
 one explicitly configured, pre-existing wallet database. Its typed
