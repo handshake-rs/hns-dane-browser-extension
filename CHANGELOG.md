@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Accept HRM commitment sequence zero in the dormant schema-2 MeshMine
+  verifier and its persisted profile-local state, while retaining the HNSA
+  requirement that endpoint and application-record replacement sequences are
+  nonzero.
+
 ### Added
 
 - Replace the dormant MeshMine verifier's superseded `hsa1` and fixed

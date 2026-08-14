@@ -183,7 +183,6 @@ impl CurrentHrmNamedService {
             || self.name_hash == [0; 32]
             || self.service_name != SERVICE_NAME
             || self.application_profile_id != EXPERIMENTAL_PROFILE_ID
-            || self.hrm_sequence == 0
             || self.hrm_envelope_hash == [0; 32]
             || self.authority_revision == 0
             || self.operation_lease_generation == 0
@@ -691,7 +690,6 @@ impl HrmPoolStatsState {
             && self.network_magic != 0
             && self.name_hash != [0; 32]
             && self.authority_revision != 0
-            && self.hrm_sequence != 0
             && self.hrm_envelope_hash != [0; 32]
             && self.service_resource_id != [0; 32]
             && self.service_delegation_id != [0; 32]
@@ -1861,6 +1859,41 @@ mod tests {
         verified
             .reconfirm_current(&authority, request(NOW), &state)
             .expect("current");
+    }
+
+    #[test]
+    fn accepts_initial_hrm_sequence_zero_and_round_trips_committed_state() {
+        // HRM Core permits the initial commitment sequence to be zero. HNSA
+        // endpoint and application-record replacement sequences remain
+        // independently nonzero, so they stay at one here.
+        let mut authority = authority();
+        authority.hrm_sequence = 0;
+        let endpoint = endpoint(&authority, 1);
+        let snapshot = snapshot(&authority, &endpoint, 1);
+        let mut state = HrmPoolStatsState::new();
+        let mut committed = None;
+        let verified = verify_hrm_and_commit(
+            &authority,
+            request(NOW),
+            &document(&endpoint, &snapshot),
+            &mut state,
+            |previous_generation, encoded| {
+                assert_eq!(previous_generation, 0);
+                committed = Some(encoded.to_vec());
+                Ok::<(), &str>(())
+            },
+        )
+        .expect("HRM sequence zero is valid");
+
+        assert_eq!(authority.hrm_sequence(), 0);
+        assert_eq!(
+            HrmPoolStatsState::decode(&committed.expect("committed state"))
+                .expect("decode sequence-zero state"),
+            state
+        );
+        verified
+            .reconfirm_current(&authority, request(NOW), &state)
+            .expect("sequence-zero authority remains current");
     }
 
     #[test]
