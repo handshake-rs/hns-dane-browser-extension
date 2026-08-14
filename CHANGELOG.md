@@ -15,20 +15,26 @@ All notable changes to this project will be documented in this file.
   It negotiates ABI-v2 sessions and exposes only correlated, deadline-bounded
   read-only status plus singleton selected-account HNS balance, receive-target,
   transaction-history, and module-status calls. Each value call is an
-  independent synchronized read, not a coherent multi-call snapshot.
+  independent synchronized read, not a coherent multi-call snapshot. The
+  private `hnsReadOperationsV1` marker freezes exactly those six operations and
+  excludes workflow status.
 - Compose that private Linux read controller with signed-artifact launch around
   one explicitly configured pre-existing wallet database. The dormant native
   API retains and revalidates the exact owner-private path identity, launches
   with only `--database <exact-path>`, negotiates beneath a closed non-value
-  capability ceiling, verifies that the live child actually holds that admitted
-  database inode, and rotates a kill-and-wait restart generation. No extension
-  command invokes it; production trust/pin/floor tables and every public
-  transport/provider/value gate remain empty or false.
+  capability ceiling requiring both `walletOperations` and
+  `hnsReadOperationsV1`, verifies that the signed manifest and runtime hello
+  carry both markers, requires them again for every closed request, verifies
+  that the live child actually holds that admitted database inode, and rotates
+  a kill-and-wait restart generation. No extension command invokes it;
+  production trust/pin/floor tables and every public transport/provider/value
+  gate remain empty or false.
 - Keep exact wallet-service interoperability explicitly unclaimed. The current
   checked-in service executable selects its locked control runtime, while the
   synchronized HNS reads require a trusted unlock plus account and authenticated
-  node configuration. This tranche has no positive launched-service read and
-  broad `walletOperations` negotiation alone is not method qualification.
+  node configuration. It does not advertise `hnsReadOperationsV1`, so broad
+  `walletOperations` alone fails read-session admission. This tranche has no
+  positive launched-service read, production release pin, or product gate.
 - Require an independently entered canonical HNS name before the popup contacts
   a MeshMine public-statistics endpoint. The extension validates the exact
   lowercase label, derives its SHA3-256 name hash locally, and persists it only
@@ -36,6 +42,11 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+- Reject a private HNS read session when either the signed manifest or runtime
+  hello omits `walletOperations` or `hnsReadOperationsV1`, and recheck both
+  markers before every request. Regression tests freeze the marker to the six
+  non-workflow read operations and keep value/browser capabilities outside the
+  admitted ceiling.
 - Reject malformed or extended wallet-readiness status, inconsistent admission
   stages, unbounded release metadata, and any asserted transport, runtime, or
   provider availability before status reaches the popup. The panel adds no

@@ -392,7 +392,7 @@ qnames, qtypes, request timing, and source IP.
 | Chromium flavors share a native-messaging location | Treat browser selection as compatibility intent; deduplicate shared paths, bind exact allowed extension origins, and refuse replacement or removal unless the manifest is proven to be owned by this installation |
 | Page forges security metadata | Strip internal headers; publish only native checked status |
 | Page forges wallet origin, generations, or permission fields | Treat them only as lookup candidates; require a native opaque engine authority context and exact wallet generations; current release remains unavailable |
-| Wallet manifest changes shape, versions, capabilities, or signing bytes | Consume exact schema v2 with denied unknown fields; require full-file and signature-omitted JCS, recomputed payload hash, fixed ABI/protocol/schema/frame values, closed unique capabilities, and all five base capabilities |
+| Wallet manifest changes shape, versions, capabilities, or signing bytes | Consume exact schema v2 with denied unknown fields; require full-file and signature-omitted JCS, recomputed payload hash, fixed ABI/protocol/schema/frame values, closed unique capabilities, and all five base capabilities; read-session admission additionally requires both signed `walletOperations` and `hnsReadOperationsV1` markers and a matching runtime hello |
 | Artifact supplies a key or relies on a matching hash | Ignore artifact-supplied trust; require verifier-owned release-line Ed25519 root, exact qualified manifest/artifact pin, and compiled minimum sequence |
 | Local path, symlink, or directory replacement substitutes a wallet artifact | Relative no-follow retained handles, parent-to-child inode rebinding, immutable single-link files, bounded same-handle hashes, and Linux execution only from a freshly rehashed sealed memfd |
 | Configured wallet path is aliased, replaced, shared, or redirected between admission and a read | Accept one explicit canonical absolute path only; walk ancestors no-follow; retain owner-private parent/database handles; rebind device/inode/owner/mode/link identity around launch, negotiation, and every read; after hello, boundedly attest that the immediate child holds the retained base inode; poison, kill, wait, and remove the generation on change. This detects but cannot prevent a pre-hello wrong-inode open/migration, does not attest SQLite sidecars or exclusive use, and assumes same-UID state tampering is outside the isolation boundary |
@@ -428,8 +428,11 @@ prove browser uninstall preserves independent wallet state. The admission
 source and negative tests do not satisfy those product gates. Until they do,
 every transport/provider/value gate remains false.
 
-Linux qualification must additionally prove the exact service's operation-level
-read set and trusted unlock/account/node join, not infer it from the coarse
-`walletOperations` hello capability. The qualified artifact must remain one
-process with no inherited database-holding descendants because lifecycle
-termination owns and waits only for the immediate child.
+Linux qualification must additionally prove the exact service's read set and
+trusted unlock/account/node join. Broad `walletOperations` alone is rejected;
+the signed manifest and runtime hello must also carry `hnsReadOperationsV1`,
+which freezes status, list-accounts, and the four HNS balance/receive/history/
+module-status reads while excluding workflow and value operations. The marker
+does not replace a positive interoperability fixture. The qualified artifact
+must remain one process with no inherited database-holding descendants because
+lifecycle termination owns and waits only for the immediate child.

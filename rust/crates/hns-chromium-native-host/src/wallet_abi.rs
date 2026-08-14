@@ -96,7 +96,7 @@ const REQUIRED_BASE_CAPABILITIES: [&str; 5] = [
     "typedEvents",
 ];
 #[cfg(unix)]
-const SERVICE_CAPABILITIES: [&str; 10] = [
+const SERVICE_CAPABILITIES: [&str; 11] = [
     "canonicalFraming",
     "restartIsolation",
     "opaqueAuthorityRegistry",
@@ -104,6 +104,7 @@ const SERVICE_CAPABILITIES: [&str; 10] = [
     "structuredApprovals",
     "typedEvents",
     "walletOperations",
+    "hnsReadOperationsV1",
     "providerDispatch",
     "valueMovement",
     "browserIntegration",
@@ -275,19 +276,21 @@ enum NegotiatedWalletServiceCapability {
     StructuredApprovals,
     TypedEvents,
     WalletOperations,
+    HnsReadOperationsV1,
     ProviderDispatch,
     ValueMovement,
     BrowserIntegration,
 }
 
 #[cfg(target_os = "linux")]
-const WALLET_READ_SESSION_REQUIRED_CAPABILITIES: [NegotiatedWalletServiceCapability; 6] = [
+const WALLET_READ_SESSION_REQUIRED_CAPABILITIES: [NegotiatedWalletServiceCapability; 7] = [
     NegotiatedWalletServiceCapability::CanonicalFraming,
     NegotiatedWalletServiceCapability::RestartIsolation,
     NegotiatedWalletServiceCapability::OpaqueAuthorityRegistry,
     NegotiatedWalletServiceCapability::StructuredApprovals,
     NegotiatedWalletServiceCapability::TypedEvents,
     NegotiatedWalletServiceCapability::WalletOperations,
+    NegotiatedWalletServiceCapability::HnsReadOperationsV1,
 ];
 
 #[cfg(target_os = "linux")]
@@ -295,7 +298,8 @@ const WALLET_READ_SESSION_REQUIRED_CAPABILITIES: [NegotiatedWalletServiceCapabil
 // provider dispatch as process capabilities even for native wallet reads.
 // They may pass hello validation, but the closed request enum below cannot
 // express provider, permission, approval, unlock, lock, or mutation calls.
-const WALLET_READ_SESSION_ALLOWED_CAPABILITIES: [NegotiatedWalletServiceCapability; 8] = [
+// HnsReadOperationsV1 freezes the enum's exact six-operation non-workflow set.
+const WALLET_READ_SESSION_ALLOWED_CAPABILITIES: [NegotiatedWalletServiceCapability; 9] = [
     NegotiatedWalletServiceCapability::CanonicalFraming,
     NegotiatedWalletServiceCapability::RestartIsolation,
     NegotiatedWalletServiceCapability::OpaqueAuthorityRegistry,
@@ -303,6 +307,7 @@ const WALLET_READ_SESSION_ALLOWED_CAPABILITIES: [NegotiatedWalletServiceCapabili
     NegotiatedWalletServiceCapability::StructuredApprovals,
     NegotiatedWalletServiceCapability::TypedEvents,
     NegotiatedWalletServiceCapability::WalletOperations,
+    NegotiatedWalletServiceCapability::HnsReadOperationsV1,
     NegotiatedWalletServiceCapability::ProviderDispatch,
 ];
 
@@ -317,6 +322,7 @@ impl NegotiatedWalletServiceCapability {
             "structuredApprovals" => Some(Self::StructuredApprovals),
             "typedEvents" => Some(Self::TypedEvents),
             "walletOperations" => Some(Self::WalletOperations),
+            "hnsReadOperationsV1" => Some(Self::HnsReadOperationsV1),
             "providerDispatch" => Some(Self::ProviderDispatch),
             "valueMovement" => Some(Self::ValueMovement),
             "browserIntegration" => Some(Self::BrowserIntegration),
@@ -1308,11 +1314,9 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
             || capabilities.len() > MAX_NEGOTIATED_SERVICE_CAPABILITIES
             || capabilities.len() != capability_count
             || !capabilities.is_subset(&admitted_capabilities)
-            || !capabilities.contains(&NegotiatedWalletServiceCapability::CanonicalFraming)
-            || !capabilities.contains(&NegotiatedWalletServiceCapability::RestartIsolation)
-            || !capabilities.contains(&NegotiatedWalletServiceCapability::OpaqueAuthorityRegistry)
-            || !capabilities.contains(&NegotiatedWalletServiceCapability::StructuredApprovals)
-            || !capabilities.contains(&NegotiatedWalletServiceCapability::TypedEvents)
+            || !WALLET_READ_SESSION_REQUIRED_CAPABILITIES
+                .iter()
+                .all(|capability| capabilities.contains(capability))
             || (capabilities.contains(&NegotiatedWalletServiceCapability::ValueMovement)
                 && !capabilities.contains(&NegotiatedWalletServiceCapability::ProviderDispatch))
         {
@@ -1495,10 +1499,13 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
         if !self
             .capabilities
             .contains(&NegotiatedWalletServiceCapability::WalletOperations)
+            || !self
+                .capabilities
+                .contains(&NegotiatedWalletServiceCapability::HnsReadOperationsV1)
         {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "wallet service did not negotiate read-only wallet operations",
+                "wallet service did not negotiate the exact HNS read-operation contract",
             ));
         }
         let request_id = random_wallet_wire_id::<WALLET_SERVICE_REQUEST_ID_BYTES>()?;
@@ -3946,6 +3953,31 @@ mod tests {
         deadline: Instant,
         service_session_byte: u8,
     ) -> (String, u64, String) {
+        write_fixture_service_hello(
+            service,
+            deadline,
+            service_session_byte,
+            json!([
+                "canonicalFraming",
+                "restartIsolation",
+                "opaqueAuthorityRegistry",
+                "persistentPermissions",
+                "structuredApprovals",
+                "typedEvents",
+                "walletOperations",
+                "hnsReadOperationsV1",
+                "providerDispatch"
+            ]),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_fixture_service_hello(
+        service: &mut UnixStream,
+        deadline: Instant,
+        service_session_byte: u8,
+        capabilities: Value,
+    ) -> (String, u64, String) {
         let hello = read_wallet_payload(service, deadline).unwrap();
         let hello = serde_json::from_slice::<Value>(&hello).unwrap();
         assert_eq!(hello["frameType"], "hello");
@@ -3962,16 +3994,7 @@ mod tests {
                 "hostSessionId": host_session,
                 "serviceSessionId": service_session,
                 "restartGeneration": restart_generation,
-                "capabilities": [
-                    "canonicalFraming",
-                    "restartIsolation",
-                    "opaqueAuthorityRegistry",
-                    "persistentPermissions",
-                    "structuredApprovals",
-                    "typedEvents",
-                    "walletOperations",
-                    "providerDispatch"
-                ],
+                "capabilities": capabilities,
                 "limits": {
                     "outerFrameBytes": 1_048_576,
                     "providerRequestBytes": 65_536,
@@ -4246,6 +4269,66 @@ mod tests {
                 | io::ErrorKind::ConnectionReset
                 | io::ErrorKind::ConnectionAborted
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hns_read_operations_v1_is_exactly_the_six_closed_requests() {
+        let account = [9_u8; 16];
+        let requests = [
+            WalletReadOnlyRequest::Status,
+            WalletReadOnlyRequest::ListAccounts,
+            WalletReadOnlyRequest::Balance {
+                module: WalletReadOnlyModule::Handshake,
+                account,
+            },
+            WalletReadOnlyRequest::ReceiveTarget {
+                module: WalletReadOnlyModule::Handshake,
+                account,
+            },
+            WalletReadOnlyRequest::TransactionHistory {
+                module: WalletReadOnlyModule::Handshake,
+                account,
+            },
+            WalletReadOnlyRequest::ModuleStatus {
+                module: WalletReadOnlyModule::Handshake,
+            },
+        ];
+        let operation_names = requests
+            .into_iter()
+            .map(|request| {
+                let frozen_name = match request {
+                    WalletReadOnlyRequest::Status => "status",
+                    WalletReadOnlyRequest::ListAccounts => "listAccounts",
+                    WalletReadOnlyRequest::Balance { .. } => "balance",
+                    WalletReadOnlyRequest::ReceiveTarget { .. } => "receiveTarget",
+                    WalletReadOnlyRequest::TransactionHistory { .. } => "transactionHistory",
+                    WalletReadOnlyRequest::ModuleStatus { .. } => "moduleStatus",
+                };
+                assert_eq!(
+                    serde_json::to_value(request).unwrap()["operation"],
+                    frozen_name
+                );
+                frozen_name
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            operation_names,
+            [
+                "status",
+                "listAccounts",
+                "balance",
+                "receiveTarget",
+                "transactionHistory",
+                "moduleStatus"
+            ]
+        );
+        assert_eq!(operation_names.len(), 6);
+        assert!(
+            !operation_names
+                .iter()
+                .any(|operation| operation.contains("workflow"))
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -5015,6 +5098,90 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn signed_ceiling_with_both_markers_rejects_hello_without_hns_read_v1() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            write_fixture_service_hello(
+                &mut service,
+                Instant::now() + Duration::from_secs(2),
+                24,
+                json!([
+                    "canonicalFraming",
+                    "restartIsolation",
+                    "opaqueAuthorityRegistry",
+                    "persistentPermissions",
+                    "structuredApprovals",
+                    "typedEvents",
+                    "walletOperations",
+                    "providerDispatch"
+                ]),
+            );
+        });
+        let reader = host.try_clone().unwrap();
+        let admitted_capabilities = WALLET_READ_SESSION_ALLOWED_CAPABILITIES
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            admitted_capabilities.contains(&NegotiatedWalletServiceCapability::WalletOperations)
+        );
+        assert!(
+            admitted_capabilities.contains(&NegotiatedWalletServiceCapability::HnsReadOperationsV1)
+        );
+        let error = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            admitted_capabilities,
+            24,
+            Duration::from_secs(2),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        task.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_wallet_read_requires_both_operation_capability_markers() {
+        let make_controller = |capabilities| {
+            let (host, peer) = UnixStream::pair().unwrap();
+            drop(peer);
+            let reader = host.try_clone().unwrap();
+            WalletServiceController {
+                reader,
+                writer: host,
+                process: None,
+                timeout: Duration::from_secs(1),
+                host_session_id: URL_SAFE_NO_PAD.encode([25_u8; 32]),
+                service_session_id: URL_SAFE_NO_PAD.encode([26_u8; 32]),
+                restart_generation: 1,
+                next_host_sequence: 1,
+                next_service_sequence: 1,
+                capabilities,
+                selected_hns_account: None,
+                poisoned: false,
+            }
+        };
+        for missing in [
+            NegotiatedWalletServiceCapability::WalletOperations,
+            NegotiatedWalletServiceCapability::HnsReadOperationsV1,
+        ] {
+            let mut capabilities = WALLET_READ_SESSION_REQUIRED_CAPABILITIES
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            assert!(capabilities.remove(&missing));
+            let mut controller = make_controller(capabilities);
+            assert_eq!(
+                controller.read_status().unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn malformed_service_hello_poisons_the_controller() {
         let (host, mut service) = UnixStream::pair().unwrap();
         set_nonblocking_fd(service.as_raw_fd()).unwrap();
@@ -5064,7 +5231,8 @@ mod tests {
                         "opaqueAuthorityRegistry",
                         "structuredApprovals",
                         "typedEvents",
-                        "walletOperations"
+                        "walletOperations",
+                        "hnsReadOperationsV1"
                     ],
                     "limits": {
                         "outerFrameBytes": 1_048_576,
@@ -5201,6 +5369,42 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             wallet_read_session_capability_ceiling(&without_wallet_reads)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn manifest_ceiling_rejects_coarse_wallet_operations_without_hns_read_v1() {
+        let mut admitted = REQUIRED_BASE_CAPABILITIES
+            .iter()
+            .map(|capability| {
+                NegotiatedWalletServiceCapability::from_wire_name(capability).unwrap()
+            })
+            .collect::<BTreeSet<_>>();
+        admitted.insert(NegotiatedWalletServiceCapability::WalletOperations);
+        assert_eq!(
+            wallet_read_session_capability_ceiling(&admitted)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn manifest_ceiling_rejects_hns_read_v1_without_coarse_wallet_operations() {
+        let mut admitted = REQUIRED_BASE_CAPABILITIES
+            .iter()
+            .map(|capability| {
+                NegotiatedWalletServiceCapability::from_wire_name(capability).unwrap()
+            })
+            .collect::<BTreeSet<_>>();
+        admitted.insert(NegotiatedWalletServiceCapability::HnsReadOperationsV1);
+        assert_eq!(
+            wallet_read_session_capability_ceiling(&admitted)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::PermissionDenied

@@ -200,7 +200,9 @@ malformed output, or drop. Its private read surface includes wallet status,
 singleton HNS-account selection, balance, receive target, transaction history,
 and exact-ready module status. Module and account selectors are fixed by the
 controller, responses are HNS-only and bounded, and separately synchronized
-value calls are not represented as one coherent snapshot.
+value calls are not represented as one coherent snapshot. The additive private
+`hnsReadOperationsV1` capability freezes exactly those six operations; it does
+not include a workflow-status operation.
 
 The dormant Linux native API composes admitted launch and negotiation only for
 one explicitly configured, pre-existing wallet database. Its typed
@@ -211,20 +213,23 @@ hello, and around each request. The sealed executable receives only
 `--database <exact-configured-path>`. After hello and around nonpoisoning reads,
 the host also requires the live child's descriptor table to contain the
 retained database inode, rejecting a pathname replace/restore launch race. The
-manifest-derived read-session ceiling requires `walletOperations` and the five
-ABI foundations, tolerates only the persistent-permission/provider-dispatch
-scaffolding of the standalone service, and excludes value and
-browser-integration capabilities. The request type has no corresponding
-provider, approval, unlock, lock, or mutation operation.
+manifest-derived read-session ceiling requires both `walletOperations` and
+`hnsReadOperationsV1` plus the five ABI foundations, tolerates only the
+persistent-permission/provider-dispatch scaffolding of the standalone service,
+and excludes value and browser-integration capabilities. The runtime hello and
+every request require both operation markers. The request type has no
+corresponding workflow, provider, approval, unlock, lock, or mutation operation.
 
-The checked-in wallet-service executable does not yet satisfy this whole read
-surface: it starts the locked persistent-control runtime, which supports status
-and control operations but not the account/balance/receive/history/module set.
+The checked-in wallet-service executable does not advertise
+`hnsReadOperationsV1` and therefore cannot enter a browser read session: it
+starts the locked persistent-control runtime, which supports status and control
+operations but not the account/balance/receive/history/module set.
 The synchronized HNS runtime requires trusted account and authenticated
 loopback-node configuration, while this browser enum deliberately has no unlock
-secret. Therefore `walletOperations` negotiation is not treated as
-operation-level qualification, and there is not yet a successful exact-service
-sealed-launch/read fixture.
+secret. Broad `walletOperations` negotiation alone is rejected, and there is
+not yet a successful exact-service sealed-launch/read fixture. A future signed
+manifest and matching runtime hello must both carry the exact marker; adding it
+changes the signed release bytes and does not by itself prove correct behavior.
 
 One private lifecycle slot assigns nonzero monotonic restart generations,
 synchronously kills and waits for an older child before replacement, consumes
@@ -286,7 +291,8 @@ The Chromium product is still not end-to-end wallet complete:
 - no reviewed native-to-public approval projection adapter is joined; and
 - the checked-in persistent-control subprocess advertises the five base
   capabilities plus persistent permissions, wallet operations, and provider
-  dispatch. Those are private negotiated service capabilities; they do not
+  dispatch, but not `hnsReadOperationsV1`, so browser read-session admission
+  fails closed. Those are private negotiated service capabilities; they do not
   supply browser authority or make the public provider available. It does not
   advertise browser integration or value movement.
 

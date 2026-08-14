@@ -193,7 +193,9 @@ change.
 - A dormant native-only Linux composition now joins signed-artifact launch,
   one explicit retained owner-private database identity, exact
   `--database <path>` arguments, a manifest-derived non-value capability
-  ceiling, ABI negotiation, and a monotonic kill-and-wait generation slot.
+  ceiling requiring both `walletOperations` and the exact-six-operation
+  `hnsReadOperationsV1` marker, ABI negotiation, and a monotonic kill-and-wait
+  generation slot.
   Database/path identity is rechecked around launch, negotiation, and every
   read, and the live child must retain that exact database inode. Poisoned
   reads remove their killed/reaped generation. No extension request, product
@@ -201,8 +203,10 @@ change.
   the session; all public gates stay false.
 - Exact launched-service reads are not yet demonstrated. The checked-in wallet
   executable still selects its locked control runtime; the HNS read runtime
-  needs trusted unlock/account/authenticated-node inputs, and broad
-  `walletOperations` negotiation does not qualify individual methods.
+  needs trusted unlock/account/authenticated-node inputs, and it does not
+  advertise `hnsReadOperationsV1`. Broad `walletOperations` alone now fails
+  read-session admission. The exact marker excludes workflow and value
+  operations and still requires a positive interoperability fixture.
 
 Passing portable source gates is not a substitute for those release gates.
 

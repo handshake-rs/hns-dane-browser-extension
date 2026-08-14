@@ -91,6 +91,11 @@ after all of the following are reviewed from immutable release evidence:
    self-contained service binary or a pinned, audited dynamic-loader and
    shared-library closure; sealing the main executable does not seal those
    runtime dependencies.
+   A browser read-service candidate must include both `walletOperations` and
+   `hnsReadOperationsV1` in the signed manifest and echo both in its runtime
+   hello. The latter freezes exactly status, list-accounts, HNS balance,
+   receive-target, transaction-history, and module-status reads; workflow and
+   value operations are outside it.
 3. The signer root is added only to the verifier-owned production table with a
    bounded release-line sequence interval. The exact manifest/artifact release
    is separately pinned, and the compiled release-line floor is advanced
@@ -100,9 +105,10 @@ after all of the following are reviewed from immutable release evidence:
    complete ABI-directory replacement, concurrent sequence admission,
    path/root replacement, cached expiry/clock rollback, sealed execution,
    external database alias/replacement, replace/restore child-descriptor
-   attestation, exact service arguments, stale generations, and negotiation or
-   poisoned-read kill-and-wait. The complete repository gate and Linux target
-   qualification then pass at the exact browser commit.
+   attestation, exact service arguments, stale generations, dual-marker
+   manifest/hello/request admission, the frozen six-operation surface, and
+   negotiation or poisoned-read kill-and-wait. The complete repository gate and
+   Linux target qualification then pass at the exact browser commit.
 
 The focused verifier filter passed at exact source
 `a39f8759c0161b5e49cb93c0c5aea1f0298e3108`: 17 passed, 0 failed, and
@@ -127,10 +133,12 @@ installed-browser testing, or wallet product qualification and does not
 authorize populating the production trust-root, release-pin, or floor tables.
 It also does not prove exact wallet-service interoperability: the current
 checked-in executable selects a locked control runtime, not the synchronized
-HNS read runtime. Release requires an exact positive sealed-launch/read fixture,
-a trusted unlock/account/authenticated-node configuration design, explicit
-method qualification beyond coarse `walletOperations`, and evidence that the
-qualified artifact is single-process and leaves no database-holding descendant.
+HNS read runtime, and does not advertise `hnsReadOperationsV1`; broad
+`walletOperations` alone fails browser read-session admission. Release requires
+a newly signed and exactly pinned marker-bearing manifest, a matching hello, an
+exact positive sealed-launch/read fixture, a trusted unlock/account/
+authenticated-node configuration design, and evidence that the qualified
+artifact is single-process and leaves no database-holding descendant.
 
 ## Setup application packages
 

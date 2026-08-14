@@ -336,7 +336,8 @@ surface covers wallet status, one exact HNS account admitted by
 `listAccounts`, and HNS balance, receive target, transaction history, and
 module status. The controller supplies no caller-selected account or module,
 and each value call has only its own synchronization authority rather than a
-shared snapshot across calls.
+shared snapshot across calls. The additive private `hnsReadOperationsV1`
+marker freezes exactly those six operations and excludes workflow status.
 
 A dormant Linux-only native composition now joins that controller to admitted
 artifact launch around one typed, explicitly supplied, pre-existing wallet
@@ -358,24 +359,27 @@ hello, prove exclusive descriptor use, or turn same-UID filesystem tampering
 into a supported isolation boundary.
 
 The manifest-derived negotiation ceiling requires the five foundation
-capabilities plus `walletOperations`, admits only the persistent-permission and
-provider-dispatch scaffolding currently reported by the standalone persistent
-service, and excludes `valueMovement` and `browserIntegration`. The controller
-request enum itself remains a closed wallet-read allowlist and has no provider,
-unlock, lock, approval, or mutation variant. A generation-owning slot kills and
-waits for the prior child before restart, never reuses a failed generation, and
-does not let a stale invalidation stop a newer session. Path change, malformed
+capabilities plus both `walletOperations` and `hnsReadOperationsV1`, admits only
+the persistent-permission and provider-dispatch scaffolding currently reported
+by the standalone persistent service, and excludes `valueMovement` and
+`browserIntegration`. The runtime hello and every closed request require both
+operation markers. The request enum itself has no workflow, provider, unlock,
+lock, approval, or mutation variant. A generation-owning slot kills and waits
+for the prior child before restart, never reuses a failed generation, and does
+not let a stale invalidation stop a newer session. Path change, malformed
 hello/frame, timeout, EOF, or drop poisons and reaps the child; a poisoned read
 also removes that generation from the active lifecycle slot.
 
 The checked-in wallet-service executable currently opens the database into its
 locked control runtime. That runtime can return status but does not provide the
-account/balance/receive/history/module read set. The synchronized HNS runtime
-also needs trusted account and authenticated loopback-node configuration, and
-the browser's closed read enum intentionally supplies no unlock secret. Thus
-`walletOperations` is only a coarse negotiation capability, not proof of exact
-method support. A positive sealed launch through the exact service, trusted
-unlock/configuration join, operation-level release qualification, and a
+account/balance/receive/history/module read set and does not advertise
+`hnsReadOperationsV1`, so the browser rejects read-session admission. The
+synchronized HNS runtime also needs trusted account and authenticated
+loopback-node configuration, and the browser's closed read enum intentionally
+supplies no unlock secret. Broad `walletOperations` is therefore insufficient.
+A future signed manifest and matching hello must both carry the exact marker;
+the changed manifest must be signed and exactly release-qualified. A positive
+sealed launch through that service, trusted unlock/configuration join, and a
 single-process/no-inherited-descendant invariant remain required before product
 integration.
 
