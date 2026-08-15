@@ -205,16 +205,44 @@ misrepresent separately synchronized value calls as one coherent snapshot.
 The additive private `hnsReadOperationsV1` capability freezes exactly those
 six operations; it does not include a workflow-status operation.
 
+`hnsWalletAuthorityContextV1` is an additive native-only operation outside that
+frozen enum; it is not a seventh HNS read. It requires the signed artifact and
+runtime hello to carry the marker plus a trusted bootstrap source supplying
+canonical `NetworkKind`/network magic, a nonzero opaque wallet-storage
+namespace, an exact nonzero `u64` lease generation, and an ongoing broker guard
+for that retained database. The response must bind the same network, magic,
+namespace, generation, active wallet, selected HNS account, nonzero wallet and
+account authority revisions, persistent-wallet confirmation, and a ready,
+nonrecovering, nonretiring lifecycle.
+
+The guard remains held while the host acquires that evidence, lends one
+nonclone/nonserializable/redacted `WalletHnsAuthorityContext` to a synchronous
+native callback, re-reads and exactly compares the wallet status, account,
+revisions, and lifecycle, and finally revalidates the database path and live
+child inode. A changed binding, lost lease, skipped or repeated guard callback,
+or dependent-operation error poisons and synchronously kills/reaps the
+generation. Integers remain exact Rust/JSON `u64` values, including values
+above `2^53`; they never pass through extension JavaScript.
+
+The dependent callback is contractually read-only. This check-after-use guard
+can detect authority loss at its release boundary, but it cannot roll back an
+external side effect completed before a late failure. Signing, value movement,
+and wallet mutation therefore require a separate precommit/commit authority
+protocol and cannot use this borrowed read authority.
+
 The dormant Linux native API composes admitted launch and negotiation only for
 one explicitly configured, pre-existing wallet database. Every restart
 generation must first consume one private `WalletBootstrapLease` from its
 source. That launch-authorization type owns the retained database configuration
-and one opaque, read-only, close-on-exec pipe end. The browser neither reads nor
-parses the packet. Linux launch installs a collision-safe copy only at child
-descriptor 3, keeps the original close-on-exec, and moves the sealed executable
-descriptor if necessary. Standard input and output remain exclusively ABI-v2
-framing, the child argv remains exactly
-`--database <exact-configured-path>`, and the environment remains empty.
+and one opaque, read-only, close-on-exec pipe end. It also owns the trusted
+network/namespace lease claim and corresponding broker currentness guard; the
+source must derive those from the same wallet-owned bootstrap authority as the
+opaque packet. The browser neither reads nor parses the packet. Linux launch
+installs a collision-safe copy only at child descriptor 3, keeps the original
+close-on-exec, and moves the sealed executable descriptor if necessary.
+Standard input and output remain exclusively ABI-v2 framing, the child argv
+remains exactly `--database <exact-configured-path>`, and the environment
+remains empty.
 
 The typed database configuration retains an absolute canonical path plus
 owner-private parent/file handles, rejects symlinks, aliases, shared
@@ -226,20 +254,23 @@ replace/restore launch race. The manifest-derived read-session ceiling requires
 both `walletOperations` and `hnsReadOperationsV1` plus the five ABI foundations,
 tolerates only the persistent-permission/provider-dispatch scaffolding of the
 standalone service, and excludes value and browser-integration capabilities.
-The runtime hello and every request require both operation markers. The request
-type has no corresponding workflow, provider, approval, unlock, lock, or
-mutation operation.
+The runtime hello and every six-operation read require both operation markers.
+Authority use additionally requires `hnsWalletAuthorityContextV1` in the signed
+ceiling and runtime hello. Its separate request type has no workflow, provider,
+approval, unlock, lock, or mutation operation.
 
-The checked-in wallet-service executable does not advertise
-`hnsReadOperationsV1` and therefore cannot enter a browser read session: it
-starts the locked persistent-control runtime, which supports status and control
-operations but not the account/balance/receive/history/module set.
+The checked-in wallet-service executable advertises neither
+`hnsReadOperationsV1` nor `hnsWalletAuthorityContextV1` and therefore cannot
+enter this browser authority path: it starts the locked persistent-control
+runtime, which supports status and control operations but not the
+account/balance/receive/history/module set.
 The synchronized HNS runtime requires trusted account and authenticated
 loopback-node configuration, while this browser enum deliberately has no unlock
-secret. Broad `walletOperations` negotiation alone is rejected, and there is
-not yet a successful exact-service sealed-launch/read fixture. A future signed
-manifest and matching runtime hello must both carry the exact marker; adding it
-changes the signed release bytes and does not by itself prove correct behavior.
+secret. Broad `walletOperations` negotiation alone is rejected. The sealed
+test fixture demonstrates the browser boundary, not exact released-service
+interoperability. A future signed manifest and matching runtime hello must
+carry both exact markers; adding them changes the signed release bytes and does
+not by itself prove correct behavior.
 
 One private lifecycle slot assigns nonzero monotonic restart generations,
 synchronously kills and waits for an older child before replacement, consumes
@@ -252,12 +283,15 @@ session. The production bootstrap source is deliberately unavailable, and no
 production path invokes it while verifier-owned trust, qualification, and floor
 tables remain empty.
 
-This first `WalletBootstrapLease` is single-use launch authorization only. Its
-consumption and descriptor lifetime do not provide ongoing broker revocation,
-wallet-database exclusivity, migration exclusion, or an independently renewable
-database lease. Those controls require a later wallet-owned protocol and
-lifecycle design; the immediate-child inode checks retain their narrower
-detection-only meaning.
+`WalletBootstrapLease` remains single-use launch authorization, but now also
+transfers an ongoing session-owned namespace guard. That guard, not descriptor
+lifetime or a revision reread, must provide currentness/exclusion through every
+dependent use and final revalidation. This repository deliberately has no
+production implementation of that guard: `UnavailableWalletBootstrapSource`
+returns no lease. Fixture guards are test-only and do not claim wallet-wide
+exclusivity. Immediate-child inode checks retain their narrower detection-only
+meaning; release qualification must prove the real broker's namespace scope,
+revocation, migration exclusion, renewal/crash behavior, and lease-loss fence.
 
 The descriptor check is bounded to the immediate child's base database inode.
 It detects a wrong open after hello but cannot undo an earlier open/migration,
@@ -306,10 +340,14 @@ The Chromium product is still not end-to-end wallet complete:
   production-reachable, and macOS/Windows equivalents do not exist;
 - no released browser-engine opaque-authority adapter is consumable by this
   native host;
+- no reviewed production wallet namespace broker supplies the nonzero
+  network-bound lease and held currentness guard required by
+  `hnsWalletAuthorityContextV1`;
 - no reviewed native-to-public approval projection adapter is joined; and
 - the checked-in persistent-control subprocess advertises the five base
   capabilities plus persistent permissions, wallet operations, and provider
-  dispatch, but not `hnsReadOperationsV1`, so browser read-session admission
+  dispatch, but neither `hnsReadOperationsV1` nor
+  `hnsWalletAuthorityContextV1`, so browser read-session/authority admission
   fails closed. Those are private negotiated service capabilities; they do not
   supply browser authority or make the public provider available. It does not
   advertise browser integration or value movement.

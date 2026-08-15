@@ -149,15 +149,24 @@ dormant native-only composition for an explicitly trusted, pre-existing private
 wallet database: it revalidates retained path identity, passes only the exact
 `--database` argument pair, requires the live child to hold the retained
 database inode, applies a non-value capability ceiling, negotiates the private
-transport, and owns kill-and-wait restart generations. No extension command or
-product configuration can construct that session.
+transport, and owns kill-and-wait restart generations. Its additive
+`hnsWalletAuthorityContextV1` path additionally requires canonical Handshake
+network/magic, a nonzero broker-issued namespace and exact `u64` lease
+generation, and a session-held currentness guard. Under that guard it binds the
+exact active wallet, HNS account, authority revisions, and lifecycle; exposes
+only a temporary native borrow; and finally revalidates every binding before
+guard release. The authority is nonclone, nonserializable, and redacted. No
+extension command or product configuration can construct that session, and the
+production lease source returns no lease.
 
 This source composition is not an interoperability claim for the current
 checked-in wallet executable. That executable still selects its locked
 control-only runtime; synchronized HNS reads need a separately trusted unlock,
-exact account, and authenticated node configuration. An exact launched-service
-read fixture and single-process/no-descendant qualification remain release
-requirements.
+exact account, and authenticated node configuration, and it advertises neither
+the exact HNS-read marker nor the new authority-context marker. The sealed test
+fixture proves the browser boundary only; exact released-service,
+single-process/no-descendant, real broker-lease, and installed-product
+qualification remain release requirements.
 
 The provider code validates the approval-schema-v3 closed 12-variant typed
 approval union. Permissions summaries require the minimized `hnsNames` list;

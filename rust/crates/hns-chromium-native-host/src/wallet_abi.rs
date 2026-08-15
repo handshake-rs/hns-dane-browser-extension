@@ -12,6 +12,8 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 #[cfg(target_os = "linux")]
 use getrandom::fill as fill_random;
+#[cfg(target_os = "linux")]
+use hns_chromium_platform_runtime::NetworkKind;
 #[cfg(unix)]
 use ring::signature::{self, UnparsedPublicKey};
 #[cfg(unix)]
@@ -47,6 +49,8 @@ pub(crate) const WALLET_ABI_VERSION: u16 = 2;
 pub(crate) const WALLET_SERVICE_PROTOCOL_VERSION: u16 = 2;
 pub(crate) const WALLET_PROVIDER_SCHEMA_VERSION: u16 = 1;
 pub(crate) const WALLET_ABI_MAX_FRAME_BYTES: u32 = 1_048_576;
+/// No production HRM/HNSA-to-wallet consumer is qualified in this release.
+pub(crate) const HRM_HNSA_WALLET_CONSUMER_RELEASE_QUALIFIED: bool = false;
 #[cfg(target_os = "linux")]
 const WALLET_SERVICE_SESSION_BYTES: usize = 32;
 #[cfg(target_os = "linux")]
@@ -104,7 +108,7 @@ const REQUIRED_BASE_CAPABILITIES: [&str; 5] = [
     "typedEvents",
 ];
 #[cfg(unix)]
-const SERVICE_CAPABILITIES: [&str; 11] = [
+const SERVICE_CAPABILITIES: [&str; 12] = [
     "canonicalFraming",
     "restartIsolation",
     "opaqueAuthorityRegistry",
@@ -113,6 +117,7 @@ const SERVICE_CAPABILITIES: [&str; 11] = [
     "typedEvents",
     "walletOperations",
     "hnsReadOperationsV1",
+    "hnsWalletAuthorityContextV1",
     "providerDispatch",
     "valueMovement",
     "browserIntegration",
@@ -285,6 +290,7 @@ enum NegotiatedWalletServiceCapability {
     TypedEvents,
     WalletOperations,
     HnsReadOperationsV1,
+    HnsWalletAuthorityContextV1,
     ProviderDispatch,
     ValueMovement,
     BrowserIntegration,
@@ -307,7 +313,7 @@ const WALLET_READ_SESSION_REQUIRED_CAPABILITIES: [NegotiatedWalletServiceCapabil
 // They may pass hello validation, but the closed request enum below cannot
 // express provider, permission, approval, unlock, lock, or mutation calls.
 // HnsReadOperationsV1 freezes the enum's exact six-operation non-workflow set.
-const WALLET_READ_SESSION_ALLOWED_CAPABILITIES: [NegotiatedWalletServiceCapability; 9] = [
+const WALLET_READ_SESSION_ALLOWED_CAPABILITIES: [NegotiatedWalletServiceCapability; 10] = [
     NegotiatedWalletServiceCapability::CanonicalFraming,
     NegotiatedWalletServiceCapability::RestartIsolation,
     NegotiatedWalletServiceCapability::OpaqueAuthorityRegistry,
@@ -316,6 +322,7 @@ const WALLET_READ_SESSION_ALLOWED_CAPABILITIES: [NegotiatedWalletServiceCapabili
     NegotiatedWalletServiceCapability::TypedEvents,
     NegotiatedWalletServiceCapability::WalletOperations,
     NegotiatedWalletServiceCapability::HnsReadOperationsV1,
+    NegotiatedWalletServiceCapability::HnsWalletAuthorityContextV1,
     NegotiatedWalletServiceCapability::ProviderDispatch,
 ];
 
@@ -331,6 +338,7 @@ impl NegotiatedWalletServiceCapability {
             "typedEvents" => Some(Self::TypedEvents),
             "walletOperations" => Some(Self::WalletOperations),
             "hnsReadOperationsV1" => Some(Self::HnsReadOperationsV1),
+            "hnsWalletAuthorityContextV1" => Some(Self::HnsWalletAuthorityContextV1),
             "providerDispatch" => Some(Self::ProviderDispatch),
             "valueMovement" => Some(Self::ValueMovement),
             "browserIntegration" => Some(Self::BrowserIntegration),
@@ -371,6 +379,165 @@ fn wallet_read_session_capability_ceiling(
         ));
     }
     Ok(ceiling)
+}
+
+/// Canonical Handshake network identity carried by the private wallet wire.
+///
+/// This is an encoding of the native host's already-selected `NetworkKind`,
+/// not an authority supplied by the wallet service. Every use is checked
+/// against the canonical engine network name and magic before it can become a
+/// wallet authority context.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum WalletHandshakeNetwork {
+    Mainnet,
+    Testnet,
+    Regtest,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletHandshakeNetwork {
+    const fn from_kind(network: NetworkKind) -> Self {
+        match network {
+            NetworkKind::Mainnet => Self::Mainnet,
+            NetworkKind::Testnet => Self::Testnet,
+            NetworkKind::Regtest => Self::Regtest,
+        }
+    }
+
+    fn matches_kind_and_magic(self, network: NetworkKind, network_magic: u32) -> bool {
+        self == Self::from_kind(network) && network.network().magic == network_magic
+    }
+}
+
+/// Exact native-only wallet namespace lease claim selected by a trusted
+/// bootstrap source. The network magic comes only from canonical engine
+/// parameters, and the generation is never accepted from the service alone.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct WalletNamespaceLeaseClaim {
+    network: NetworkKind,
+    network_magic: u32,
+    namespace_id: [u8; 16],
+    generation: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletNamespaceLeaseClaim {
+    #[allow(dead_code)]
+    pub(crate) fn new(
+        network: NetworkKind,
+        namespace_id: [u8; 16],
+        generation: u64,
+    ) -> io::Result<Self> {
+        if namespace_id.iter().all(|byte| *byte == 0) || generation == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "wallet namespace lease identity and generation must be nonzero",
+            ));
+        }
+        Ok(Self {
+            network,
+            network_magic: network.network().magic,
+            namespace_id,
+            generation,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl fmt::Debug for WalletNamespaceLeaseClaim {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WalletNamespaceLeaseClaim")
+            .field("network", &"<bound>")
+            .field("network_magic", &"<bound>")
+            .field("namespace_id", &"<bound>")
+            .field("generation", &"<bound>")
+            .finish()
+    }
+}
+
+/// Broker-owned currentness guard for one wallet storage namespace.
+///
+/// Implementations must call `operation` synchronously at most once and only
+/// while the exact lease claim and bundled retained database namespace remain
+/// current. `true` means the claim was held both at callback entry and at its
+/// release boundary; loss or fence replacement during the callback must return
+/// `false`. Returning a revision or checking it once is not equivalent to
+/// holding this guard through use. Callbacks must stay read-only because an
+/// external side effect could escape before a failed release-boundary check.
+#[cfg(target_os = "linux")]
+pub(crate) trait WalletNamespaceLeaseGuard {
+    fn use_if_current(
+        &mut self,
+        claim: WalletNamespaceLeaseClaim,
+        operation: &mut dyn FnMut(),
+    ) -> bool;
+}
+
+#[cfg(target_os = "linux")]
+enum WalletNamespaceLeaseUseError {
+    GuardDenied,
+    Operation(io::Error),
+}
+
+/// Session-held, nonserializable namespace exclusion. A defensive wrapper
+/// prevents a malformed guard from invoking a dependent operation more than
+/// once or claiming success without invoking it.
+#[cfg(target_os = "linux")]
+pub(crate) struct WalletNamespaceLease {
+    claim: WalletNamespaceLeaseClaim,
+    guard: Box<dyn WalletNamespaceLeaseGuard>,
+}
+
+#[cfg(target_os = "linux")]
+impl WalletNamespaceLease {
+    #[allow(dead_code)]
+    pub(crate) fn new(
+        claim: WalletNamespaceLeaseClaim,
+        guard: Box<dyn WalletNamespaceLeaseGuard>,
+    ) -> Self {
+        Self { claim, guard }
+    }
+
+    fn use_if_current<T>(
+        &mut self,
+        operation: impl FnOnce(WalletNamespaceLeaseClaim) -> io::Result<T>,
+    ) -> Result<T, WalletNamespaceLeaseUseError> {
+        let mut operation = Some(operation);
+        let mut operation_result = None;
+        let mut callback_count = 0_u8;
+        let claim = self.claim;
+        let mut guarded_operation = || {
+            callback_count = callback_count.saturating_add(1);
+            let Some(operation) = operation.take() else {
+                return;
+            };
+            operation_result = Some(operation(claim));
+        };
+        let guard_succeeded = self.guard.use_if_current(claim, &mut guarded_operation);
+        if callback_count != 1 || !guard_succeeded {
+            return Err(WalletNamespaceLeaseUseError::GuardDenied);
+        }
+        match operation_result {
+            Some(Ok(value)) => Ok(value),
+            Some(Err(error)) => Err(WalletNamespaceLeaseUseError::Operation(error)),
+            None => Err(WalletNamespaceLeaseUseError::GuardDenied),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl fmt::Debug for WalletNamespaceLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WalletNamespaceLease")
+            .field("claim", &"<bound>")
+            .field("guard", &"<opaque currentness guard>")
+            .finish()
+    }
 }
 
 /// Retained identity for one explicitly configured, pre-existing wallet
@@ -524,6 +691,7 @@ impl TrustedWalletDatabaseConfiguration {
 pub(crate) struct WalletBootstrapLease {
     restart_generation: u64,
     database: TrustedWalletDatabaseConfiguration,
+    namespace_lease: WalletNamespaceLease,
     bootstrap_read: File,
 }
 
@@ -533,6 +701,7 @@ impl WalletBootstrapLease {
     pub(crate) fn new(
         restart_generation: u64,
         database: TrustedWalletDatabaseConfiguration,
+        namespace_lease: WalletNamespaceLease,
         bootstrap_read: File,
     ) -> io::Result<Self> {
         if restart_generation == 0 {
@@ -545,6 +714,7 @@ impl WalletBootstrapLease {
         Ok(Self {
             restart_generation,
             database,
+            namespace_lease,
             bootstrap_read,
         })
     }
@@ -552,14 +722,27 @@ impl WalletBootstrapLease {
     fn into_launch_parts(
         self,
         expected_restart_generation: u64,
-    ) -> io::Result<(TrustedWalletDatabaseConfiguration, File)> {
+        expected_network: NetworkKind,
+    ) -> io::Result<(
+        TrustedWalletDatabaseConfiguration,
+        WalletNamespaceLease,
+        File,
+    )> {
         if self.restart_generation != expected_restart_generation {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "wallet bootstrap lease restart generation mismatch",
             ));
         }
-        Ok((self.database, self.bootstrap_read))
+        if self.namespace_lease.claim.network != expected_network
+            || self.namespace_lease.claim.network_magic != expected_network.network().magic
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet bootstrap lease network mismatch",
+            ));
+        }
+        Ok((self.database, self.namespace_lease, self.bootstrap_read))
     }
 }
 
@@ -570,6 +753,7 @@ impl fmt::Debug for WalletBootstrapLease {
             .debug_struct("WalletBootstrapLease")
             .field("restart_generation", &"<bound>")
             .field("database", &"<retained identity>")
+            .field("namespace_lease", &"<opaque currentness guard>")
             .field("bootstrap", &"<opaque single-use descriptor>")
             .finish()
     }
@@ -581,8 +765,15 @@ impl fmt::Debug for WalletBootstrapLease {
 #[cfg(target_os = "linux")]
 pub(crate) trait WalletBootstrapSource {
     /// Transfers a fresh lease for exactly this restart generation. A source
-    /// must never reissue a lease consumed by an earlier generation.
-    fn take_lease(&mut self, restart_generation: u64) -> io::Result<Option<WalletBootstrapLease>>;
+    /// must never reissue a lease consumed by an earlier generation. Its
+    /// namespace ID and currentness guard must describe the exact retained
+    /// database configuration bundled in the returned lease, not merely a
+    /// process-wide or network-wide generation.
+    fn take_lease(
+        &mut self,
+        restart_generation: u64,
+        expected_network: NetworkKind,
+    ) -> io::Result<Option<WalletBootstrapLease>>;
 }
 
 #[cfg(target_os = "linux")]
@@ -592,7 +783,11 @@ pub(crate) struct UnavailableWalletBootstrapSource;
 
 #[cfg(target_os = "linux")]
 impl WalletBootstrapSource for UnavailableWalletBootstrapSource {
-    fn take_lease(&mut self, _restart_generation: u64) -> io::Result<Option<WalletBootstrapLease>> {
+    fn take_lease(
+        &mut self,
+        _restart_generation: u64,
+        _expected_network: NetworkKind,
+    ) -> io::Result<Option<WalletBootstrapLease>> {
         Ok(None)
     }
 }
@@ -729,7 +924,32 @@ struct WalletHostRequestEnvelope<'a> {
     rename_all_fields = "camelCase"
 )]
 enum WalletReadOnlyServiceRequest {
-    Wallet { request: WalletReadOnlyRequest },
+    Wallet {
+        request: WalletReadOnlyRequest,
+    },
+    WalletAuthority {
+        request: WalletAuthorityContextRequest,
+    },
+}
+
+/// Additive native-only authority operation. Keeping this request outside
+/// `WalletReadOnlyRequest` preserves the exact six-operation
+/// `hnsReadOperationsV1` contract byte-for-byte.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(
+    tag = "operation",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum WalletAuthorityContextRequest {
+    CurrentHnsContext {
+        network: WalletHandshakeNetwork,
+        network_magic: u32,
+        namespace_id: [u8; 16],
+        namespace_lease_generation: u64,
+        module: WalletReadOnlyModule,
+    },
 }
 
 #[cfg(target_os = "linux")]
@@ -795,8 +1015,84 @@ struct WalletServiceResponseEnvelope {
     deny_unknown_fields
 )]
 enum WalletReadOnlyServiceResponse {
-    Wallet { response: WalletReadOnlyResponse },
-    Failure { failure: WalletServiceFailure },
+    Wallet {
+        response: WalletReadOnlyResponse,
+    },
+    WalletAuthority {
+        context: WalletServiceHnsAuthorityContext,
+    },
+    Failure {
+        failure: WalletServiceFailure,
+    },
+}
+
+/// Service evidence joined to trusted browser and broker state before a
+/// native-only wallet authority can be used. This wire value is never itself
+/// an authority and is never exposed to extension or page JavaScript.
+#[cfg(target_os = "linux")]
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WalletServiceHnsAuthorityContext {
+    network: WalletHandshakeNetwork,
+    network_magic: u32,
+    namespace_id: [u8; 16],
+    namespace_lease_generation: u64,
+    active_wallet: [u8; 16],
+    account: [u8; 16],
+    wallet_authority_revision: u64,
+    account_authority_revision: u64,
+    locked: bool,
+    module: WalletReadOnlyModule,
+    persistent_wallet_confirmed: bool,
+    recovery_pending: bool,
+    retirement_pending: bool,
+    hns_reads_ready: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl fmt::Debug for WalletServiceHnsAuthorityContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WalletServiceHnsAuthorityContext")
+            .field("network", &"<bound>")
+            .field("network_magic", &"<bound>")
+            .field("namespace_id", &"<bound>")
+            .field("namespace_lease_generation", &"<bound>")
+            .field("active_wallet", &"<opaque>")
+            .field("account", &"<opaque>")
+            .field("wallet_authority_revision", &"<bound>")
+            .field("account_authority_revision", &"<bound>")
+            .field("lifecycle", &"<untrusted>")
+            .finish()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl WalletServiceHnsAuthorityContext {
+    fn validates_against(
+        &self,
+        claim: WalletNamespaceLeaseClaim,
+        active_wallet: [u8; 16],
+        account: [u8; 16],
+    ) -> bool {
+        self.network
+            .matches_kind_and_magic(claim.network, self.network_magic)
+            && self.network_magic == claim.network_magic
+            && self.namespace_id == claim.namespace_id
+            && self.namespace_lease_generation == claim.generation
+            && self.active_wallet.iter().any(|byte| *byte != 0)
+            && self.active_wallet == active_wallet
+            && self.account.iter().any(|byte| *byte != 0)
+            && self.account == account
+            && self.wallet_authority_revision != 0
+            && self.account_authority_revision != 0
+            && !self.locked
+            && self.module == WalletReadOnlyModule::Handshake
+            && self.persistent_wallet_confirmed
+            && !self.recovery_pending
+            && !self.retirement_pending
+            && self.hns_reads_ready
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1186,6 +1482,51 @@ pub(crate) struct WalletReadOnlyView {
     pub(crate) module_status: WalletReadOnlySyncStatus,
 }
 
+/// Nonserializable native authority assembled only while the trusted wallet
+/// namespace lease is held current. It binds canonical browser network state,
+/// the retained wallet database, service channel/restart identity, the active
+/// wallet/account and the service's nonzero authority revisions. Consumers
+/// receive only a temporary shared borrow inside the lease callback.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub(crate) struct WalletHnsAuthorityContext {
+    network: NetworkKind,
+    network_magic: u32,
+    namespace_id: [u8; 16],
+    namespace_lease_generation: u64,
+    database_device: u64,
+    database_inode: u64,
+    restart_generation: u64,
+    host_session_id: String,
+    service_session_id: String,
+    active_wallet: [u8; 16],
+    account: [u8; 16],
+    wallet_authority_revision: u64,
+    account_authority_revision: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl fmt::Debug for WalletHnsAuthorityContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WalletHnsAuthorityContext")
+            .field("network", &"<canonical>")
+            .field("network_magic", &"<canonical>")
+            .field("namespace_id", &"<bound>")
+            .field("namespace_lease_generation", &"<bound>")
+            .field("database_device", &"<bound>")
+            .field("database_inode", &"<bound>")
+            .field("restart_generation", &"<bound>")
+            .field("host_session_id", &"<opaque>")
+            .field("service_session_id", &"<opaque>")
+            .field("active_wallet", &"<opaque>")
+            .field("account", &"<opaque>")
+            .field("wallet_authority_revision", &"<bound>")
+            .field("account_authority_revision", &"<bound>")
+            .finish()
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn valid_wallet_public_string(value: &str, maximum: usize) -> bool {
     !value.is_empty()
@@ -1212,6 +1553,13 @@ enum WalletReadOnlyResponseKind {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WalletServiceResponseKind {
+    Wallet(WalletReadOnlyResponseKind),
+    WalletAuthority,
+}
+
+#[cfg(target_os = "linux")]
 impl WalletReadOnlyResponse {
     fn kind(&self) -> WalletReadOnlyResponseKind {
         match self {
@@ -1221,6 +1569,17 @@ impl WalletReadOnlyResponse {
             Self::ReceiveTarget { .. } => WalletReadOnlyResponseKind::ReceiveTarget,
             Self::TransactionHistory { .. } => WalletReadOnlyResponseKind::TransactionHistory,
             Self::ModuleStatus { .. } => WalletReadOnlyResponseKind::ModuleStatus,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl WalletReadOnlyServiceResponse {
+    fn kind(&self) -> Option<WalletServiceResponseKind> {
+        match self {
+            Self::Wallet { response } => Some(WalletServiceResponseKind::Wallet(response.kind())),
+            Self::WalletAuthority { .. } => Some(WalletServiceResponseKind::WalletAuthority),
+            Self::Failure { .. } => None,
         }
     }
 }
@@ -1312,6 +1671,7 @@ pub(crate) struct WalletServiceController<R: Read + AsRawFd, W: Write + AsRawFd>
     next_host_sequence: u64,
     next_service_sequence: u64,
     capabilities: BTreeSet<NegotiatedWalletServiceCapability>,
+    selected_active_wallet: Option<[u8; 16]>,
     selected_hns_account: Option<[u8; 16]>,
     poisoned: bool,
 }
@@ -1413,6 +1773,7 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
             next_host_sequence: 1,
             next_service_sequence: 1,
             capabilities: BTreeSet::new(),
+            selected_active_wallet: None,
             selected_hns_account: None,
             poisoned: false,
         };
@@ -1474,11 +1835,21 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
         if !status.validate() {
             return Err(self.protocol_error("wallet status response violates bounded HNS contract"));
         }
+        if let Some(active_wallet) = status.active_wallet {
+            if self
+                .selected_active_wallet
+                .is_some_and(|selected| selected != active_wallet)
+            {
+                return Err(self.protocol_error("wallet service changed its active wallet"));
+            }
+            self.selected_active_wallet = Some(active_wallet);
+        }
         if status.locked
             || !status
                 .enabled_modules
                 .contains(&WalletReadOnlyModule::Handshake)
         {
+            self.selected_active_wallet = None;
             self.selected_hns_account = None;
         }
         Ok(status)
@@ -1674,6 +2045,79 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
                 "wallet service did not negotiate the exact HNS read-operation contract",
             ));
         }
+        let response = self.service_request(
+            WalletReadOnlyServiceRequest::Wallet { request },
+            WalletServiceResponseKind::Wallet(expected_response),
+        )?;
+        let WalletReadOnlyServiceResponse::Wallet { response } = response else {
+            return Err(self.protocol_error("wallet response class changed after checking"));
+        };
+        Ok(response)
+    }
+
+    fn read_hns_authority_context(
+        &mut self,
+        claim: WalletNamespaceLeaseClaim,
+    ) -> io::Result<WalletServiceHnsAuthorityContext> {
+        if self.poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "wallet service controller is poisoned",
+            ));
+        }
+        if !self
+            .capabilities
+            .contains(&NegotiatedWalletServiceCapability::HnsWalletAuthorityContextV1)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet service did not negotiate the exact HNS authority-context contract",
+            ));
+        }
+        let active_wallet = self.selected_active_wallet.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet status must bind an active wallet before authority use",
+            )
+        })?;
+        let account = self.require_selected_hns_account()?;
+        if !WalletHandshakeNetwork::from_kind(claim.network)
+            .matches_kind_and_magic(claim.network, claim.network_magic)
+            || claim.namespace_id.iter().all(|byte| *byte == 0)
+            || claim.generation == 0
+        {
+            return Err(self.protocol_error("wallet namespace lease claim is malformed"));
+        }
+        let response = self.service_request(
+            WalletReadOnlyServiceRequest::WalletAuthority {
+                request: WalletAuthorityContextRequest::CurrentHnsContext {
+                    network: WalletHandshakeNetwork::from_kind(claim.network),
+                    network_magic: claim.network_magic,
+                    namespace_id: claim.namespace_id,
+                    namespace_lease_generation: claim.generation,
+                    module: WalletReadOnlyModule::Handshake,
+                },
+            },
+            WalletServiceResponseKind::WalletAuthority,
+        )?;
+        let WalletReadOnlyServiceResponse::WalletAuthority { context } = response else {
+            return Err(
+                self.protocol_error("wallet authority response class changed after checking")
+            );
+        };
+        if !context.validates_against(claim, active_wallet, account) {
+            return Err(
+                self.protocol_error("wallet HNS authority response violates exact context binding")
+            );
+        }
+        Ok(context)
+    }
+
+    fn service_request(
+        &mut self,
+        body: WalletReadOnlyServiceRequest,
+        expected_response: WalletServiceResponseKind,
+    ) -> io::Result<WalletReadOnlyServiceResponse> {
         let request_id = random_wallet_wire_id::<WALLET_SERVICE_REQUEST_ID_BYTES>()?;
         let host_sequence = self.next_host_sequence;
         let frame = WalletHostRequestFrame::Request {
@@ -1684,11 +2128,11 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
                 restart_generation: self.restart_generation,
                 channel_sequence: host_sequence,
                 request_id: &request_id,
-                body: WalletReadOnlyServiceRequest::Wallet { request },
+                body,
             },
         };
         let payload = serde_json::to_vec(&frame).map_err(|_| {
-            io::Error::new(io::ErrorKind::InvalidData, "wallet read encoding failed")
+            io::Error::new(io::ErrorKind::InvalidData, "wallet request encoding failed")
         })?;
         let response = self.exchange(&payload)?;
         let response = serde_json::from_slice::<WalletServiceResponseFrame>(&response)
@@ -1704,13 +2148,6 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
             return Err(self.protocol_error("wallet read response session or sequence mismatch"));
         }
         match envelope.body {
-            WalletReadOnlyServiceResponse::Wallet { response } => {
-                if response.kind() != expected_response {
-                    return Err(self.protocol_error("wallet response class does not match request"));
-                }
-                self.advance_sequences()?;
-                Ok(response)
-            }
             WalletReadOnlyServiceResponse::Failure { failure } => {
                 if !failure.validate() {
                     return Err(self.protocol_error("wallet service failure is malformed"));
@@ -1720,6 +2157,13 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> WalletServiceController<R, W> {
                 }
                 self.advance_sequences()?;
                 Err(io::Error::other(failure.code.operation_error_message()))
+            }
+            response => {
+                if response.kind() != Some(expected_response) {
+                    return Err(self.protocol_error("wallet response class does not match request"));
+                }
+                self.advance_sequences()?;
+                Ok(response)
             }
         }
     }
@@ -1801,6 +2245,7 @@ impl<R: Read + AsRawFd, W: Write + AsRawFd> Drop for WalletServiceController<R, 
 struct AdmittedWalletReadSession {
     controller: SpawnedWalletServiceController,
     database: TrustedWalletDatabaseConfiguration,
+    namespace_lease: WalletNamespaceLease,
     restart_generation: u64,
 }
 
@@ -1810,6 +2255,7 @@ impl AdmittedWalletReadSession {
     fn new(
         mut controller: SpawnedWalletServiceController,
         database: TrustedWalletDatabaseConfiguration,
+        namespace_lease: WalletNamespaceLease,
         restart_generation: u64,
     ) -> io::Result<Self> {
         let allowed_capabilities = WALLET_READ_SESSION_ALLOWED_CAPABILITIES
@@ -1835,6 +2281,7 @@ impl AdmittedWalletReadSession {
         Ok(Self {
             controller,
             database,
+            namespace_lease,
             restart_generation,
         })
     }
@@ -1843,21 +2290,161 @@ impl AdmittedWalletReadSession {
         &mut self,
         operation: impl FnOnce(&mut SpawnedWalletServiceController) -> io::Result<T>,
     ) -> io::Result<T> {
-        self.revalidate_database_boundary()?;
-        let result = operation(&mut self.controller);
-        if !self.controller.poisoned {
-            self.revalidate_database_boundary()?;
+        let (namespace_lease, database, controller) = (
+            &mut self.namespace_lease,
+            &self.database,
+            &mut self.controller,
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            namespace_lease.use_if_current(|_claim| {
+                Self::revalidate_database_boundary_parts(database, controller)?;
+                let result = operation(controller);
+                if !controller.poisoned {
+                    Self::revalidate_database_boundary_parts(database, controller)?;
+                }
+                result
+            })
+        }));
+        let result = match result {
+            Ok(result) => result,
+            Err(payload) => {
+                controller.poison();
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match result {
+            Ok(value) => Ok(value),
+            Err(WalletNamespaceLeaseUseError::Operation(error)) => Err(error),
+            Err(WalletNamespaceLeaseUseError::GuardDenied) => {
+                controller.poison();
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "wallet namespace lease is not current",
+                ))
+            }
         }
-        result
     }
 
     fn revalidate_database_boundary(&mut self) -> io::Result<()> {
-        if let Err(error) = self.database.revalidate() {
-            self.controller.poison();
+        Self::revalidate_database_boundary_parts(&self.database, &mut self.controller)
+    }
+
+    fn revalidate_database_boundary_parts(
+        database: &TrustedWalletDatabaseConfiguration,
+        controller: &mut SpawnedWalletServiceController,
+    ) -> io::Result<()> {
+        if let Err(error) = database.revalidate() {
+            controller.poison();
             return Err(error);
         }
-        self.controller
-            .attest_open_wallet_database(&self.database.database_metadata)
+        controller.attest_open_wallet_database(&database.database_metadata)
+    }
+
+    fn use_current_hns_authority<T>(
+        &mut self,
+        operation: impl for<'authority> FnOnce(&'authority WalletHnsAuthorityContext) -> io::Result<T>,
+    ) -> io::Result<T> {
+        if !self
+            .controller
+            .capabilities
+            .contains(&NegotiatedWalletServiceCapability::HnsWalletAuthorityContextV1)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "wallet authority context capability is unavailable",
+            ));
+        }
+        let (namespace_lease, database, controller) = (
+            &mut self.namespace_lease,
+            &self.database,
+            &mut self.controller,
+        );
+        let restart_generation = self.restart_generation;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            namespace_lease.use_if_current(|claim| {
+                use std::os::unix::fs::MetadataExt;
+
+                Self::revalidate_database_boundary_parts(database, controller)?;
+                let status = controller.read_status()?;
+                if status.locked
+                    || status.active_wallet.is_none()
+                    || status.enabled_modules() != [WalletReadOnlyModule::Handshake]
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "wallet HNS authority runtime is not unlocked and ready",
+                    ));
+                }
+                let active_wallet = status.active_wallet.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "wallet HNS authority runtime lost its active wallet",
+                    )
+                })?;
+                let account = controller.list_accounts()?;
+                let service_context = controller.read_hns_authority_context(claim)?;
+                Self::revalidate_database_boundary_parts(database, controller)?;
+                let authority = WalletHnsAuthorityContext {
+                    network: claim.network,
+                    network_magic: claim.network_magic,
+                    namespace_id: claim.namespace_id,
+                    namespace_lease_generation: claim.generation,
+                    database_device: database.database_metadata.dev(),
+                    database_inode: database.database_metadata.ino(),
+                    restart_generation,
+                    host_session_id: controller.host_session_id.clone(),
+                    service_session_id: controller.service_session_id.clone(),
+                    active_wallet,
+                    account: account.account_id,
+                    wallet_authority_revision: service_context.wallet_authority_revision,
+                    account_authority_revision: service_context.account_authority_revision,
+                };
+                let consumer_result = operation(&authority);
+                if controller.poisoned {
+                    return consumer_result;
+                }
+                let final_status = controller.read_status()?;
+                if final_status != status {
+                    return Err(
+                        controller.protocol_error("wallet status changed during HNS authority use")
+                    );
+                }
+                let final_account = controller.list_accounts()?;
+                if final_account != account {
+                    return Err(controller
+                        .protocol_error("wallet account changed during HNS authority use"));
+                }
+                let final_service_context = controller.read_hns_authority_context(claim)?;
+                if final_service_context != service_context {
+                    return Err(controller.protocol_error(
+                        "wallet authority revision or lifecycle changed during use",
+                    ));
+                }
+                Self::revalidate_database_boundary_parts(database, controller)?;
+                consumer_result
+            })
+        }));
+        let result = match result {
+            Ok(result) => result,
+            Err(payload) => {
+                controller.poison();
+                std::panic::resume_unwind(payload);
+            }
+        };
+        match result {
+            Ok(value) => Ok(value),
+            Err(WalletNamespaceLeaseUseError::GuardDenied) => {
+                controller.poison();
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "wallet namespace lease was lost during authority use",
+                ))
+            }
+            Err(WalletNamespaceLeaseUseError::Operation(error)) => {
+                controller.poison();
+                Err(error)
+            }
+        }
     }
 
     fn is_poisoned(&self) -> bool {
@@ -1916,6 +2503,7 @@ impl WalletReadSessionLifecycle {
         &mut self,
         discovery: &mut WalletAbiDiscovery,
         bootstrap_source: &mut dyn WalletBootstrapSource,
+        expected_network: NetworkKind,
         timeout: Duration,
     ) -> io::Result<u64> {
         let restart_generation = self.next_restart_generation;
@@ -1926,15 +2514,19 @@ impl WalletReadSessionLifecycle {
         // process. The allocated generation remains consumed if startup fails.
         self.active = None;
         let lease = bootstrap_source
-            .take_lease(restart_generation)?
+            .take_lease(restart_generation, expected_network)?
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotConnected,
                     "trusted wallet bootstrap lease is unavailable",
                 )
             })?;
-        let session =
-            discovery.compose_admitted_read_session(lease, restart_generation, timeout)?;
+        let session = discovery.compose_admitted_read_session(
+            lease,
+            restart_generation,
+            expected_network,
+            timeout,
+        )?;
         self.active = Some(session);
         Ok(restart_generation)
     }
@@ -1974,7 +2566,19 @@ impl WalletReadSessionLifecycle {
         restart_generation: u64,
         operation: impl FnOnce(&mut AdmittedWalletReadSession) -> io::Result<T>,
     ) -> io::Result<T> {
-        let result = operation(self.active_session(restart_generation)?);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation(self.active_session(restart_generation)?)
+        }));
+        let result = match result {
+            Ok(result) => result,
+            Err(payload) => {
+                if let Some(session) = &mut self.active {
+                    session.controller.poison();
+                }
+                self.active = None;
+                std::panic::resume_unwind(payload);
+            }
+        };
         if self
             .active
             .as_ref()
@@ -2038,6 +2642,36 @@ impl WalletReadSessionLifecycle {
 
     pub(crate) fn read_all(&mut self, restart_generation: u64) -> io::Result<WalletReadOnlyView> {
         self.execute_active(restart_generation, AdmittedWalletReadSession::read_all)
+    }
+
+    pub(crate) fn use_current_hns_authority<T>(
+        &mut self,
+        restart_generation: u64,
+        operation: impl for<'authority> FnOnce(&'authority WalletHnsAuthorityContext) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.execute_active(restart_generation, |session| {
+            session.use_current_hns_authority(operation)
+        })
+    }
+
+    fn authority_context_available_with_release_qualification(
+        &self,
+        release_qualified: bool,
+    ) -> bool {
+        release_qualified
+            && self.active.as_ref().is_some_and(|session| {
+                !session.is_poisoned()
+                    && session
+                        .controller
+                        .capabilities
+                        .contains(&NegotiatedWalletServiceCapability::HnsWalletAuthorityContextV1)
+            })
+    }
+
+    pub(crate) fn authority_context_available(&self) -> bool {
+        self.authority_context_available_with_release_qualification(
+            HRM_HNSA_WALLET_CONSUMER_RELEASE_QUALIFIED,
+        )
     }
 
     pub(crate) const fn provider_available(&self) -> bool {
@@ -2374,9 +3008,11 @@ impl WalletAbiDiscovery {
         &mut self,
         lease: WalletBootstrapLease,
         restart_generation: u64,
+        expected_network: NetworkKind,
         timeout: Duration,
     ) -> io::Result<AdmittedWalletReadSession> {
-        let (database, bootstrap_read) = lease.into_launch_parts(restart_generation)?;
+        let (database, namespace_lease, bootstrap_read) =
+            lease.into_launch_parts(restart_generation, expected_network)?;
         match &mut self.state {
             WalletArtifactState::LaunchAdmitted(artifact) => {
                 database.revalidate()?;
@@ -2390,7 +3026,12 @@ impl WalletAbiDiscovery {
                     restart_generation,
                     timeout,
                 )?;
-                AdmittedWalletReadSession::new(controller, database, restart_generation)
+                AdmittedWalletReadSession::new(
+                    controller,
+                    database,
+                    namespace_lease,
+                    restart_generation,
+                )
             }
             _ => Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -4186,9 +4827,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     const LOW_FD_SPAWN_HELPER_ENV: &str = "HNS_WALLET_LOW_FD_SPAWN_HELPER";
     #[cfg(target_os = "linux")]
-    const POSITIVE_WALLET_READ_BOOTSTRAP: &[u8] = b"chromium-wallet-read-bootstrap-v1";
+    const TEST_WALLET_NAMESPACE_ID: [u8; 16] = [6; 16];
     #[cfg(target_os = "linux")]
-    const POSITIVE_WALLET_READ_CAPABILITIES: [&str; 7] = [
+    const POSITIVE_WALLET_READ_CAPABILITIES: [&str; 8] = [
         "canonicalFraming",
         "restartIsolation",
         "opaqueAuthorityRegistry",
@@ -4196,7 +4837,25 @@ mod tests {
         "typedEvents",
         "walletOperations",
         "hnsReadOperationsV1",
+        "hnsWalletAuthorityContextV1",
     ];
+
+    #[cfg(target_os = "linux")]
+    fn wallet_read_bootstrap(namespace_id: [u8; 16], namespace_lease_generation: u64) -> Vec<u8> {
+        let namespace_hex = namespace_id
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        format!(
+            "chromium-wallet-read-bootstrap-v2\nregtest\n2922943951\n{namespace_hex}\n{namespace_lease_generation}\n"
+        )
+        .into_bytes()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn positive_wallet_read_bootstrap(namespace_lease_generation: u64) -> Vec<u8> {
+        wallet_read_bootstrap(TEST_WALLET_NAMESPACE_ID, namespace_lease_generation)
+    }
 
     struct InstalledRelease {
         manifest: WalletArtifactManifest,
@@ -4208,6 +4867,96 @@ mod tests {
     struct OneShotWalletBootstrapSource {
         lease: Option<WalletBootstrapLease>,
         claimed_generations: Vec<u64>,
+        claimed_networks: Vec<NetworkKind>,
+    }
+
+    #[cfg(target_os = "linux")]
+    struct AlwaysCurrentWalletNamespaceGuard;
+
+    #[cfg(target_os = "linux")]
+    impl WalletNamespaceLeaseGuard for AlwaysCurrentWalletNamespaceGuard {
+        fn use_if_current(
+            &mut self,
+            _claim: WalletNamespaceLeaseClaim,
+            operation: &mut dyn FnMut(),
+        ) -> bool {
+            operation();
+            true
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct DenyAfterUseWalletNamespaceGuard;
+
+    #[cfg(target_os = "linux")]
+    impl WalletNamespaceLeaseGuard for DenyAfterUseWalletNamespaceGuard {
+        fn use_if_current(
+            &mut self,
+            _claim: WalletNamespaceLeaseClaim,
+            operation: &mut dyn FnMut(),
+        ) -> bool {
+            operation();
+            false
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct SkipUseWalletNamespaceGuard;
+
+    #[cfg(target_os = "linux")]
+    impl WalletNamespaceLeaseGuard for SkipUseWalletNamespaceGuard {
+        fn use_if_current(
+            &mut self,
+            _claim: WalletNamespaceLeaseClaim,
+            _operation: &mut dyn FnMut(),
+        ) -> bool {
+            true
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct DoubleUseWalletNamespaceGuard;
+
+    #[cfg(target_os = "linux")]
+    impl WalletNamespaceLeaseGuard for DoubleUseWalletNamespaceGuard {
+        fn use_if_current(
+            &mut self,
+            _claim: WalletNamespaceLeaseClaim,
+            operation: &mut dyn FnMut(),
+        ) -> bool {
+            operation();
+            operation();
+            true
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct PanicBeforeUseWalletNamespaceGuard;
+
+    #[cfg(target_os = "linux")]
+    impl WalletNamespaceLeaseGuard for PanicBeforeUseWalletNamespaceGuard {
+        fn use_if_current(
+            &mut self,
+            _claim: WalletNamespaceLeaseClaim,
+            _operation: &mut dyn FnMut(),
+        ) -> bool {
+            panic!("fixture broker guard panic before use")
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    struct PanicAfterUseWalletNamespaceGuard;
+
+    #[cfg(target_os = "linux")]
+    impl WalletNamespaceLeaseGuard for PanicAfterUseWalletNamespaceGuard {
+        fn use_if_current(
+            &mut self,
+            _claim: WalletNamespaceLeaseClaim,
+            operation: &mut dyn FnMut(),
+        ) -> bool {
+            operation();
+            panic!("fixture broker guard panic after use")
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -4258,10 +5007,35 @@ mod tests {
         fn take_lease(
             &mut self,
             restart_generation: u64,
+            expected_network: NetworkKind,
         ) -> io::Result<Option<WalletBootstrapLease>> {
             self.claimed_generations.push(restart_generation);
+            self.claimed_networks.push(expected_network);
             Ok(self.lease.take())
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_wallet_namespace_lease(network: NetworkKind, generation: u64) -> WalletNamespaceLease {
+        test_wallet_namespace_lease_with_guard(
+            network,
+            TEST_WALLET_NAMESPACE_ID,
+            generation,
+            Box::new(AlwaysCurrentWalletNamespaceGuard),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_wallet_namespace_lease_with_guard(
+        network: NetworkKind,
+        namespace_id: [u8; 16],
+        generation: u64,
+        guard: Box<dyn WalletNamespaceLeaseGuard>,
+    ) -> WalletNamespaceLease {
+        WalletNamespaceLease::new(
+            WalletNamespaceLeaseClaim::new(network, namespace_id, generation).unwrap(),
+            guard,
+        )
     }
 
     #[cfg(target_os = "linux")]
@@ -4287,13 +5061,41 @@ mod tests {
         restart_generation: u64,
         database: TrustedWalletDatabaseConfiguration,
     ) -> (OneShotWalletBootstrapSource, File) {
+        test_wallet_bootstrap_source_with_authority(
+            restart_generation,
+            database,
+            TEST_WALLET_NAMESPACE_ID,
+            restart_generation,
+            Box::new(AlwaysCurrentWalletNamespaceGuard),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn test_wallet_bootstrap_source_with_authority(
+        restart_generation: u64,
+        database: TrustedWalletDatabaseConfiguration,
+        namespace_id: [u8; 16],
+        namespace_lease_generation: u64,
+        guard: Box<dyn WalletNamespaceLeaseGuard>,
+    ) -> (OneShotWalletBootstrapSource, File) {
         let (bootstrap_read, bootstrap_write) = test_wallet_bootstrap_pipe();
-        let lease =
-            WalletBootstrapLease::new(restart_generation, database, bootstrap_read).unwrap();
+        let lease = WalletBootstrapLease::new(
+            restart_generation,
+            database,
+            test_wallet_namespace_lease_with_guard(
+                NetworkKind::Regtest,
+                namespace_id,
+                namespace_lease_generation,
+                guard,
+            ),
+            bootstrap_read,
+        )
+        .unwrap();
         (
             OneShotWalletBootstrapSource {
                 lease: Some(lease),
                 claimed_generations: Vec::new(),
+                claimed_networks: Vec::new(),
             },
             bootstrap_write,
         )
@@ -4736,6 +5538,89 @@ mod tests {
         assert!(!controller.value_available());
         drop(controller);
         service.join().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn locked_status_clears_both_selected_wallet_and_account() {
+        let (host, mut service) = UnixStream::pair().unwrap();
+        set_nonblocking_fd(service.as_raw_fd()).unwrap();
+        let task = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let (host_session, restart_generation, service_session) =
+                negotiate_fixture_service(&mut service, deadline, 31);
+            let responses = [
+                json!({
+                    "result": "status",
+                    "status": {
+                        "locked": false,
+                        "activeWallet": vec![7_u8; 16],
+                        "enabledModules": ["handshake"],
+                        "mainnetSettlementEnabled": false
+                    }
+                }),
+                json!({
+                    "result": "accounts",
+                    "accounts": [hns_account_json(9)]
+                }),
+                json!({
+                    "result": "status",
+                    "status": {
+                        "locked": true,
+                        "activeWallet": null,
+                        "enabledModules": [],
+                        "mainnetSettlementEnabled": false
+                    }
+                }),
+            ];
+            let operations = ["status", "listAccounts", "status"];
+            for (index, (operation, response)) in operations.into_iter().zip(responses).enumerate()
+            {
+                let sequence = index as u64 + 1;
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let request = read_wallet_payload(&mut service, deadline).unwrap();
+                let request = serde_json::from_slice::<Value>(&request).unwrap();
+                assert_wallet_fixture_request(
+                    &request,
+                    &host_session,
+                    &service_session,
+                    restart_generation,
+                    sequence,
+                    json!({
+                        "operation": "wallet",
+                        "request": { "operation": operation }
+                    }),
+                );
+                write_wallet_fixture_result(
+                    &mut service,
+                    deadline,
+                    (&host_session, &service_session, restart_generation),
+                    sequence,
+                    &request,
+                    response,
+                );
+            }
+        });
+        let reader = host.try_clone().unwrap();
+        let mut controller = WalletServiceController::negotiate(
+            reader,
+            host,
+            None,
+            test_capability_ceiling(),
+            7,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+
+        assert!(!controller.read_status().unwrap().locked);
+        assert_eq!(controller.selected_active_wallet, Some([7_u8; 16]));
+        assert_eq!(controller.list_accounts().unwrap().account_id, [9_u8; 16]);
+        assert_eq!(controller.selected_hns_account, Some([9_u8; 16]));
+        assert!(controller.read_status().unwrap().locked);
+        assert_eq!(controller.selected_active_wallet, None);
+        assert_eq!(controller.selected_hns_account, None);
+        drop(controller);
+        task.join().unwrap();
     }
 
     #[cfg(target_os = "linux")]
@@ -5539,6 +6424,7 @@ mod tests {
                 next_host_sequence: 1,
                 next_service_sequence: 1,
                 capabilities,
+                selected_active_wallet: None,
                 selected_hns_account: None,
                 poisoned: false,
             }
@@ -5696,6 +6582,138 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn wallet_namespace_claim_uses_canonical_magic_and_exact_u64_generation() {
+        assert_eq!(
+            WalletNamespaceLeaseClaim::new(NetworkKind::Regtest, [0_u8; 16], 1)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            WalletNamespaceLeaseClaim::new(NetworkKind::Regtest, [1_u8; 16], 0)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        let generation = 9_007_199_254_740_997_u64;
+        for network in [
+            NetworkKind::Mainnet,
+            NetworkKind::Testnet,
+            NetworkKind::Regtest,
+        ] {
+            let claim =
+                WalletNamespaceLeaseClaim::new(network, TEST_WALLET_NAMESPACE_ID, generation)
+                    .unwrap();
+            assert_eq!(claim.network, network);
+            assert_eq!(claim.network_magic, network.network().magic);
+            assert_eq!(claim.namespace_id, TEST_WALLET_NAMESPACE_ID);
+            assert_eq!(claim.generation, generation);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn namespace_guard_loss_and_callback_misuse_kill_reap_and_remove_session() {
+        let cases: [(&str, Box<dyn WalletNamespaceLeaseGuard>, usize); 3] = [
+            (
+                "deny-after-use",
+                Box::new(DenyAfterUseWalletNamespaceGuard),
+                1,
+            ),
+            ("skip-use", Box::new(SkipUseWalletNamespaceGuard), 0),
+            ("double-use", Box::new(DoubleUseWalletNamespaceGuard), 1),
+        ];
+        for (label, guard, expected_operation_count) in cases {
+            let root = test_root(label);
+            let (_, database) = install_test_wallet_database(&root);
+            let child = spawn_test_wallet_child_with_database(&database.database_file);
+            let process_id = child.id() as libc::pid_t;
+            let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
+            let namespace_lease = test_wallet_namespace_lease_with_guard(
+                NetworkKind::Regtest,
+                TEST_WALLET_NAMESPACE_ID,
+                9_007_199_254_740_997,
+                guard,
+            );
+            let session =
+                AdmittedWalletReadSession::new(controller, database, namespace_lease, 12).unwrap();
+            let mut lifecycle = WalletReadSessionLifecycle {
+                next_restart_generation: 13,
+                active: Some(session),
+            };
+            let mut operation_count = 0_usize;
+            let error = lifecycle
+                .execute_active(12, |session| {
+                    session.execute(|_| {
+                        operation_count += 1;
+                        Ok(())
+                    })
+                })
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(operation_count, expected_operation_count);
+            assert!(lifecycle.active.is_none());
+            assert_wallet_child_killed_and_reaped(process_id);
+            cleanup(&root);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn caught_namespace_guard_panics_kill_reap_and_remove_before_resuming() {
+        let cases: [(&str, Box<dyn WalletNamespaceLeaseGuard>, usize); 2] = [
+            (
+                "panic-before-use",
+                Box::new(PanicBeforeUseWalletNamespaceGuard),
+                0,
+            ),
+            (
+                "panic-after-use",
+                Box::new(PanicAfterUseWalletNamespaceGuard),
+                1,
+            ),
+        ];
+        for (label, guard, expected_operation_count) in cases {
+            let root = test_root(label);
+            let (_, database) = install_test_wallet_database(&root);
+            let child = spawn_test_wallet_child_with_database(&database.database_file);
+            let process_id = child.id() as libc::pid_t;
+            let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
+            let namespace_lease = test_wallet_namespace_lease_with_guard(
+                NetworkKind::Regtest,
+                TEST_WALLET_NAMESPACE_ID,
+                9_007_199_254_740_997,
+                guard,
+            );
+            let session =
+                AdmittedWalletReadSession::new(controller, database, namespace_lease, 12).unwrap();
+            let mut lifecycle = WalletReadSessionLifecycle {
+                next_restart_generation: 13,
+                active: Some(session),
+            };
+            let mut operation_count = 0_usize;
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = lifecycle.execute_active(12, |session| {
+                    session.execute(|_| {
+                        operation_count += 1;
+                        Ok(())
+                    })
+                });
+            }));
+            assert!(panic.is_err());
+            assert_eq!(operation_count, expected_operation_count);
+            assert!(lifecycle.active.is_none());
+            assert_wallet_child_killed_and_reaped(process_id);
+            assert_eq!(
+                lifecycle.read_status(12).unwrap_err().kind(),
+                io::ErrorKind::NotConnected
+            );
+            cleanup(&root);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn failed_spawned_negotiation_kills_and_reaps_the_service() {
         let child = Command::new("/bin/cat")
             .stdin(Stdio::piped())
@@ -5735,7 +6753,12 @@ mod tests {
 
         assert_eq!(
             lifecycle
-                .start(&mut discovery, &mut source, Duration::from_secs(1))
+                .start(
+                    &mut discovery,
+                    &mut source,
+                    NetworkKind::Regtest,
+                    Duration::from_secs(1),
+                )
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::PermissionDenied
@@ -5743,7 +6766,12 @@ mod tests {
         assert_pipe_has_no_readers(&bootstrap_write);
         assert_eq!(
             lifecycle
-                .start(&mut discovery, &mut source, Duration::from_secs(1))
+                .start(
+                    &mut discovery,
+                    &mut source,
+                    NetworkKind::Regtest,
+                    Duration::from_secs(1),
+                )
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::NotConnected
@@ -5753,7 +6781,12 @@ mod tests {
         assert!(lifecycle.active.is_none());
 
         let mut unavailable = UnavailableWalletBootstrapSource;
-        assert!(unavailable.take_lease(3).unwrap().is_none());
+        assert!(
+            unavailable
+                .take_lease(3, NetworkKind::Regtest)
+                .unwrap()
+                .is_none()
+        );
         cleanup(&root);
         cleanup(&wallet_root);
     }
@@ -5769,9 +6802,14 @@ mod tests {
         let (database_path, database) = install_test_wallet_database(&wallet_root);
         let (bootstrap_read, bootstrap_write) = test_wallet_bootstrap_pipe();
         assert_eq!(
-            WalletBootstrapLease::new(0, database, bootstrap_read)
-                .unwrap_err()
-                .kind(),
+            WalletBootstrapLease::new(
+                0,
+                database,
+                test_wallet_namespace_lease(NetworkKind::Regtest, 1),
+                bootstrap_read,
+            )
+            .unwrap_err()
+            .kind(),
             io::ErrorKind::InvalidInput
         );
         assert_pipe_has_no_readers(&bootstrap_write);
@@ -5779,10 +6817,20 @@ mod tests {
         for lease_generation in [1, 3] {
             let database = TrustedWalletDatabaseConfiguration::open(&database_path).unwrap();
             let (bootstrap_read, bootstrap_write) = test_wallet_bootstrap_pipe();
-            let lease =
-                WalletBootstrapLease::new(lease_generation, database, bootstrap_read).unwrap();
+            let lease = WalletBootstrapLease::new(
+                lease_generation,
+                database,
+                test_wallet_namespace_lease(NetworkKind::Regtest, lease_generation),
+                bootstrap_read,
+            )
+            .unwrap();
             let error = discovery
-                .compose_admitted_read_session(lease, 2, Duration::from_secs(1))
+                .compose_admitted_read_session(
+                    lease,
+                    2,
+                    NetworkKind::Regtest,
+                    Duration::from_secs(1),
+                )
                 .err()
                 .unwrap();
             assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
@@ -5807,7 +6855,13 @@ mod tests {
         let (bootstrap_read, mut bootstrap_write) = test_wallet_bootstrap_pipe();
         let secret = "bootstrap-secret-must-not-appear";
         bootstrap_write.write_all(secret.as_bytes()).unwrap();
-        let lease = WalletBootstrapLease::new(7, database, bootstrap_read).unwrap();
+        let lease = WalletBootstrapLease::new(
+            7,
+            database,
+            test_wallet_namespace_lease(NetworkKind::Regtest, 7),
+            bootstrap_read,
+        )
+        .unwrap();
         let debug = format!("{lease:?}");
         assert!(!debug.contains(secret));
         assert!(!debug.contains(database_path.to_str().unwrap()));
@@ -6160,6 +7214,7 @@ mod tests {
             .start(
                 &mut discovery,
                 &mut bootstrap_source,
+                NetworkKind::Regtest,
                 Duration::from_secs(1),
             )
             .unwrap_err();
@@ -6210,17 +7265,24 @@ mod tests {
         let (mut first_source, mut first_bootstrap_write) =
             test_wallet_bootstrap_source(1, first_database);
         first_bootstrap_write
-            .write_all(POSITIVE_WALLET_READ_BOOTSTRAP)
+            .write_all(&positive_wallet_read_bootstrap(1))
             .unwrap();
         drop(first_bootstrap_write);
 
         let mut lifecycle = WalletReadSessionLifecycle::new();
         let first_generation = lifecycle
-            .start(&mut discovery, &mut first_source, Duration::from_secs(2))
+            .start(
+                &mut discovery,
+                &mut first_source,
+                NetworkKind::Regtest,
+                Duration::from_secs(2),
+            )
             .unwrap();
         assert_eq!(first_generation, 1);
         assert_eq!(first_source.claimed_generations, [first_generation]);
         let first_process_id = active_wallet_child_pid(&lifecycle);
+        assert!(lifecycle.authority_context_available_with_release_qualification(true));
+        assert!(!lifecycle.authority_context_available());
 
         let view = lifecycle.read_all(first_generation).unwrap();
         assert!(!view.status.locked);
@@ -6243,6 +7305,28 @@ mod tests {
         assert_eq!(view.module_status.validated_height, 144);
         assert_eq!(view.module_status.scanned_height, 144);
         assert_eq!(view.module_status.target_height, Some(144));
+        let exact_revision = lifecycle
+            .use_current_hns_authority(first_generation, |authority| {
+                assert_eq!(authority.network, NetworkKind::Regtest);
+                assert_eq!(authority.network_magic, 2_922_943_951);
+                assert_eq!(authority.namespace_id, TEST_WALLET_NAMESPACE_ID);
+                assert_eq!(authority.namespace_lease_generation, 1);
+                assert_ne!(authority.database_device, 0);
+                assert_ne!(authority.database_inode, 0);
+                assert_eq!(authority.restart_generation, first_generation);
+                assert_eq!(authority.active_wallet, [7_u8; 16]);
+                assert_eq!(authority.account, [9_u8; 16]);
+                assert_eq!(authority.wallet_authority_revision, 9_007_199_254_740_993);
+                assert_eq!(authority.account_authority_revision, 9_007_199_254_740_995);
+                let debug = format!("{authority:?}");
+                assert!(!debug.contains(&authority.host_session_id));
+                assert!(!debug.contains(&authority.service_session_id));
+                assert!(!debug.contains("9007199254740993"));
+                Ok(authority.wallet_authority_revision)
+            })
+            .unwrap();
+        assert_eq!(exact_revision, 9_007_199_254_740_993);
+        assert!(!lifecycle.authority_context_available());
         assert!(!lifecycle.provider_available());
         assert!(!lifecycle.value_available());
 
@@ -6250,11 +7334,16 @@ mod tests {
         let (mut second_source, mut second_bootstrap_write) =
             test_wallet_bootstrap_source(2, second_database);
         second_bootstrap_write
-            .write_all(POSITIVE_WALLET_READ_BOOTSTRAP)
+            .write_all(&positive_wallet_read_bootstrap(2))
             .unwrap();
         drop(second_bootstrap_write);
         let second_generation = lifecycle
-            .start(&mut discovery, &mut second_source, Duration::from_secs(2))
+            .start(
+                &mut discovery,
+                &mut second_source,
+                NetworkKind::Regtest,
+                Duration::from_secs(2),
+            )
             .unwrap();
         assert_eq!(second_generation, 2);
         assert_eq!(second_source.claimed_generations, [second_generation]);
@@ -6289,6 +7378,130 @@ mod tests {
 
         cleanup(&root);
         cleanup(&wallet_root);
+        cleanup(&fixture_root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn authority_context_mismatch_and_final_revision_change_kill_and_reap() {
+        let root = test_root("authority-context-negative");
+        let fixture_root = test_root("authority-context-negative-fixture");
+        let signer = test_signer();
+        let artifact_bytes = compile_linux_wallet_read_fixture(&fixture_root);
+        let mut manifest = fixture_manifest(&artifact_bytes, 1, None);
+        manifest.target.capabilities = POSITIVE_WALLET_READ_CAPABILITIES
+            .iter()
+            .map(|capability| (*capability).to_owned())
+            .collect();
+        sign_manifest(&mut manifest, &signer);
+        let manifest_bytes = jcs_bytes(&manifest).unwrap();
+        let release = InstalledRelease {
+            manifest,
+            manifest_bytes,
+            artifact_bytes,
+        };
+        install_raw_release(&root, &release, true);
+        let mut discovery = WalletAbiDiscovery::discover_with_configuration(
+            &root,
+            verifier_configuration(&signer, &release, 1, true, true),
+        );
+
+        for (namespace_byte, callback_expected) in [(7_u8, false), (8_u8, true)] {
+            let wallet_root = test_root(&format!("authority-context-negative-{namespace_byte}"));
+            let (_, database) = install_test_wallet_database(&wallet_root);
+            let namespace_id = [namespace_byte; 16];
+            let namespace_lease_generation = 9_007_199_254_740_997_u64 + u64::from(namespace_byte);
+            let (mut source, mut bootstrap_write) = test_wallet_bootstrap_source_with_authority(
+                1,
+                database,
+                namespace_id,
+                namespace_lease_generation,
+                Box::new(AlwaysCurrentWalletNamespaceGuard),
+            );
+            bootstrap_write
+                .write_all(&wallet_read_bootstrap(
+                    namespace_id,
+                    namespace_lease_generation,
+                ))
+                .unwrap();
+            drop(bootstrap_write);
+            let mut lifecycle = WalletReadSessionLifecycle::new();
+            let generation = lifecycle
+                .start(
+                    &mut discovery,
+                    &mut source,
+                    NetworkKind::Regtest,
+                    Duration::from_secs(2),
+                )
+                .unwrap();
+            lifecycle.read_all(generation).unwrap();
+            let process_id = active_wallet_child_pid(&lifecycle);
+            let mut callback_used = false;
+            let error = lifecycle
+                .use_current_hns_authority(generation, |authority| {
+                    callback_used = true;
+                    assert_eq!(
+                        authority.namespace_lease_generation,
+                        namespace_lease_generation
+                    );
+                    assert_eq!(authority.namespace_id, namespace_id);
+                    Ok(())
+                })
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(callback_used, callback_expected);
+            assert!(lifecycle.active.is_none());
+            assert_wallet_child_killed_and_reaped(process_id);
+            assert!(!lifecycle.authority_context_available());
+            assert!(!lifecycle.provider_available());
+            assert!(!lifecycle.value_available());
+            cleanup(&wallet_root);
+        }
+
+        let wallet_root = test_root("authority-context-consumer-panic");
+        let (_, database) = install_test_wallet_database(&wallet_root);
+        let namespace_id = [10_u8; 16];
+        let namespace_lease_generation = 9_007_199_254_741_111_u64;
+        let (mut source, mut bootstrap_write) = test_wallet_bootstrap_source_with_authority(
+            1,
+            database,
+            namespace_id,
+            namespace_lease_generation,
+            Box::new(AlwaysCurrentWalletNamespaceGuard),
+        );
+        bootstrap_write
+            .write_all(&wallet_read_bootstrap(
+                namespace_id,
+                namespace_lease_generation,
+            ))
+            .unwrap();
+        drop(bootstrap_write);
+        let mut lifecycle = WalletReadSessionLifecycle::new();
+        let generation = lifecycle
+            .start(
+                &mut discovery,
+                &mut source,
+                NetworkKind::Regtest,
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        lifecycle.read_all(generation).unwrap();
+        let process_id = active_wallet_child_pid(&lifecycle);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: io::Result<()> = lifecycle.use_current_hns_authority(generation, |_authority| {
+                panic!("fixture authority consumer panic")
+            });
+        }));
+        assert!(panic.is_err());
+        assert!(lifecycle.active.is_none());
+        assert_wallet_child_killed_and_reaped(process_id);
+        assert_eq!(
+            lifecycle.read_status(generation).unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        cleanup(&wallet_root);
+
+        cleanup(&root);
         cleanup(&fixture_root);
     }
 
@@ -6384,9 +7597,14 @@ mod tests {
         database.revalidate().unwrap();
 
         let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
-        let error = AdmittedWalletReadSession::new(controller, database, 12)
-            .err()
-            .unwrap();
+        let error = AdmittedWalletReadSession::new(
+            controller,
+            database,
+            test_wallet_namespace_lease(NetworkKind::Regtest, 12),
+            12,
+        )
+        .err()
+        .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         // SAFETY: signal zero performs only an existence check for this PID.
         assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
@@ -6410,9 +7628,14 @@ mod tests {
         let process_id = child.id() as libc::pid_t;
         let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
 
-        let error = AdmittedWalletReadSession::new(controller, database, 12)
-            .err()
-            .unwrap();
+        let error = AdmittedWalletReadSession::new(
+            controller,
+            database,
+            test_wallet_namespace_lease(NetworkKind::Regtest, 12),
+            12,
+        )
+        .err()
+        .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         // SAFETY: signal zero performs only an existence check for this PID.
         assert_eq!(unsafe { libc::kill(process_id, 0) }, -1);
@@ -6428,12 +7651,20 @@ mod tests {
         let child = spawn_test_wallet_child_with_database(&database.database_file);
         let process_id = child.id() as libc::pid_t;
         let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
-        let session = AdmittedWalletReadSession::new(controller, database, 12).unwrap();
+        let session = AdmittedWalletReadSession::new(
+            controller,
+            database,
+            test_wallet_namespace_lease(NetworkKind::Regtest, 12),
+            12,
+        )
+        .unwrap();
         let mut lifecycle = WalletReadSessionLifecycle {
             next_restart_generation: 13,
             active: Some(session),
         };
 
+        assert!(!lifecycle.authority_context_available_with_release_qualification(true));
+        assert!(!lifecycle.authority_context_available());
         assert_eq!(
             lifecycle.read_status(11).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
@@ -6463,7 +7694,13 @@ mod tests {
         let child = spawn_test_wallet_child_with_database(&database.database_file);
         let process_id = child.id() as libc::pid_t;
         let controller = test_spawned_wallet_controller(child, 12, Duration::from_millis(20));
-        let session = AdmittedWalletReadSession::new(controller, database, 12).unwrap();
+        let session = AdmittedWalletReadSession::new(
+            controller,
+            database,
+            test_wallet_namespace_lease(NetworkKind::Regtest, 12),
+            12,
+        )
+        .unwrap();
         let mut lifecycle = WalletReadSessionLifecycle {
             next_restart_generation: 13,
             active: Some(session),
@@ -7243,6 +8480,7 @@ mod tests {
             capabilities: WALLET_READ_SESSION_REQUIRED_CAPABILITIES
                 .into_iter()
                 .collect(),
+            selected_active_wallet: None,
             selected_hns_account: None,
             poisoned: false,
         }

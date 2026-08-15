@@ -54,11 +54,17 @@ path/inode identity and supplies that exact path only to the admitted child as
 `--database <path>`, then requires the resulting child to retain that same
 database inode. Each dormant launch also consumes a private opaque bootstrap
 pipe without reading, parsing, logging, or exposing its packet; the fixed child
-descriptor is separate from ABI-only stdin/stdout. This is single-use launch
-authorization, not an ongoing revocation or database-exclusivity lease. The
-current production verifier has no wallet trust root, release pin, floor, or
-available bootstrap source, so no production controller constructs the
-configuration or launches a wallet artifact, and it exports no wallet result.
+descriptor is separate from ABI-only stdin/stdout. The single-use launch lease
+also transfers a canonical-network-bound, nonzero opaque namespace/generation
+and a nonserializable broker guard that stays held through each native read or
+authority use and final revalidation. The authority-bearing
+`WalletNamespaceLeaseClaim`, `WalletNamespaceLease`, `WalletBootstrapLease`,
+`WalletServiceHnsAuthorityContext`, and assembled `WalletHnsAuthorityContext`
+redact their Debug output and are never projected to extension JavaScript. The
+current production verifier has no wallet trust root, release pin, floor,
+available bootstrap source, or qualified HRM/HNSA wallet-consumer gate, so no
+production controller constructs the configuration or launches a wallet
+artifact, and it exports no wallet result.
 
 The browser-owned anti-rollback record contains only release line/sequence/ID,
 signer ID, and manifest/artifact digests; it contains no wallet state or secret.

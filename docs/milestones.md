@@ -210,8 +210,19 @@ change.
   reads remove their killed/reaped generation. The production source supplies
   no lease. No extension request, product configuration, provider, approval,
   unlock, mutation, or value path invokes the session; all public gates stay
-  false. This first lease is launch authorization only, not ongoing broker
-  revocation or wallet-database exclusivity.
+  false.
+- Add the dormant `hnsWalletAuthorityContextV1` prerequisite without changing
+  the exact six `hnsReadOperationsV1` calls. A trusted bootstrap lease now
+  carries canonical Handshake network/magic, a nonzero opaque namespace and
+  exact `u64` generation, and a session-held broker guard. Under that guard the
+  host binds a nonclone/nonserializable/redacted native authority to exact
+  database, restart/channel, active-wallet/account, nonzero authority
+  revisions, and persistence/recovery/retirement/readiness state, then
+  revalidates all of it after dependent use. Mismatch, lease loss, guard misuse,
+  consumer or guard panic, and lock transition fail closed with synchronous
+  kill/reap/removal. The production broker source and HRM/HNSA wallet-consumer
+  qualification gate remain unavailable/false, and readiness still requires
+  the exact negotiated marker after any future gate change.
 - A Linux-only native fixture now demonstrates the complete dormant browser
   boundary: test-signed exact release admission, sealed launch, the expected
   opaque FD3 bootstrap, exact database argv and retained inode, ABI negotiation
@@ -222,10 +233,11 @@ change.
   provider/value/public gates false.
 - Exact interoperability with the checked-in wallet executable is still not
   demonstrated. It selects its locked control runtime; the HNS read runtime
-  needs trusted unlock/account/authenticated-node inputs and does not advertise
-  `hnsReadOperationsV1`. Broad `walletOperations` alone therefore still fails
-  read-session admission. The source fixture is browser-boundary evidence, not
-  a qualified wallet-service release or installed-product result.
+  needs trusted unlock/account/authenticated-node inputs and advertises neither
+  `hnsReadOperationsV1` nor `hnsWalletAuthorityContextV1`. Broad
+  `walletOperations` alone therefore still fails read-session/authority
+  admission. The source fixture is browser-boundary evidence, not a qualified
+  wallet-service release, real broker lease, or installed-product result.
 
 Passing portable source gates is not a substitute for those release gates.
 

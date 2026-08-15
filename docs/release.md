@@ -95,7 +95,13 @@ after all of the following are reviewed from immutable release evidence:
    `hnsReadOperationsV1` in the signed manifest and echo both in its runtime
    hello. The latter freezes exactly status, list-accounts, HNS balance,
    receive-target, transaction-history, and module-status reads; workflow and
-   value operations are outside it.
+   value operations are outside it. An HRM/HNSA wallet-authority candidate must
+   additionally sign and echo `hnsWalletAuthorityContextV1`; that additive
+   marker is not part of the frozen six-operation enum. Its borrowed dependent
+   callback is read-only: release-boundary revalidation cannot undo an external
+   side effect completed before a late lease failure. Signing, value, and
+   mutation must use a separately qualified precommit/commit authority
+   protocol, never this borrowed read authority.
 3. The signer root is added only to the verifier-owned production table with a
    bounded release-line sequence interval. The exact manifest/artifact release
    is separately pinned, and the compiled release-line floor is advanced
@@ -107,8 +113,13 @@ after all of the following are reviewed from immutable release evidence:
    external database alias/replacement, replace/restore child-descriptor
    attestation, exact service arguments, stale generations, dual-marker
    manifest/hello/request admission, the frozen six-operation surface, and
-   negotiation or poisoned-read kill-and-wait. The complete repository gate and
-   Linux target qualification then pass at the exact browser commit.
+   negotiation or poisoned-read kill-and-wait. Authority qualification must
+   also cover canonical network/magic, nonzero opaque namespace/generation,
+   exact `u64` values above `2^53`, locked identity clearing, initial and final
+   wallet/account/revision/lifecycle mismatch, lease loss, skipped/doubled
+   callbacks, consumer and guard unwind, and synchronous kill/reap/removal. The
+   complete repository gate and Linux target qualification then pass at the
+   exact browser commit.
 
 The focused verifier filter passed at exact source
 `a39f8759c0161b5e49cb93c0c5aea1f0298e3108`: 17 passed, 0 failed, and
@@ -137,11 +148,15 @@ restart kill/reap, stale-generation rejection, and database-inode fail-closed
 cleanup. It does not prove exact released-wallet-service interoperability: the
 current checked-in executable selects a locked control runtime, not the
 synchronized HNS read runtime, and does not advertise `hnsReadOperationsV1`;
-broad `walletOperations` alone fails browser read-session admission. Release
+it also does not advertise `hnsWalletAuthorityContextV1`. Broad
+`walletOperations` alone fails browser read-session/authority admission. Release
 still requires a newly signed and exactly pinned real-service manifest and
 matching hello, a trusted unlock/account/authenticated-node configuration,
-positive reads through that exact artifact, and evidence that the qualified
-artifact is single-process and leaves no database-holding descendant.
+positive reads through that exact artifact, a reviewed real namespace broker
+whose lease is held through final dependent-use revalidation, and evidence that
+the qualified artifact is single-process and leaves no database-holding
+descendant. The HRM/HNSA wallet-consumer release gate stays false until all of
+those conditions and installed-product qualification pass.
 
 ## Setup application packages
 

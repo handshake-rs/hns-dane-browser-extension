@@ -341,15 +341,21 @@ module status. The controller supplies no caller-selected account or module,
 and each value call has only its own synchronization authority rather than a
 shared snapshot across calls. The additive private `hnsReadOperationsV1`
 marker freezes exactly those six operations and excludes workflow status.
+The separate additive `hnsWalletAuthorityContextV1` operation leaves that
+closed set unchanged. It joins canonical `NetworkKind`/magic and one trusted
+nonzero namespace/lease generation to exact service wallet, HNS account,
+authority revisions, and persistence/recovery/retirement/readiness state.
 
 A dormant Linux-only native composition now joins that controller to admitted
 artifact launch around one single-use `WalletBootstrapLease` obtained for the
 new restart generation. The lease owns one typed, explicitly supplied,
 pre-existing wallet database configuration and one opaque read-only
-close-on-exec pipe end. Discovery cannot proceed without it, a source cannot
-replay it, and launch failure consumes and closes it. The browser never parses
-the opaque packet. The launcher installs a collision-safe copy at fixed child
-descriptor 3 and moves the sealed executable descriptor away from that slot
+close-on-exec pipe end. It also owns a canonical-network-bound opaque namespace
+claim and a broker currentness guard for the exact database. Discovery cannot
+proceed without it, a source cannot replay it, and launch failure consumes and
+closes it. The browser never parses the opaque packet. The launcher installs a
+collision-safe copy at fixed child descriptor 3 and moves the sealed executable
+descriptor away from that slot
 when necessary; the original bootstrap descriptor remains close-on-exec.
 Standard input/output remain exclusively ABI-v2 framing, the environment is
 empty, and the sealed child receives exactly
@@ -376,24 +382,33 @@ The manifest-derived negotiation ceiling requires the five foundation
 capabilities plus both `walletOperations` and `hnsReadOperationsV1`, admits only
 the persistent-permission and provider-dispatch scaffolding currently reported
 by the standalone persistent service, and excludes `valueMovement` and
-`browserIntegration`. The runtime hello and every closed request require both
-operation markers. The request enum itself has no workflow, provider, unlock,
-lock, approval, or mutation variant. A generation-owning slot kills and waits
+`browserIntegration`. The runtime hello and every closed read require both
+operation markers. Authority use separately requires
+`hnsWalletAuthorityContextV1` in both the signed ceiling and runtime hello. The
+frozen read enum itself has no workflow, provider, unlock, lock, approval, or
+mutation variant. A generation-owning slot kills and waits
 for the prior child before restart, never reuses a failed generation, and does
 not let a stale invalidation stop a newer session. Path change, malformed
 hello/frame, timeout, EOF, or drop poisons and reaps the child; a poisoned read
 also removes that generation from the active lifecycle slot.
 
-`WalletBootstrapLease` currently means authorization for one launch attempt,
-not a renewable broker session or an ongoing revocation/database-exclusivity
-lease. Descriptor closure does not prove that no process or descendant retains
-wallet state. Those semantics require a future wallet-owned lifecycle protocol.
+`WalletBootstrapLease` still authorizes one launch attempt, but transfers the
+ongoing guard into the admitted session. Every read is executed only inside
+that guard. Authority use acquires the exact status/account/context under it,
+lends a temporary nonclone/nonserializable/redacted native authority, re-reads
+and compares every binding after the callback, and finally revalidates the
+database/process before the guard releases. Lease denial, callback misuse,
+context change, or an unwind poisons and synchronously reaps the child; the
+lifecycle removes the generation before resuming a panic. A descriptor alone
+does not provide those semantics, and the production source returns no lease
+until a real reviewed broker implements them.
 
 The checked-in wallet-service executable currently opens the database into its
 locked control runtime. That runtime can return status but does not provide the
 account/balance/receive/history/module read set and does not advertise
-`hnsReadOperationsV1`, so the browser rejects read-session admission. The
-synchronized HNS runtime also needs trusted account and authenticated
+`hnsReadOperationsV1` or `hnsWalletAuthorityContextV1`, so the browser rejects
+read-session/authority admission. The synchronized HNS runtime also needs
+trusted account and authenticated
 loopback-node configuration, and the browser's closed read enum intentionally
 supplies no unlock secret. Broad `walletOperations` is therefore insufficient.
 A future signed manifest and matching hello must both carry the exact marker;
@@ -411,8 +426,10 @@ availability gates.
 No production trust root, release pin, or release floor is configured yet, and
 test keys are compiled only for tests. No independently released service,
 released Chromium transport join, or native-to-public approval projection
-adapter is joined, and the current engine exposes no consumable opaque wallet
-authority context. The browser controller therefore never calls the launcher.
+adapter is joined, and no production broker can construct the new namespace
+guard. The HRM/HNSA wallet-consumer qualification constant remains false and
+readiness also requires an active nonpoisoned session that negotiated the exact
+authority marker. The browser controller therefore never calls the launcher.
 All three parsed wallet command envelopes fail closed,
 `handshakeWalletProvider` is false, and provider injection cannot occur. The
 browser's DANE runtime is independent of this unavailable optional join.

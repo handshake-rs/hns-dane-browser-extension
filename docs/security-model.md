@@ -284,7 +284,9 @@ launch remain unavailable until reviewed platform equivalents exist. The
 private Linux source can call this launcher only through its exact-database
 read-session composition, and each restart generation must consume one
 `WalletBootstrapLease`. The lease joins the retained database identity to an
-opaque read-only close-on-exec pipe; the browser does not parse its packet.
+opaque read-only close-on-exec pipe plus canonical network/magic, a nonzero
+opaque namespace and lease generation, and a broker-owned currentness guard;
+the browser does not parse its packet.
 Launch maps it collision-safely to fixed child descriptor 3 while leaving
 stdin/stdout exclusively for ABI-v2 frames, argv exactly
 `--database <path>`, and the environment empty. Failure consumes the lease and
@@ -293,10 +295,21 @@ the production source returns no lease. Public projection and opaque engine
 authority remain unreleased, so overall provider availability and value
 movement remain false.
 
-This single-use lease authorizes one launch attempt; it is not an ongoing
-revocation channel, a wallet-database exclusivity lock, or proof that no other
-process or descendant retains the database. Those remain separate future
-broker/wallet responsibilities.
+The lease authorizes one launch attempt and transfers its currentness guard to
+the admitted session. The guard must remain current around each read and across
+authority acquisition, dependent callback, exact status/account/revision/
+lifecycle comparison, and final database/process revalidation. A guard denial,
+callback misuse, context mismatch, or unwind poisons and synchronously reaps
+the child; the lifecycle removes it before a panic resumes. The production
+source returns no lease until a real wallet broker provides those semantics.
+The guard does not make descendant/database exclusivity true without that
+broker's separate qualification.
+
+The borrowed dependent callback is read-only by contract. Its release-boundary
+check can detect late authority loss but cannot undo an external side effect
+that already completed. Signing, value movement, and wallet mutation require a
+separate precommit/commit authority protocol and are never authorized by this
+borrowed read authority.
 
 Every launch reparses the retained signed manifest bytes and rechecks
 publication, not-before, and expiry against a fresh wall-clock sample before
@@ -416,11 +429,12 @@ qnames, qtypes, request timing, and source IP.
 | Chromium flavors share a native-messaging location | Treat browser selection as compatibility intent; deduplicate shared paths, bind exact allowed extension origins, and refuse replacement or removal unless the manifest is proven to be owned by this installation |
 | Page forges security metadata | Strip internal headers; publish only native checked status |
 | Page forges wallet origin, generations, or permission fields | Treat them only as lookup candidates; require a native opaque engine authority context and exact wallet generations; current release remains unavailable |
-| Wallet manifest changes shape, versions, capabilities, or signing bytes | Consume exact schema v2 with denied unknown fields; require full-file and signature-omitted JCS, recomputed payload hash, fixed ABI/protocol/schema/frame values, closed unique capabilities, and all five base capabilities; read-session admission additionally requires both signed `walletOperations` and `hnsReadOperationsV1` markers and a matching runtime hello |
+| Wallet manifest changes shape, versions, capabilities, or signing bytes | Consume exact schema v2 with denied unknown fields; require full-file and signature-omitted JCS, recomputed payload hash, fixed ABI/protocol/schema/frame values, closed unique capabilities, and all five base capabilities; read-session admission additionally requires both signed `walletOperations` and `hnsReadOperationsV1` markers and a matching runtime hello; authority use additionally requires signed/runtime `hnsWalletAuthorityContextV1` |
 | Artifact supplies a key or relies on a matching hash | Ignore artifact-supplied trust; require verifier-owned release-line Ed25519 root, exact qualified manifest/artifact pin, and compiled minimum sequence |
 | Local path, symlink, or directory replacement substitutes a wallet artifact | Relative no-follow retained handles, parent-to-child inode rebinding, immutable single-link files, bounded same-handle hashes, and Linux execution only from a freshly rehashed sealed memfd |
 | Configured wallet path is aliased, replaced, shared, or redirected between admission and a read | Accept one explicit canonical absolute path only; walk ancestors no-follow; retain owner-private parent/database handles; rebind device/inode/owner/mode/link identity around launch, negotiation, and every read; after hello, boundedly attest that the immediate child holds the retained base inode; poison, kill, wait, and remove the generation on change. This detects but cannot prevent a pre-hello wrong-inode open/migration, does not attest SQLite sidecars or exclusive use, and assumes same-UID state tampering is outside the isolation boundary |
-| A restart launches without fresh wallet bootstrap authority or replays one | Require a generation-bound, single-use `WalletBootstrapLease`; consume it before discovery/launch; accept only an opaque read-only close-on-exec FIFO; map it collision-safely to child descriptor 3 while preserving ABI-only stdin/stdout; keep the production source unavailable. This authorizes one launch attempt only and is not ongoing revocation or database exclusivity. |
+| A restart launches without fresh wallet bootstrap authority or replays one | Require a generation-bound, single-use `WalletBootstrapLease`; consume it before discovery/launch; accept only an opaque read-only close-on-exec FIFO; bind it to canonical network/magic plus a nonzero opaque namespace/generation and broker guard; map it collision-safely to child descriptor 3 while preserving ABI-only stdin/stdout; keep the production source unavailable. The transferred guard must remain held through dependent use and final revalidation. |
+| Wallet authority, revision, lifecycle, or namespace changes during dependent use | Use only the additive native `hnsWalletAuthorityContextV1` contract; require exact active-wallet/account and nonzero revisions with persistent/ready/nonrecovering/nonretiring state; re-read and compare under the same guard after the callback; poison, kill, reap, and remove on mismatch, lease loss, callback misuse, or caught unwind; keep the release gate false and require the exact negotiated marker even after a future gate flip |
 | Artifact-directory replacement or restart attempts a wallet downgrade | Keep canonical per-release-line high-water state under the stable parent data directory; require strict sequence increase and predecessor-manifest linkage, with compiled floor/pin as the non-owner-state authority |
 | Concurrent wallet admissions regress a sequence or lose another release line | Serialize the complete state transaction with one stable-parent interprocess lock; retain it through launch state/time/path checks, sealed copy, and spawn |
 | Cached admission launches after expiry or local clock rollback | Reparse retained signed manifest bytes and re-evaluate publication/not-before/expiry at every launch |
@@ -458,6 +472,9 @@ trusted unlock/account/node join. Broad `walletOperations` alone is rejected;
 the signed manifest and runtime hello must also carry `hnsReadOperationsV1`,
 which freezes status, list-accounts, and the four HNS balance/receive/history/
 module-status reads while excluding workflow and value operations. The marker
-does not replace a positive interoperability fixture. The qualified artifact
+does not replace a positive interoperability fixture. Any HRM/HNSA wallet
+consumer must additionally carry `hnsWalletAuthorityContextV1`, use a real
+network-bound namespace broker lease, and pass mismatch, lease-loss, callback-
+misuse, unwind, and exact-`u64` qualification. The qualified artifact
 must remain one process with no inherited database-holding descendants because
 lifecycle termination owns and waits only for the immediate child.

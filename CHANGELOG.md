@@ -20,6 +20,24 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Add a dormant, additive private `hnsWalletAuthorityContextV1` operation
+  beside the frozen six-operation `hnsReadOperationsV1` surface. A trusted
+  one-shot bootstrap source must now bind the retained database to canonical
+  `NetworkKind`/network magic, a nonzero opaque namespace, a nonzero exact
+  `u64` lease generation, and a session-held broker guard. While that guard is
+  current, the native host acquires the exact active wallet, HNS account,
+  wallet/account authority revisions, and persistence, recovery, retirement,
+  readiness, restart, channel, and database lifecycle; lends a borrowed,
+  nonserializable, redacted authority context; and finally revalidates every
+  binding before releasing the guard.
+- Add sealed-process negative coverage for wrong authority bindings,
+  post-callback revision changes, lease loss, skipped/doubled guard callbacks,
+  consumer/guard unwind, locked-wallet identity clearing, and exact integers
+  above JavaScript's safe range. Every mismatch, guard misuse, or caught unwind
+  poisons, kills, reaps, and removes the affected generation before any panic
+  resumes. The production bootstrap source and HRM/HNSA wallet qualification
+  gate remain unavailable/false, and readiness independently requires an
+  active nonpoisoned session carrying the exact new marker.
 - Replace the dormant MeshMine verifier's superseded `hsa1` and fixed
   `ServiceAuthorizationV1` model with an HRM-backed HNSA schema-2 core. Its
   opaque current-authority input binds the exact subject, network, HRM root and
