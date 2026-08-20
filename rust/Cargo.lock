@@ -2190,7 +2190,7 @@ source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfc
 
 [[package]]
 name = "hns-browser-setup"
-version = "0.6.1"
+version = "1.0.0"
 dependencies = [
  "base64",
  "clap",
@@ -2272,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "hns-chromium-native-host"
-version = "0.6.1"
+version = "1.0.0"
 dependencies = [
  "base64",
  "getrandom 0.3.4",
@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "hns-chromium-platform-runtime"
-version = "0.6.1"
+version = "1.0.0"
 dependencies = [
  "hns-browser-chain",
  "hns-browser-dane",
@@ -2474,7 +2474,7 @@ dependencies = [
 
 [[package]]
 name = "hns-meshmine-pool-stats"
-version = "0.6.1"
+version = "1.0.0"
 dependencies = [
  "blake2",
  "hex",

@@ -150,7 +150,7 @@ change.
   remains required; `welcome` was only a synthetic routing hostname and failed
   closed against unavailable authority. Exact hashes and observations are in
   [installed-browser qualification](installed-browser-qualification.md#current-056-exact-artifact-evidence-partial).
-- Local `0.6.1` and the current Unreleased source changes are not covered by
+- Local `1.0.0` and the current Unreleased source changes are not covered by
   those historical runs. They require fresh exact-head CI and CodeQL, an
   exact-artifact installed-browser rerun, and the release/signing gates below
   before they can be described as qualified or published.

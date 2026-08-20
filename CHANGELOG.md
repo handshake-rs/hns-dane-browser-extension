@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.0.0 - 2026-08-20
+
+### Changed
+
+- Renamed the public extension, setup application, native-host descriptions,
+  store material, and release presentation to Shakescape and applied the new
+  icon and interface visual system. Existing extension IDs, native-host IDs,
+  certificate identities, install paths, binary names, and archive names stay
+  compatible with prior releases.
+
 ### Fixed
 
 - Accept HRM commitment sequence zero in the dormant schema-2 MeshMine
