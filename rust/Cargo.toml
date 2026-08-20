@@ -23,7 +23,7 @@ clap = { version = "4.6.4", features = ["derive"] }
 eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 flate2 = "1"
 hex = "0.4"
-getrandom = "0.3"
+getrandom = "0.4"
 hns-cache = { version = "=0.2.1", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "69e60d7bfce368d7d23c6c901946f02b173f00c4" }
 hns-chromium-platform-runtime = { path = "crates/hns-chromium-platform-runtime" }
 hns-chain = { package = "hns-browser-chain", version = "=0.2.1", git = "https://github.com/handshake-rs/hns-dane-engine.git", rev = "69e60d7bfce368d7d23c6c901946f02b173f00c4" }
