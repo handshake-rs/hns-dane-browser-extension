@@ -37,7 +37,7 @@ Generated input SHA-256:
   extension/assets/fonts/Orbitron-VariableFont_wght.ttf = f42db2dd16e642258e35782916eceb1dcdbea06fb958d77ad71dc5963587e8fd
   extension/assets/fonts/OFL-Orbitron.txt = dd6fdb6716fd179d1fe891759efb3f9200753fdf6abf513b55b712c4ae16e512
   rust/Cargo.toml = 46c1e993558f6f8b174bf34b69e716281906b4b2581ff95988f6bcb2baba3109
-  rust/Cargo.lock = ab0e9ff51e12b1f347f04c836f4599db09c01cfdbd8a30a7e9bbc39a7997f243
+  rust/Cargo.lock = ad77e32e870f2cea6381c2fd8e2a0fe1e7c1117cd0e1ebd96c9a5c91557572c8
   extension/manifest.json = 6978ef68730ca88faf429ec193bbf079911d9d94531a00e25adc29b6476b3747
   package.json = dd4b33ca214db9594140f65d3da8ede10d0a024ffe2b8708cdf1fc3513258810
   rust/crates/hns-browser-setup/Cargo.toml = f18f125de18678fa95e2429fe454c9a9fc2ef735c66ef5cad3f0750a7a651bb2
@@ -224,7 +224,7 @@ RUST COMPONENTS (515)
   glutin_wgl_sys 0.6.1 | Apache-2.0
   group 0.13.0 | MIT/Apache-2.0
   guillotiere 0.7.0 | MIT/Apache-2.0
-  h2 0.4.15 | MIT
+  h2 0.4.16 | MIT
   h3 0.0.8 | MIT
   h3-quinn 0.0.10 | MIT
   half 2.7.1 | MIT OR Apache-2.0
@@ -17661,7 +17661,7 @@ DEALINGS IN THE SOFTWARE.
 ================================================================================
 Notice SHA-256: f5352eaa5597c02c95e541596fe44c4cd73ca822230bd7283287ebb8b5d56cda
 Applies to:
-  - Rust crate h2 0.4.15
+  - Rust crate h2 0.4.16
 Source file names:
   - LICENSE
 --------------------------------------------------------------------------------
