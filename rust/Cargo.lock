@@ -2275,7 +2275,7 @@ name = "hns-chromium-native-host"
 version = "1.0.0"
 dependencies = [
  "base64",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "hns-browser-chain",
  "hns-browser-loopback-proxy",
  "hns-browser-observability",
