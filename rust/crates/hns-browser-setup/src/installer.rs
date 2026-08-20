@@ -310,9 +310,8 @@ impl Installer {
 
         let status = empty_status();
         Ok(OperationReport {
-            summary:
-                "Removed the Shakescape native host, trust anchor, registrations, and data."
-                    .to_owned(),
+            summary: "Removed the Shakescape native host, trust anchor, registrations, and data."
+                .to_owned(),
             details,
             status,
         })
@@ -1487,11 +1486,8 @@ fn validate_legacy_owned_host_manifest(
     let manifest: NativeHostManifest = serde_json::from_slice(bytes)
         .map_err(|_| operation("legacy registration is not a valid native-host manifest"))?;
     let canonical_origin = format!("chrome-extension://{CANONICAL_EXTENSION_ID}/");
-    if ![
-        NATIVE_HOST_DESCRIPTION,
-        LEGACY_NATIVE_HOST_DESCRIPTION,
-    ]
-    .contains(&manifest.description.as_str())
+    if ![NATIVE_HOST_DESCRIPTION, LEGACY_NATIVE_HOST_DESCRIPTION]
+        .contains(&manifest.description.as_str())
         || !manifest.allowed_origins.contains(&canonical_origin)
     {
         return Err(operation(
