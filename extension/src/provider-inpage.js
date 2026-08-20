@@ -107,7 +107,7 @@
 
   const providerInfo = Object.freeze({
     id: "org.handshake-rs.wallet",
-    name: "HNS DANE Browser Wallet",
+    name: "Shakescape Wallet",
     providerApiVersion: "1"
   });
 

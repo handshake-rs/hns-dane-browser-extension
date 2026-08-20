@@ -201,5 +201,5 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Unable to record the completed local CA installation.'
 }
 
-Write-Host "Installed HNS DANE Browser native host for: $($SelectedBrowsers -join ', ')"
+Write-Host "Installed Shakescape native host for: $($SelectedBrowsers -join ', ')"
 Write-Host "Local CA SHA-256: $($CaStatus.certificateSha256)"

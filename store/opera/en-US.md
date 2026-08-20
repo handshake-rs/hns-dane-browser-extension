@@ -1,6 +1,6 @@
 # Opera Add-ons — en-US
 
-- Name: `HNS DANE Browser`
+- Name: `Shakescape`
 - Summary: `Browse HNS and ICANN names through a local Rust DNSSEC and DANE security path.`
 - Category: `Web Development`
 - Website: `https://denuoweb.com/work/hns-dane-browser-extension`
@@ -13,7 +13,7 @@
 
 ## Description
 
-HNS DANE Browser adds a local Rust dual-root resolver and authenticated
+Shakescape adds a local Rust dual-root resolver and authenticated
 loopback proxy to desktop Opera. It resolves complete hostnames through
 Handshake and ICANN, validates HNS proofs and DNSSEC, enforces secure
 TLSA/DANE records, and shows the exact namespace and certificate policy chosen
@@ -25,7 +25,7 @@ explicit consent. A user-configured recursive HNS DoH recovery URL is blank by
 default. Bogus or indeterminate evidence fails closed.
 
 The submitted extension ZIP contains the finalized Linux, macOS, and Windows
-HNS DANE Browser Setup packages. Its Setup page selects the current computer's
+Shakescape Setup packages. Its Setup page selects the current computer's
 package for a user-initiated save. Each package contains the matching Rust
 native host, validated Handshake headers through height 300,000, required non-system
 dependencies, and release-baked catalog IDs. Select Opera and choose Install

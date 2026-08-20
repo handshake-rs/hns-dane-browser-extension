@@ -333,8 +333,8 @@ test("first install opens the embedded Setup and Complete Uninstall flow", () =>
     /details\.reason === "install"[\s\S]*?chrome\.runtime\.getURL\("src\/setup\.html"\)/
   );
   assert.match(setup, /matching local Rust native/);
-  assert.match(setup, /HNS DANE Browser Setup/);
-  assert.match(setup, /contains HNS DANE Browser Setup version/);
+  assert.match(setup, /Shakescape Setup/);
+  assert.match(setup, /contains Shakescape Setup version/);
   assert.match(setup, /non-system runtime dependencies/);
   assert.match(setup, /id="download-setup"[^>]*download/);
   assert.match(setup, /catalog extension IDs are built into/);

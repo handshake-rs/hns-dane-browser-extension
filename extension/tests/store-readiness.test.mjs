@@ -75,7 +75,7 @@ test("store copy covers every supported Chromium distribution and exact public l
     assert.match(listing, new RegExp(privacyUrl));
     assert.match(listing, new RegExp(`${productUrl}/legal`));
     assert.match(listing, /handshake-rs\/hns-dane-browser-extension/);
-    assert.match(listing, /HNS DANE Browser Setup/);
+    assert.match(listing, /Shakescape Setup/);
     assert.match(listing, /matching(?:\s+Rust)?\s+native host/i);
     assert.match(listing, /native(?: Rust)? host|native-host/i);
     assert.match(listing, /privacy/i);
@@ -102,7 +102,7 @@ test("review and privacy drafts explain the native boundary and broad permission
   }
   assert.match(permissions, /`<all_urls>`/);
   assert.match(reviewerNotes, /exact 32-character catalog extension ID/);
-  assert.match(reviewerNotes, /HNS DANE Browser Setup/);
+  assert.match(reviewerNotes, /Shakescape Setup/);
   assert.match(reviewerNotes, /does not scan browser profiles/);
   assert.match(reviewerNotes, /per-user local CA/);
   assert.match(reviewerNotes, /real public certificate/);

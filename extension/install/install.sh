@@ -356,6 +356,6 @@ fi
 # exists. A failed trust-store operation therefore remains fail-closed.
 "$installed_host" --data-dir "$data_dir" --mark-ca-installed
 
-echo "Installed HNS DANE Browser native host for: ${browsers[*]}"
+echo "Installed Shakescape native host for: ${browsers[*]}"
 echo "Load dist/chromium-extension in each selected browser, using the registered extension ID."
 echo "Local CA SHA-256: $sha256_fingerprint"

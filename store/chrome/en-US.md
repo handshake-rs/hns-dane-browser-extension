@@ -1,6 +1,6 @@
 # Chrome Web Store — en-US
 
-- Name: `HNS DANE Browser`
+- Name: `Shakescape`
 - Manifest summary: `Routes web DNS names through a local Rust dual-root DNSSEC and DANE runtime.`
 - Category: `Productivity`
 - Language: `English (United States)`
@@ -18,7 +18,7 @@
 
 ## Detailed description
 
-HNS DANE Browser adds Handshake-aware, fail-closed browsing to desktop
+Shakescape adds Handshake-aware, fail-closed browsing to desktop
 Chromium. A local Rust native host resolves each complete web hostname through
 both the Handshake and ICANN roots, validates the available evidence, and
 shows the selected namespace and security path in the toolbar popup.
@@ -42,7 +42,7 @@ Key capabilities:
   recovery. Both are off/blank by default and returned answers remain subject
   to local proof, DNSSEC, TLSA, and DANE verification.
 
-The extension requires the source-available HNS DANE Browser Setup application.
+The extension requires the source-available Shakescape Setup application.
 The submitted extension ZIP contains signed/attested, version-matched Linux,
 macOS, and Windows Setup packages. The first-install page selects the one for
 the current computer and lets the user save it; the extension cannot launch

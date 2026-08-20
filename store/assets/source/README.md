@@ -2,7 +2,7 @@
 
 These two source images are copied without modification from
 `handshake-rs/hns-dane-browser-mobile` so the desktop and mobile products share
-one HNS DANE Browser identity:
+one Shakescape identity:
 
 - `hns-dane-browser-icon-512.png`
 - `hns-dane-browser-feature-1024x500.png`

@@ -42,7 +42,7 @@ done <<'SIZES'
 SIZES
 
 magick "$icon_source" -resize 300x300 "$listing_output/icon-300.png"
-magick -size 440x280 'gradient:#06171f-#0d6e5b' \
+magick -size 440x280 'gradient:#0a0e17-#24134a' \
   \( "$icon_source" -resize 180x180 \) -gravity center -composite \
   -alpha off "PNG24:$listing_output/promo-small-440x280.png"
 magick "$feature_source" -resize '1400x560^' -gravity center \

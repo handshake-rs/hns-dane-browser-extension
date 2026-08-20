@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "HNS DANE Browser",
+  "name": "Shakescape",
   "description": "Routes web DNS names through a local Rust dual-root DNSSEC and DANE runtime.",
   "version": "0.6.1",
   "homepage_url": "https://denuoweb.com/work/hns-dane-browser-extension",
@@ -63,7 +63,7 @@
     }
   ],
   "action": {
-    "default_title": "HNS DANE Browser",
+    "default_title": "Shakescape",
     "default_popup": "src/popup.html",
     "default_icon": {
       "16": "assets/icons/icon-16.png",

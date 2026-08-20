@@ -2,11 +2,11 @@
 
 Last updated: 2026-08-13
 
-HNS DANE Browser Extension is published by Denuo Web, LLC. Privacy and
+Shakescape Extension is published by Denuo Web, LLC. Privacy and
 support questions can be sent to `info@denuoweb.com`. Do not post personal
 information to the public issue tracker.
 
-The HNS DANE Browser Extension does not operate a telemetry, analytics,
+The Shakescape Extension does not operate a telemetry, analytics,
 advertising, or browsing-history service. Denuo Web does not sell personal or
 sensitive data. Donations are optional, do not unlock features, and do not
 change how browsing data is handled.
@@ -126,7 +126,7 @@ time, and Chromium-observed completion status and time. It does not add an
 HTTP-status or main-frame claim to the Rust decision, and it stores no request
 or response headers, bodies, certificate bytes, cookies, or URL fragments.
 
-HNS DANE Browser Setup's Complete Uninstall and the supplied manual
+Shakescape Setup's Complete Uninstall and the supplied manual
 uninstaller remove the product's user-level native-host
 registrations, exact per-install trust anchor, native executable, CA key
 material, marker, chain/cache state, and runtime data. Browser-managed

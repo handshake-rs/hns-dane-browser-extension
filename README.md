@@ -1,7 +1,7 @@
-# HNS DANE Browser Extension
+# Shakescape Extension
 
 This repository contains the Chromium Manifest V3 extension, its Rust native
-messaging host, and the cross-platform HNS DANE Browser Setup application.
+messaging host, and the cross-platform Shakescape Setup application.
 Android and iOS are maintained separately in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
@@ -240,7 +240,7 @@ disposable Chromium profile. See
 [installed-browser qualification](docs/installed-browser-qualification.md);
 artifact creation is not itself qualification.
 
-See [HNS DANE Browser Setup](docs/setup-application.md) for the primary desktop
+See [Shakescape Setup](docs/setup-application.md) for the primary desktop
 installation flow and [Chromium Extension and Native Host](docs/chromium-extension.md)
 for build, trust, recovery, and manual-installation details.
 The extension detects an exact native-component version mismatch before

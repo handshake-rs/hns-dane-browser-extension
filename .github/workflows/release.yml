@@ -641,7 +641,7 @@ jobs:
             -x509 \
             -newkey rsa:2048 \
             -nodes \
-            -subj "/CN=HNS DANE Browser release smoke test" \
+            -subj "/CN=Shakescape release smoke test" \
             -days 1 \
             -keyout "$temporary/smoke.key" \
             -out "$temporary/smoke.pem" >/dev/null 2>&1
@@ -1185,7 +1185,7 @@ jobs:
           notes_file="$(mktemp)"
           trap 'rm -f -- "$notes_file"' EXIT
           cat >"$notes_file" <<EOF
-          HNS DANE Browser ${VERSION} provides a keyless first-submission store
+          Shakescape ${VERSION} provides a keyless first-submission store
           package, a canonical-ID Manifest V3 package for GitHub/unpacked use, and
           both native-host and graphical setup packages for Linux,
           Windows, and macOS on x64 and arm64.
@@ -1227,7 +1227,7 @@ jobs:
             gh release create "$RELEASE_TAG" \
               --draft \
               --verify-tag \
-              --title "HNS DANE Browser $VERSION" \
+              --title "Shakescape $VERSION" \
               --notes-file "$notes_file"
           elif [[ "$RELEASE_STATE" == draft ]]; then
             release_json="$(resolve_release_json)"
@@ -1235,7 +1235,7 @@ jobs:
             gh api \
               --method PATCH \
               "repos/${GH_REPO}/releases/${release_id}" \
-              -f name="HNS DANE Browser $VERSION" \
+              -f name="Shakescape $VERSION" \
               -F "body=@$notes_file" >/dev/null
           else
             echo "::error::Unsupported release state: $RELEASE_STATE"

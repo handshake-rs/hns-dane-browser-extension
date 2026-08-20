@@ -1349,7 +1349,7 @@ pub fn native_messaging_host_manifest_json(
     }
     let manifest = NativeMessagingHostManifest {
         name: NATIVE_MESSAGING_HOST_NAME,
-        description: "HNS DANE Browser Rust native host",
+        description: "Shakescape Rust native host",
         path: executable,
         r#type: "stdio",
         allowed_origins,

@@ -35,6 +35,8 @@ LOCKED_INPUT_PATHS = (
     "scripts/verify_cargo_git_policy.py",
     "release/license-texts/BSL-1.0.txt",
     "release/license-texts/CC0-1.0.txt",
+    "extension/assets/fonts/Orbitron-VariableFont_wght.ttf",
+    "extension/assets/fonts/OFL-Orbitron.txt",
     "rust/Cargo.toml",
     "rust/Cargo.lock",
     "extension/manifest.json",
@@ -167,7 +169,7 @@ def check_committed_asset() -> int:
     if expected_output_digest and sha256_bytes(OUTPUT.read_bytes()) != expected_output_digest:
         failures.append("the complete generated notices asset does not match its committed SHA-256")
     if not text.startswith(
-        "HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES\n"
+        "SHAKESCAPE CHROMIUM THIRD-PARTY SOFTWARE NOTICES\n"
     ):
         failures.append("the generated marker is missing")
     if f"Generator schema: {SCHEMA}\n" not in text:
@@ -614,15 +616,22 @@ def generate() -> str:
         source_name, content = sqlite_notice
         add_notice("Bundled SQLite used by libsqlite3-sys", source_name, content)
 
+    orbitron_license = ROOT / "extension/assets/fonts/OFL-Orbitron.txt"
+    add_notice(
+        "Bundled Orbitron variable font",
+        "OFL-Orbitron.txt",
+        orbitron_license.read_text(encoding="utf-8"),
+    )
+
     lines = [
-        "HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES",
+        "SHAKESCAPE CHROMIUM THIRD-PARTY SOFTWARE NOTICES",
         "",
         "This Chromium extension, native host, and setup application include open-source",
         "components. The inventory",
         "below is generated from the locked non-development Cargo dependency closures reachable",
         "from hns-chromium-native-host and hns-browser-setup on representative supported desktop",
-        "targets. Cargo build-time dependencies are retained conservatively. Workspace-owned HNS",
-        "DANE Browser crates and test-only, lint, fuzz, and snapshot-exporter dependencies are",
+        "targets. Cargo build-time dependencies are retained conservatively. Workspace-owned",
+        "application crates and test-only, lint, fuzz, and snapshot-exporter dependencies are",
         "excluded.",
         "The extension JavaScript has no third-party runtime package dependency.",
         "",
@@ -648,6 +657,12 @@ def generate() -> str:
         lines.append(
             f"  {package['name']} {package['version']} | {license_declaration(package)}"
         )
+
+    lines.extend([
+        "",
+        "BUNDLED FONT COMPONENTS (1)",
+        "  Orbitron variable font | SIL Open Font License 1.1",
+    ])
 
     lines.extend(["", "LICENSE AND NOTICE TEXTS"])
     for digest in sorted(notice_groups):

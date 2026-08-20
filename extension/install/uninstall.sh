@@ -253,4 +253,4 @@ fi
 }
 find "$install_root" -xdev -depth -delete
 
-echo "Removed the HNS DANE Browser native host, trust anchor, manifests, and runtime data."
+echo "Removed the Shakescape native host, trust anchor, manifests, and runtime data."

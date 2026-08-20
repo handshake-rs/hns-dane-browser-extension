@@ -250,7 +250,7 @@ or pre-created trust anchor.
 
 Install the extension from its catalog, or load `dist/chromium-extension`
 through the target browser's extension developer page. Its first-run page
-offers the exact-version, platform-matched HNS DANE Browser Setup package
+offers the exact-version, platform-matched Shakescape Setup package
 embedded in the extension and displays the exact 32-character ID assigned by
 that catalog or browser.
 
@@ -331,7 +331,7 @@ against the release metadata before the user runs the saved archive.
 
 ## Uninstall
 
-Use **Complete Uninstall** in HNS DANE Browser Setup. It removes only the
+Use **Complete Uninstall** in Shakescape Setup. It removes only the
 installation recorded by Setup: this product's exact browser registrations,
 CA, runtime data, cached chain state, and receipt.
 

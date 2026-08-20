@@ -10,7 +10,7 @@ upstream release.
 | --- | --- |
 | Extension package | `0.6.1` |
 | Rust workspace | `0.6.1` |
-| HNS DANE Browser Setup | `0.6.1` |
+| Shakescape Setup | `0.6.1` |
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |

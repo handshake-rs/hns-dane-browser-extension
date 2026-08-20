@@ -17,8 +17,12 @@ body {
   height: 800px;
   padding: 48px 86px;
   background:
-    radial-gradient(circle at 72% 18%, rgba(36, 143, 99, 0.28), transparent 28rem),
-    linear-gradient(135deg, #06171f, #0b1512 54%, #0d6e5b);
+    linear-gradient(rgba(0, 255, 224, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 92, 255, 0.03) 1px, transparent 1px),
+    radial-gradient(circle at 72% 18%, rgba(120, 92, 255, 0.3), transparent 28rem),
+    radial-gradient(circle at 10% 90%, rgba(0, 255, 224, 0.14), transparent 25rem),
+    #0a0e17;
+  background-size: 40px 40px, 40px 40px, auto, auto, auto;
 }
 
 .capture-copy {
@@ -26,8 +30,10 @@ body {
 }
 
 .capture-copy h1 {
+  font-family: Orbitron, ui-sans-serif, system-ui, sans-serif;
   font-size: 50px;
   line-height: 1.04;
+  letter-spacing: 0.01em;
 }
 
 .capture-copy .lede {
@@ -38,9 +44,9 @@ body {
 
 .capture-popup,
 .capture-settings {
-  border: 1px solid #3a6654;
+  border: 1px solid rgba(0, 255, 224, 0.35);
   border-radius: 14px;
-  background: #0b1512;
+  background: rgba(10, 14, 23, 0.96);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
 }
 
@@ -76,8 +82,8 @@ body {
   display: inline-block;
   margin: 10px 0;
   padding: 8px 12px;
-  border: 1px solid #69d6a5;
+  border: 1px solid #00ffe0;
   border-radius: 999px;
-  color: #69d6a5;
+  color: #00ffe0;
   font-weight: 800;
 }

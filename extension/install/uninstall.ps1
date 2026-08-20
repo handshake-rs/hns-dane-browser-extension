@@ -143,4 +143,4 @@ if (Test-Path -LiteralPath $InstallRoot) {
     Remove-Item -LiteralPath $InstallRoot -Recurse -Force
 }
 
-Write-Host 'Removed the HNS DANE Browser native host, trust anchor, registrations, and runtime data.'
+Write-Host 'Removed the Shakescape native host, trust anchor, registrations, and runtime data.'

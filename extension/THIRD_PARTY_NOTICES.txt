@@ -1,11 +1,11 @@
-HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES
+SHAKESCAPE CHROMIUM THIRD-PARTY SOFTWARE NOTICES
 
 This Chromium extension, native host, and setup application include open-source
 components. The inventory
 below is generated from the locked non-development Cargo dependency closures reachable
 from hns-chromium-native-host and hns-browser-setup on representative supported desktop
-targets. Cargo build-time dependencies are retained conservatively. Workspace-owned HNS
-DANE Browser crates and test-only, lint, fuzz, and snapshot-exporter dependencies are
+targets. Cargo build-time dependencies are retained conservatively. Workspace-owned
+application crates and test-only, lint, fuzz, and snapshot-exporter dependencies are
 excluded.
 The extension JavaScript has no third-party runtime package dependency.
 
@@ -30,13 +30,15 @@ Inclusion here does not imply endorsement by the component authors.
 
 Generator schema: 6
 Generated input SHA-256:
-  scripts/generate-third-party-notices.py = ded2084725e77cabf668fb131777c59e9fe8ddc3c4b530eba6e55fc4f48a7baa
+  scripts/generate-third-party-notices.py = 5c660c45850b3315996a86d5a5c604d778358b74ef50e403dcbc5e004c83033b
   scripts/verify_cargo_git_policy.py = f9db5bfa4c7df7cfbe7ecc52b7e04197ea6d7095b511d76425766c59b017c05e
   release/license-texts/BSL-1.0.txt = c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566
   release/license-texts/CC0-1.0.txt = 8c5bfd05728b98356d25742d60344c8f39a82faacf5758451c2628b0f9f9773f
+  extension/assets/fonts/Orbitron-VariableFont_wght.ttf = f42db2dd16e642258e35782916eceb1dcdbea06fb958d77ad71dc5963587e8fd
+  extension/assets/fonts/OFL-Orbitron.txt = dd6fdb6716fd179d1fe891759efb3f9200753fdf6abf513b55b712c4ae16e512
   rust/Cargo.toml = 1c90dfcf86f79400082783b3f2b65e87c59c33c8f4b3433807689d551651fd6e
   rust/Cargo.lock = a1049ddf48bfd0051ed84e81104ae39a4dbee03aa5be458fa6c674cb5fa32df1
-  extension/manifest.json = 72f115f15fc535701d318abeb47d46746fb21684851543231db16a26ff786e6a
+  extension/manifest.json = ab652bb9565c7724b3ea3151b3b8b4060b6a3a23e80d4e21cb6a529172a1f1eb
   package.json = 15a81f37fc265dd26edec5c62615a98363e8cf70d70af858a05efbb6a5b1f7ad
   rust/crates/hns-browser-setup/Cargo.toml = f18f125de18678fa95e2429fe454c9a9fc2ef735c66ef5cad3f0750a7a651bb2
   rust/crates/hns-chromium-native-host/Cargo.toml = fd91c86f3618f94a8fc2b45d70f51a0fca67cc4734bd8fbf7aca073050fd4019
@@ -559,6 +561,9 @@ RUST COMPONENTS (515)
   zvariant 5.13.1 | MIT
   zvariant_derive 5.13.1 | MIT
   zvariant_utils 3.5.0 | MIT
+
+BUNDLED FONT COMPONENTS (1)
+  Orbitron variable font | SIL Open Font License 1.1
 
 LICENSE AND NOTICE TEXTS
 
@@ -14596,6 +14601,107 @@ The `cfg_aliases!` macro uses a lot of the code from [`tectonic_cfg_support::tar
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
 ---
+
+================================================================================
+Notice SHA-256: bc5c1902714164a163620fac33bb17530c19170d0ee5964709cd01f3ab902e9c
+Applies to:
+  - Bundled Orbitron variable font
+Source file names:
+  - OFL-Orbitron.txt
+--------------------------------------------------------------------------------
+Copyright 2018 The Orbitron Project Authors (https://github.com/theleagueof/orbitron), with Reserved Font Name: "Orbitron"
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ================================================================================
 Notice SHA-256: bccaa8b6c09f94e81f06696e179dbe058464bbdfbc823b6d49cada1d71e84ac3

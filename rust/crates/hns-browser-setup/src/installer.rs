@@ -32,6 +32,8 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_COMMAND_DIAGNOSTIC_CHARS: usize = 2_000;
 #[cfg(target_os = "linux")]
 const CA_COMMON_NAME: &str = "HNS DANE Browser Local CA";
+const NATIVE_HOST_DESCRIPTION: &str = "Shakescape Rust native host";
+const LEGACY_NATIVE_HOST_DESCRIPTION: &str = "HNS DANE Browser Rust native host";
 const RECEIPT_FILE_NAME: &str = "installation-receipt.json";
 const TRANSACTION_FILE_NAME: &str = "installation-transaction.json";
 const NATIVE_HOST_FILE_NAME: &str = if cfg!(windows) {
@@ -309,7 +311,7 @@ impl Installer {
         let status = empty_status();
         Ok(OperationReport {
             summary:
-                "Removed the HNS DANE Browser native host, trust anchor, registrations, and data."
+                "Removed the Shakescape native host, trust anchor, registrations, and data."
                     .to_owned(),
             details,
             status,
@@ -551,12 +553,12 @@ impl Installer {
         Ok(OperationReport {
             summary: if repaired {
                 format!(
-                    "Repaired HNS DANE Browser {VERSION} for {}.",
+                    "Repaired Shakescape {VERSION} for {}.",
                     browser_labels(&request.browsers)
                 )
             } else {
                 format!(
-                    "Installed HNS DANE Browser {VERSION} for {}.",
+                    "Installed Shakescape {VERSION} for {}.",
                     browser_labels(&request.browsers)
                 )
             },
@@ -1485,7 +1487,11 @@ fn validate_legacy_owned_host_manifest(
     let manifest: NativeHostManifest = serde_json::from_slice(bytes)
         .map_err(|_| operation("legacy registration is not a valid native-host manifest"))?;
     let canonical_origin = format!("chrome-extension://{CANONICAL_EXTENSION_ID}/");
-    if manifest.description != "HNS DANE Browser Rust native host"
+    if ![
+        NATIVE_HOST_DESCRIPTION,
+        LEGACY_NATIVE_HOST_DESCRIPTION,
+    ]
+    .contains(&manifest.description.as_str())
         || !manifest.allowed_origins.contains(&canonical_origin)
     {
         return Err(operation(
@@ -4251,7 +4257,7 @@ mod tests {
         };
         let manifest = serde_json::json!({
             "name": NATIVE_HOST_NAME,
-            "description": "HNS DANE Browser Rust native host",
+            "description": NATIVE_HOST_DESCRIPTION,
             "path": host,
             "type": "stdio",
             "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")]
@@ -4261,6 +4267,7 @@ mod tests {
         assert!(validate_any_owned_host_manifest(&bytes, &host).is_ok());
 
         let mut legacy = manifest.clone();
+        legacy["description"] = serde_json::json!(LEGACY_NATIVE_HOST_DESCRIPTION);
         legacy["allowed_origins"] = serde_json::json!([
             "chrome-extension://fakeegkjadihalgbnenafflijnpiikbc/",
             format!("chrome-extension://{CANONICAL_EXTENSION_ID}/")

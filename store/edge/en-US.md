@@ -1,6 +1,6 @@
 # Microsoft Edge Add-ons — en-US
 
-- Name: `HNS DANE Browser`
+- Name: `Shakescape`
 - Short description: `Routes web DNS names through a local Rust dual-root DNSSEC and DANE runtime.`
 - Category: `Developer tools`
 - Website: `https://denuoweb.com/work/hns-dane-browser-extension`
@@ -15,7 +15,7 @@
 
 ## Description
 
-HNS DANE Browser gives Microsoft Edge a local, Rust-verified security path for
+Shakescape gives Microsoft Edge a local, Rust-verified security path for
 Handshake and ICANN web names. The native host resolves every complete
 hostname through both roots, validates Handshake proofs and DNSSEC, derives
 the correct TLSA owner from the effective HTTPS or WebSocket endpoint, and
@@ -34,7 +34,7 @@ P2P DNS is requester-only and opt-in. A custom recursive HNS DoH URL is blank
 by default. Both recovery paths still require local proof, DNSSEC, TLSA, and
 DANE verification.
 
-The matching source-available HNS DANE Browser Setup application must be run on
+The matching source-available Shakescape Setup application must be run on
 Linux, macOS, or Windows. The submitted extension ZIP contains the finalized
 packages and its Setup page selects the current computer's package for a
 user-initiated save. Setup contains the matching Rust native host, validated

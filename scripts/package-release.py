@@ -403,7 +403,7 @@ def load_release_context(
         "source_url": source_url,
         "metadata": {
             "schemaVersion": 1,
-            "name": "HNS DANE Browser",
+            "name": "Shakescape",
             "version": version,
             "extension": {
                 "canonicalIdentityAlgorithm": identity["algorithm"],
@@ -1022,14 +1022,14 @@ def native_installation_readme(
                 "Verify this Linux bundle against the published SHA256SUMS file."
             )
     registration_list = ", ".join(f"`{value}`" for value in registration_ids)
-    text = f"""# HNS DANE Browser native host
+    text = f"""# Shakescape native host
 
 Version: {version}
 Platform: {platform}-{architecture}
 Canonical release/default extension ID: `{canonical_extension_id}`
 Native registration ID(s) in this bundle: {registration_list}
 
-This native host works with the browser-neutral Manifest V3 HNS DANE Browser
+This native host works with the browser-neutral Manifest V3 Shakescape
 extension on Google Chrome, Chromium, Microsoft Edge, Brave, Vivaldi, and
 Opera. Install the intended extension first and verify its exact ID on the
 browser's extension-management page. Store catalogs can assign IDs that differ
@@ -1533,7 +1533,7 @@ def macos_info_plist(version: str) -> bytes:
   <key>CFBundleIdentifier</key>
   <string>com.denuoweb.hns-dane-browser.setup</string>
   <key>CFBundleName</key>
-  <string>HNS DANE Browser Setup</string>
+  <string>Shakescape Setup</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -1624,12 +1624,12 @@ def setup_installation_readme(
         else ""
     )
 
-    text = f"""# HNS DANE Browser setup
+    text = f"""# Shakescape setup
 
 Version: {version}
 Platform: {platform}-{architecture}
 
-Install the HNS DANE Browser extension first and confirm its exact ID on the
+Install the Shakescape extension first and confirm its exact ID on the
 browser extension-management or setup page. Extract this complete archive, then
 launch the setup application from the extracted top-level directory:
 

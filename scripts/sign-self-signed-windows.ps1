@@ -270,7 +270,7 @@ try {
       /s My `
       /tr $TimestampUrl `
       /td SHA256 `
-      /d 'HNS DANE Browser' `
+      /d 'Shakescape' `
       /du 'https://github.com/handshake-rs/hns-dane-browser-extension' `
       $binary | Out-Host
     if ($LASTEXITCODE -ne 0) {

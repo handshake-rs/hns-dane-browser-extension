@@ -118,7 +118,7 @@ test("Linux installer and complete uninstaller are isolated and symmetric", () =
         join(installRoot, "licenses/THIRD_PARTY_NOTICES.txt"),
         "utf8"
       ),
-      /^HNS DANE BROWSER CHROMIUM THIRD-PARTY SOFTWARE NOTICES\n/
+      /^SHAKESCAPE CHROMIUM THIRD-PARTY SOFTWARE NOTICES\n/
     );
     assert.match(
       readFileSync(join(installRoot, "licenses/LICENSE"), "utf8"),

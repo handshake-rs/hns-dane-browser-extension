@@ -1,6 +1,6 @@
 # Store Reviewer Notes
 
-HNS DANE Browser intentionally fails closed until HNS DANE Browser Setup
+Shakescape intentionally fails closed until Shakescape Setup
 installs its embedded native Rust host, validated height-300,000 header
 bootstrap, and per-user local CA. The extension cannot launch an executable;
 its reviewed ZIP contains six fixed Setup archives and offers the one matching

@@ -23,7 +23,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 #[cfg(target_os = "windows")]
 use winit::window::{Window, WindowId};
 
-const PRODUCT_NAME: &str = "HNS DANE Browser Setup";
+const PRODUCT_NAME: &str = "Shakescape Setup";
 const SOURCE_URL: &str = "https://github.com/handshake-rs/hns-dane-browser-extension";
 const LICENSE_URL: &str =
     "https://github.com/handshake-rs/hns-dane-browser-extension/blob/main/LICENSE";
@@ -40,7 +40,7 @@ const DONATE_HNS_URL: &str = concat!(
 #[command(
     name = "hns-dane-browser-setup",
     version,
-    about = "Install, inspect, or completely remove the HNS DANE Browser native components"
+    about = "Install, inspect, or completely remove the Shakescape native components"
 )]
 struct Arguments {
     /// Install or repair the native host and per-user trust material.
@@ -649,7 +649,7 @@ impl SetupApp {
         let modal =
             egui::Modal::new(egui::Id::new("confirm_complete_uninstall")).show(context, |ui| {
                 ui.set_max_width(520.0);
-                ui.heading("Completely uninstall HNS DANE Browser components?");
+                ui.heading("Completely uninstall Shakescape components?");
                 ui.label(
                     "Close all supported browsers first. This removes the following per-user \
                      components owned by this setup:",

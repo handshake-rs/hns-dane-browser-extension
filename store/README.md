@@ -1,6 +1,6 @@
 # Chromium Store Submission Package
 
-This directory is the copy-and-asset source of truth for HNS DANE Browser
+This directory is the copy-and-asset source of truth for Shakescape
 Extension store submissions.
 
 ## Distribution map

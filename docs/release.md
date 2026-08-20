@@ -40,7 +40,7 @@ For the version selected in the release commit:
 
 ```sh
 release_version=X.Y.Z
-git tag -a "v${release_version}" -m "HNS DANE Browser ${release_version}"
+git tag -a "v${release_version}" -m "Shakescape ${release_version}"
 git push origin "v${release_version}"
 gh run watch --repo handshake-rs/hns-dane-browser-extension
 gh release view "v${release_version}" \

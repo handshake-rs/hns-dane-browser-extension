@@ -5,7 +5,7 @@ schema v1. It has no backend, wallet database, key generation, RPC connection,
 or custody.
 
 Serve these files from an HTTPS logical origin whose exact main-frame security
-receipt is approved by HNS DANE Browser. The extension intentionally does not
+receipt is approved by Shakescape. The extension intentionally does not
 inject the provider into `file:` pages, ordinary HTTP pages, stale/restored
 documents, or documents for which private wallet ABI v2 is unavailable.
 

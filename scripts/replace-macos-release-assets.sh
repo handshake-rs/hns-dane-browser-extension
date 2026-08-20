@@ -273,7 +273,7 @@ gh api \
 final_release="$BACKUP_DIR/release-after-macos-signing.json"
 gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" >"$final_release"
 if [[ "$(jq -er '.tag_name' "$final_release")" != "$RELEASE_TAG" ||
-      "$(jq -er '.name' "$final_release")" != "HNS DANE Browser $VERSION" ||
+      "$(jq -er '.name' "$final_release")" != "Shakescape $VERSION" ||
       "$(jq -er '.draft' "$final_release")" != false ]]; then
   echo "::error::Release identity changed during macOS asset replacement."
   exit 1

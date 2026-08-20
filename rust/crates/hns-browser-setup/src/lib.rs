@@ -1,4 +1,4 @@
-//! Cross-platform, per-user setup for HNS DANE Browser.
+//! Cross-platform, per-user setup for Shakescape.
 
 mod browser;
 mod installer;

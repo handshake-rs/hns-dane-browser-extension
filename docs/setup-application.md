@@ -1,6 +1,6 @@
-# HNS DANE Browser Setup
+# Shakescape Setup
 
-HNS DANE Browser Setup is the user-facing installer, repair tool, status
+Shakescape Setup is the user-facing installer, repair tool, status
 viewer, and complete uninstaller for the Chromium extension's Rust native
 host. It is built from this repository and shares the extension/native-host
 version.
@@ -22,7 +22,7 @@ builds.
 
 ## User flow
 
-1. Install HNS DANE Browser in the intended Chromium catalog or load the
+1. Install Shakescape in the intended Chromium catalog or load the
    canonical GitHub package.
 2. On the extension's Setup page, choose **Save Setup**. The page selects the
    signed package embedded in the installed extension for the current
