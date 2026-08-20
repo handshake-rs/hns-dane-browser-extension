@@ -1,6 +1,6 @@
 # Version Audit
 
-Audit date: 2026-08-13
+Audit date: 2026-08-20
 
 This table records configured versions for the Chromium extension, native
 host, and Setup build. It does not claim that each entry is the newest
@@ -14,8 +14,8 @@ upstream release.
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
-| Consolidated engine source | Git `65c397e8347f37085ea67d2c9c745ce896328e64`, version `0.2.1` |
-| MeshMine HNSA profile core | Local dormant schema 2; no production HRM authority adapter |
+| Consolidated engine source | Git `69e60d7bfce368d7d23c6c901946f02b173f00c4`, version `0.2.1` |
+| MeshMine HNSA profile core | Dormant schema 2 over canonical engine guard; no Chromium platform backend |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
 | rcgen | `0.14.8` |
@@ -39,15 +39,14 @@ adapters from the one exact, final dated engine Git revision shown above:
 - `hns-resolution-policy`.
 
 The committed Cargo lock, source-policy verifier, notice generator, cargo-deny
-policy, and CI gates must change together for an intentional engine upgrade or
-future canonical HRM/HNSA dependency. The native MeshMine profile core mirrors
-the current drafts, but its authority type is deliberately unconstructible by
-product callers. The product has no complete current-HRM validator, sole
-authority broker, authenticated aggregate store and external floor, fenced
-lease, native request/UI join, published-vector reconciliation, or
-exact-artifact installed-browser qualification. Verified HNSA feed display
-therefore remains unavailable. HNSR transport, discovery, and persistence
-remain explicitly disabled.
+policy, and CI gates must change together for an intentional engine upgrade.
+The MeshMine profile core consumes the canonical engine's current HRM/HNSA
+guard, but its mapped authority remains deliberately unconstructible by product
+callers. The product has no Chromium backend supplying complete current HNS/HRM
+retrieval, authenticated aggregate CAS and external floor, real fenced lease,
+native request/UI join, or exact-artifact installed-browser qualification.
+Verified HNSA feed display therefore remains unavailable. HNSR transport,
+discovery, and persistence remain explicitly disabled.
 
 ## Moving-source review
 

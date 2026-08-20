@@ -3,6 +3,7 @@ use std::fmt;
 
 use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
+use hns_dane_engine::CurrentCommittedNamedService as EngineCurrentNamedService;
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, VerifyingKey};
 use serde::Deserialize;
@@ -98,11 +99,11 @@ impl<'a> HrmPoolStatsRequest<'a> {
 /// Exact current named-service authority held by the trusted HRM broker.
 ///
 /// Every field is private and this type deliberately has no public constructor.
-/// A future adapter must create it only from a durably acknowledged, complete
-/// current HRM/HNSA aggregate while holding the subject-wide broker operation
-/// lease through dependent use. Ordinary browser, endpoint, JSON, and DNS
-/// inputs cannot manufacture this capability.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// [`verify_engine_current_hrm_and_commit`] creates it only from the canonical
+/// engine's durably acknowledged current guard while the subject-wide broker
+/// operation lease remains held through dependent use. Ordinary browser,
+/// endpoint, JSON, and DNS inputs cannot manufacture this capability.
+#[derive(Debug, Eq, PartialEq)]
 pub struct CurrentHrmNamedService {
     network_magic: u32,
     name_hash: [u8; 32],
@@ -980,6 +981,68 @@ pub fn verify_hrm_and_commit<E>(
     result.map_err(HrmPoolStatsAdmissionError::Verification)
 }
 
+/// Verify and persist one profile document under the canonical engine's exact
+/// current HRM/HNSA authority guard.
+///
+/// This is the only production-shaped constructor path for the local profile
+/// authority. It accepts no caller-shaped authority fields, rejects a
+/// withdrawal, maps the engine's exact durable revision, trusted operation
+/// time, and fencing token, and rechecks the engine lease after the profile's
+/// own commit-before-release transition. The surrounding engine broker must
+/// still retain its owned guard through this complete callback and its own
+/// release-boundary check.
+pub fn verify_engine_current_hrm_and_commit<E>(
+    current: &EngineCurrentNamedService<'_>,
+    request: HrmPoolStatsRequest<'_>,
+    document: &[u8],
+    state: &mut HrmPoolStatsState,
+    commit: impl FnMut(u64, &[u8]) -> Result<(), E>,
+) -> Result<VerifiedHrmPoolStatsSnapshot, HrmPoolStatsAdmissionError<E>> {
+    current.ensure_lease_held().map_err(|_| {
+        HrmPoolStatsAdmissionError::Verification(HrmPoolStatsError::HistoricalAdmission)
+    })?;
+    let authority =
+        current_hrm_named_service(current).map_err(HrmPoolStatsAdmissionError::Verification)?;
+    let result = verify_hrm_and_commit(&authority, request, document, state, commit);
+    current.ensure_lease_held().map_err(|_| {
+        HrmPoolStatsAdmissionError::Verification(HrmPoolStatsError::HistoricalAdmission)
+    })?;
+    result
+}
+
+fn current_hrm_named_service(
+    current: &EngineCurrentNamedService<'_>,
+) -> Result<CurrentHrmNamedService, HrmPoolStatsError> {
+    let service = current
+        .active()
+        .ok_or(HrmPoolStatsError::InvalidCurrentAuthority)?;
+    let identity = service.identity();
+    let authority = CurrentHrmNamedService {
+        network_magic: identity.network_magic,
+        name_hash: identity.name_hash,
+        service_name: identity.service_name.clone(),
+        application_profile_id: identity.application_profile_id,
+        hrm_sequence: service.hrm_sequence(),
+        hrm_envelope_hash: service.hrm_envelope_hash(),
+        authority_revision: current.authority_revision(),
+        operation_lease_generation: current.fencing_token().get(),
+        trusted_operation_time: current.trusted_time_high_water(),
+        service_resource_id: service.resource_id(),
+        service_delegation_id: service.delegation_id(),
+        service_generation: service.service_generation(),
+        service_controller_key: service.service_controller_key(),
+        resource_not_before: service.resource_not_before(),
+        resource_expires_at: service.resource_expires_at(),
+        delegation_not_before: service.delegation_not_before(),
+        delegation_expires_at: service.delegation_expires_at(),
+        max_endpoint_lifetime: service.max_endpoint_lifetime(),
+        allowed_endpoint_capabilities: service.allowed_endpoint_capabilities(),
+        endpoint_constraints_hash: service.endpoint_constraints_hash(),
+    };
+    authority.validate()?;
+    Ok(authority)
+}
+
 /// Profile, authority, signature, replacement, or local-state failure.
 #[derive(Clone, Debug, Error)]
 #[non_exhaustive]
@@ -1652,6 +1715,24 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use hns_dane_engine::{
+        AuthorityLeaseKey, AuthorityLeaseWitness, FencedLeaseGuard, FencingToken,
+        HrmHnsaAuthorityBackend, HrmHnsaAuthorityBroker, HrmHnsaAuthorityBrokerConfig,
+        HrmHnsaAuthorityBrokerError, NamedServiceAuthorityExpectation,
+        NamedServiceAuthoritySnapshot, NamedServiceAuthorityStorageState, NamedServiceIdentity,
+        NamedServicePolicy, ResolvedManifest, RollbackProtectionClass, StorageNamespaceId,
+        ValidationLimits,
+    };
+    use hns_hrm::model::{Controller, Envelope, Payload, VERSION as HRM_VERSION};
+    use hns_hrm::validation::AuthenticatedNameState;
+    use hns_service_authority::hrm::{
+        NamedServiceAttributes, ServiceDelegationConstraints, named_service_resource,
+        service_controller_delegation, service_delegation_id,
+    };
+    use hns_service_authority::lease::LeaseError;
     use k256::ecdsa::signature::hazmat::PrehashSigner;
     use k256::ecdsa::{Signature, SigningKey};
     use serde_json::json;
@@ -1662,6 +1743,7 @@ mod tests {
     const MAGIC: u32 = 0xae38_95cf;
     const ROUTE_ID: [u8; 32] = [5; 32];
     const NOW: u64 = 1_700_000_100;
+    const ENGINE_STORAGE_NAMESPACE: [u8; 32] = [41; 32];
 
     fn public_key(private: [u8; 32]) -> [u8; 33] {
         SigningKey::from_bytes((&private).into())
@@ -1677,7 +1759,7 @@ mod tests {
         Sha3_256::digest(NAME).into()
     }
 
-    fn authority() -> CurrentHrmNamedService {
+    fn test_authority() -> CurrentHrmNamedService {
         CurrentHrmNamedService {
             network_magic: MAGIC,
             name_hash: name_hash(),
@@ -1705,6 +1787,298 @@ mod tests {
             allowed_endpoint_capabilities: READ_STATS_CAPABILITY,
             endpoint_constraints_hash: [9; 32],
         }
+    }
+
+    #[derive(Debug, Error)]
+    #[error("engine authority test backend rejected an operation")]
+    struct EngineBackendError;
+
+    #[derive(Debug)]
+    struct EngineAuthorityLease {
+        key: AuthorityLeaseKey,
+        held: Rc<Cell<bool>>,
+    }
+
+    impl FencedLeaseGuard<AuthorityLeaseKey> for EngineAuthorityLease {
+        fn key(&self) -> &AuthorityLeaseKey {
+            &self.key
+        }
+
+        fn fencing_token(&self) -> FencingToken {
+            FencingToken::new(13).expect("nonzero test fence")
+        }
+
+        fn ensure_held(&self) -> Result<(), LeaseError> {
+            self.held.get().then_some(()).ok_or(LeaseError::Lost)
+        }
+    }
+
+    #[derive(Default)]
+    struct EngineDurableAuthority {
+        initialized: bool,
+        encoded: Option<Vec<u8>>,
+        minimum_revision: u64,
+    }
+
+    struct EngineAuthorityBackend {
+        manifest: ResolvedManifest,
+        held: Rc<Cell<bool>>,
+        durable: RefCell<EngineDurableAuthority>,
+    }
+
+    impl EngineAuthorityBackend {
+        fn new(manifest: ResolvedManifest, held: Rc<Cell<bool>>) -> Self {
+            Self {
+                manifest,
+                held,
+                durable: RefCell::new(EngineDurableAuthority::default()),
+            }
+        }
+
+        fn namespace() -> StorageNamespaceId {
+            StorageNamespaceId::new(ENGINE_STORAGE_NAMESPACE).expect("engine test namespace")
+        }
+    }
+
+    impl HrmHnsaAuthorityBackend for EngineAuthorityBackend {
+        type Error = EngineBackendError;
+        type AuthorityLease = EngineAuthorityLease;
+
+        fn rollback_protection(&self) -> RollbackProtectionClass {
+            RollbackProtectionClass::IndependentLocalRoot
+        }
+
+        fn acquire_authority_lease(
+            &self,
+            key: &AuthorityLeaseKey,
+        ) -> Result<Self::AuthorityLease, Self::Error> {
+            Ok(EngineAuthorityLease {
+                key: *key,
+                held: Rc::clone(&self.held),
+            })
+        }
+
+        fn trusted_time(&self) -> Result<u64, Self::Error> {
+            Ok(NOW)
+        }
+
+        fn load_authority_state(
+            &self,
+            _lease: &AuthorityLeaseWitness<'_>,
+        ) -> Result<NamedServiceAuthorityStorageState, Self::Error> {
+            let durable = self.durable.borrow();
+            match (&durable.encoded, durable.initialized) {
+                (None, false) => Ok(NamedServiceAuthorityStorageState::Absent),
+                (Some(encoded), true) => Ok(NamedServiceAuthorityStorageState::Present {
+                    encoded: encoded.clone(),
+                    minimum_revision: durable.minimum_revision,
+                }),
+                _ => Err(EngineBackendError),
+            }
+        }
+
+        fn persist_authority_state(
+            &self,
+            expectation: NamedServiceAuthorityExpectation,
+            snapshot: &NamedServiceAuthoritySnapshot,
+        ) -> Result<(), Self::Error> {
+            if expectation.storage_namespace_id() != Self::namespace()
+                || expectation.fencing_token().get() != 13
+            {
+                return Err(EngineBackendError);
+            }
+            let mut durable = self.durable.borrow_mut();
+            match expectation {
+                NamedServiceAuthorityExpectation::Absent { .. }
+                    if !durable.initialized && durable.encoded.is_none() => {}
+                NamedServiceAuthorityExpectation::Exact {
+                    revision,
+                    fingerprint,
+                    ..
+                } => {
+                    let current = durable.encoded.as_deref().ok_or(EngineBackendError)?;
+                    let current = NamedServiceAuthoritySnapshot::decode(current)
+                        .map_err(|_| EngineBackendError)?;
+                    if current.revision() != revision
+                        || current.fingerprint().map_err(|_| EngineBackendError)? != fingerprint
+                    {
+                        return Err(EngineBackendError);
+                    }
+                }
+                NamedServiceAuthorityExpectation::Absent { .. } => {
+                    return Err(EngineBackendError);
+                }
+            }
+            durable.encoded = Some(snapshot.encode().map_err(|_| EngineBackendError)?);
+            durable.initialized = true;
+            durable.minimum_revision = durable.minimum_revision.max(snapshot.revision());
+            Ok(())
+        }
+
+        fn retrieve_current_manifest(
+            &self,
+            lease: &AuthorityLeaseWitness<'_>,
+            identity: &NamedServiceIdentity,
+            trusted_now: u64,
+        ) -> Result<ResolvedManifest, Self::Error> {
+            lease.ensure_held().map_err(|_| EngineBackendError)?;
+            if identity != &engine_identity() || trusted_now != NOW {
+                return Err(EngineBackendError);
+            }
+            Ok(self.manifest.clone())
+        }
+    }
+
+    fn engine_identity() -> NamedServiceIdentity {
+        NamedServiceIdentity::new(MAGIC, name_hash(), SERVICE_NAME, EXPERIMENTAL_PROFILE_ID)
+            .expect("engine profile identity")
+    }
+
+    fn engine_policy() -> NamedServicePolicy {
+        NamedServicePolicy {
+            application_profile_id: EXPERIMENTAL_PROFILE_ID,
+            allowed_profile_flags: 0,
+            required_profile_flags: 0,
+            expected_profile_constraints_hash: [0; 32],
+            allowed_endpoint_capabilities: READ_STATS_CAPABILITY,
+            required_endpoint_capabilities: READ_STATS_CAPABILITY,
+            expected_endpoint_constraints_hash: [9; 32],
+            maximum_endpoint_lifetime: 3_600,
+        }
+    }
+
+    fn engine_config() -> HrmHnsaAuthorityBrokerConfig {
+        HrmHnsaAuthorityBrokerConfig::new(
+            ENGINE_STORAGE_NAMESPACE,
+            4,
+            4,
+            ValidationLimits::default(),
+            RollbackProtectionClass::IndependentLocalRoot,
+        )
+        .expect("engine broker config")
+    }
+
+    fn engine_manifest() -> (ResolvedManifest, CurrentHrmNamedService) {
+        let identity = engine_identity();
+        let hrm_private_key = [1; 32];
+        let service_private_key = [2; 32];
+        let payload_issued_at = NOW - 1_000;
+        let payload_expires_at = NOW + 10_000;
+        let resource = named_service_resource(
+            &identity,
+            NamedServiceAttributes {
+                profile_flags: 0,
+                profile_constraints_hash: [0; 32],
+                presentation: None,
+            },
+            payload_issued_at,
+            payload_expires_at,
+        )
+        .expect("engine named-service resource");
+        let delegation = service_controller_delegation(
+            &identity,
+            &resource,
+            public_key(service_private_key),
+            ServiceDelegationConstraints {
+                service_generation: 3,
+                max_endpoint_lifetime: 3_600,
+                allowed_endpoint_capabilities: READ_STATS_CAPABILITY,
+                endpoint_constraints_hash: [9; 32],
+            },
+            NOW - 500,
+            NOW + 5_000,
+            payload_issued_at,
+            payload_expires_at,
+        )
+        .expect("engine service delegation");
+        let delegation_id =
+            service_delegation_id(&delegation, payload_issued_at, payload_expires_at)
+                .expect("engine service delegation ID");
+        let envelope = Envelope::sign(
+            Payload {
+                version: HRM_VERSION,
+                subject: name_hash(),
+                sequence: 7,
+                issued_at: payload_issued_at,
+                expires_at: payload_expires_at,
+                controller: Controller::secp256k1(public_key(hrm_private_key))
+                    .expect("engine HRM controller"),
+                resources: vec![resource],
+                delegations: vec![delegation],
+                extensions: None,
+            },
+            MAGIC,
+            &hrm_private_key,
+        )
+        .expect("engine signed HRM envelope");
+        let envelope_hash = envelope.envelope_hash().expect("engine HRM envelope hash");
+        let envelope = envelope.encode().expect("engine HRM envelope encoding");
+        let mut chain_work = [0; 32];
+        chain_work[31] = 7;
+        let manifest = ResolvedManifest {
+            name_state: AuthenticatedNameState {
+                network_magic: MAGIC,
+                subject: name_hash(),
+                has_current_owner: true,
+                revoked: false,
+                expired: false,
+                finality_accepted: true,
+                chain_height: 107,
+                chain_work,
+                chain_anchor: [7; 32],
+                accepted_reorganization: None,
+                commitment_records: vec![vec![
+                    "hrm1".to_owned(),
+                    "seq=7".to_owned(),
+                    format!("hash=sha256:{}", base64url(&envelope_hash)),
+                    "uri=https://pool.invalid/hrm".to_owned(),
+                ]],
+            },
+            envelope,
+        };
+        let expected = CurrentHrmNamedService {
+            network_magic: MAGIC,
+            name_hash: name_hash(),
+            service_name: SERVICE_NAME.to_owned(),
+            application_profile_id: EXPERIMENTAL_PROFILE_ID,
+            hrm_sequence: 7,
+            hrm_envelope_hash: envelope_hash,
+            authority_revision: 1,
+            operation_lease_generation: 13,
+            trusted_operation_time: NOW,
+            service_resource_id: identity.resource_id().expect("engine service resource ID"),
+            service_delegation_id: delegation_id,
+            service_generation: 3,
+            service_controller_key: public_key(service_private_key),
+            resource_not_before: payload_issued_at,
+            resource_expires_at: payload_expires_at,
+            delegation_not_before: NOW - 500,
+            delegation_expires_at: NOW + 5_000,
+            max_endpoint_lifetime: 3_600,
+            allowed_endpoint_capabilities: READ_STATS_CAPABILITY,
+            endpoint_constraints_hash: [9; 32],
+        };
+        (manifest, expected)
+    }
+
+    fn base64url(input: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut output = String::with_capacity(input.len().saturating_mul(4).div_ceil(3));
+        for chunk in input.chunks(3) {
+            let word = (u32::from(chunk[0]) << 16)
+                | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+                | u32::from(*chunk.get(2).unwrap_or(&0));
+            output.push(TABLE[((word >> 18) & 63) as usize] as char);
+            output.push(TABLE[((word >> 12) & 63) as usize] as char);
+            if chunk.len() > 1 {
+                output.push(TABLE[((word >> 6) & 63) as usize] as char);
+            }
+            if chunk.len() > 2 {
+                output.push(TABLE[(word & 63) as usize] as char);
+            }
+        }
+        output
     }
 
     fn request(now: u64) -> HrmPoolStatsRequest<'static> {
@@ -1845,6 +2219,83 @@ mod tests {
     }
 
     #[test]
+    fn canonical_engine_guard_drives_profile_admission_and_withholds_on_lease_loss() {
+        let (manifest, expected_authority) = engine_manifest();
+        let held = Rc::new(Cell::new(true));
+        let backend = EngineAuthorityBackend::new(manifest, Rc::clone(&held));
+        let mut broker =
+            HrmHnsaAuthorityBroker::new(engine_config(), backend).expect("engine broker");
+        let endpoint = endpoint(&expected_authority, 1);
+        let signed_snapshot = snapshot(&expected_authority, &endpoint, 1);
+        let document = document(&endpoint, &signed_snapshot);
+
+        let mut state = HrmPoolStatsState::new();
+        let mut commits = 0_u8;
+        let mut committed_generation = 0_u64;
+        let verified = broker
+            .with_current_named_service(&engine_identity(), &engine_policy(), |current| {
+                assert_eq!(
+                    current_hrm_named_service(current).expect("mapped engine authority"),
+                    expected_authority
+                );
+                verify_engine_current_hrm_and_commit(
+                    current,
+                    request(NOW),
+                    &document,
+                    &mut state,
+                    |previous_generation, encoded| {
+                        assert_eq!(previous_generation, 0);
+                        committed_generation = HrmPoolStatsState::decode(encoded)
+                            .expect("committed profile state")
+                            .generation();
+                        assert_ne!(committed_generation, 0);
+                        commits += 1;
+                        Ok::<(), EngineBackendError>(())
+                    },
+                )
+            })
+            .expect("canonical engine-backed profile admission");
+
+        assert_eq!(commits, 1);
+        assert_eq!(state.generation(), committed_generation);
+        assert_eq!(state.authority_revision(), 1);
+        assert_eq!(state.trusted_time_high_water(), NOW);
+        assert_eq!(verified.authority_revision(), 1);
+        assert_eq!(verified.operation_lease_generation(), 13);
+        assert_eq!(verified.service_generation(), 3);
+        assert_eq!(verified.sequence(), 1);
+        assert_eq!(broker.live_subjects(), 1);
+
+        let mut withheld_state = HrmPoolStatsState::new();
+        let withheld_committed = Cell::new(false);
+        let held_during_commit = Rc::clone(&held);
+        let result =
+            broker.with_current_named_service(&engine_identity(), &engine_policy(), |current| {
+                verify_engine_current_hrm_and_commit(
+                    current,
+                    request(NOW),
+                    &document,
+                    &mut withheld_state,
+                    |previous_generation, encoded| {
+                        assert_eq!(previous_generation, 0);
+                        HrmPoolStatsState::decode(encoded)
+                            .expect("profile state committed before lease loss");
+                        withheld_committed.set(true);
+                        held_during_commit.set(false);
+                        Ok::<(), EngineBackendError>(())
+                    },
+                )
+            });
+
+        assert!(withheld_committed.get());
+        assert_ne!(withheld_state.generation(), 0);
+        assert!(matches!(
+            result,
+            Err(HrmHnsaAuthorityBrokerError::Lease(LeaseError::Lost))
+        ));
+    }
+
+    #[test]
     fn canonical_named_service_identity_matches_the_frozen_schema_2_vector() {
         assert_eq!(
             hex::encode(name_hash()),
@@ -1888,7 +2339,7 @@ mod tests {
 
     #[test]
     fn verifies_exact_hrm_endpoint_route_and_snapshot_bindings() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 9);
         let mut state = HrmPoolStatsState::new();
@@ -1928,7 +2379,7 @@ mod tests {
         // HRM Core permits the initial commitment sequence to be zero. HNSA
         // endpoint and application-record replacement sequences remain
         // independently nonzero, so they stay at one here.
-        let mut authority = authority();
+        let mut authority = test_authority();
         authority.hrm_sequence = 0;
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 1);
@@ -1960,7 +2411,7 @@ mod tests {
 
     #[test]
     fn accepts_zero_where_hrm_and_hnsa_define_unsigned_or_digest_fields() {
-        let mut zero_authority = authority();
+        let mut zero_authority = test_authority();
         zero_authority.network_magic = 0;
         zero_authority.hrm_envelope_hash = [0; 32];
         zero_authority.service_delegation_id = [0; 32];
@@ -1991,7 +2442,7 @@ mod tests {
             state
         );
 
-        let mut epoch_authority = authority();
+        let mut epoch_authority = test_authority();
         epoch_authority.trusted_operation_time = 0;
         epoch_authority.resource_not_before = 0;
         epoch_authority.resource_expires_at = 1_000;
@@ -2026,7 +2477,7 @@ mod tests {
 
     #[test]
     fn rejects_legacy_hsa1_document_shape_and_schema() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 1);
         let legacy = serde_json::to_vec(&json!({
@@ -2047,7 +2498,7 @@ mod tests {
 
     #[test]
     fn rejects_every_endpoint_authority_context_mismatch() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let cases = [(1, 4), (5, 32), (37, 32), (69, 8), (126, 4), (130, 32)];
         for (offset, length) in cases {
@@ -2082,15 +2533,15 @@ mod tests {
 
     #[test]
     fn enforces_signed_endpoint_interval_capability_and_constraint_rules() {
-        let current = authority();
+        let current = test_authority();
         let base = endpoint(&current, 1);
         let mut cases = Vec::new();
 
         let mut missing_capability = base.clone();
         missing_capability[134..138].copy_from_slice(&0_u32.to_le_bytes());
-        cases.push((current.clone(), resign_endpoint(missing_capability)));
+        cases.push((test_authority(), resign_endpoint(missing_capability)));
 
-        let mut extra_capability_authority = current.clone();
+        let mut extra_capability_authority = test_authority();
         extra_capability_authority.allowed_endpoint_capabilities |= 2;
         let mut extra_capability = endpoint(&extra_capability_authority, 1);
         extra_capability[134..138].copy_from_slice(&3_u32.to_le_bytes());
@@ -2101,11 +2552,11 @@ mod tests {
 
         let mut wrong_constraints = base.clone();
         wrong_constraints[138..170].fill(77);
-        cases.push((current.clone(), resign_endpoint(wrong_constraints)));
+        cases.push((test_authority(), resign_endpoint(wrong_constraints)));
 
         let mut excessive_lifetime = base.clone();
         excessive_lifetime[126..134].copy_from_slice(&(NOW - 10 + 3_601).to_le_bytes());
-        cases.push((current.clone(), resign_endpoint(excessive_lifetime)));
+        cases.push((test_authority(), resign_endpoint(excessive_lifetime)));
 
         let mut outside_resource = base;
         outside_resource[118..126]
@@ -2130,7 +2581,7 @@ mod tests {
             MIN_ENDPOINT_LIFETIME_LIMIT - 1,
             MAX_ENDPOINT_LIFETIME_LIMIT + 1,
         ] {
-            let mut invalid = authority();
+            let mut invalid = test_authority();
             invalid.max_endpoint_lifetime = maximum;
             let mut state = HrmPoolStatsState::new();
             assert!(matches!(
@@ -2142,7 +2593,7 @@ mod tests {
 
     #[test]
     fn rejects_snapshot_profile_route_generation_endpoint_and_expiry_mismatches() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let valid = snapshot(&authority, &endpoint, 1);
         let cases = [
@@ -2185,7 +2636,7 @@ mod tests {
 
     #[test]
     fn enforces_endpoint_signed_snapshot_context_and_interval_rules() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let base = snapshot(&authority, &endpoint, 1);
 
@@ -2232,7 +2683,7 @@ mod tests {
 
     #[test]
     fn commits_time_advance_before_returning_cryptographic_failure() {
-        let authority = authority();
+        let authority = test_authority();
         let initial_endpoint = endpoint(&authority, 1);
         let first_snapshot = snapshot(&authority, &initial_endpoint, 1);
         let mut state = HrmPoolStatsState::new();
@@ -2244,7 +2695,7 @@ mod tests {
         )
         .expect("first");
 
-        let mut later = authority.clone();
+        let mut later = test_authority();
         later.authority_revision += 1;
         later.trusted_operation_time += 1;
         let later_request = request(NOW + 1);
@@ -2270,7 +2721,7 @@ mod tests {
 
     #[test]
     fn service_generation_rollback_and_equal_generation_conflict_fail_closed() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 1);
         let mut state = HrmPoolStatsState::new();
@@ -2282,7 +2733,7 @@ mod tests {
         )
         .expect("first");
 
-        let mut rollback = authority.clone();
+        let mut rollback = test_authority();
         rollback.authority_revision += 1;
         rollback.hrm_sequence += 1;
         rollback.service_generation -= 1;
@@ -2291,7 +2742,7 @@ mod tests {
             Err(HrmPoolStatsError::AuthorityRollback)
         ));
 
-        let mut conflict = authority.clone();
+        let mut conflict = test_authority();
         conflict.authority_revision += 1;
         conflict.hrm_sequence += 1;
         conflict.service_delegation_id = [22; 32];
@@ -2304,7 +2755,7 @@ mod tests {
 
     #[test]
     fn greater_service_generation_resets_profile_replacement_scope() {
-        let authority = authority();
+        let authority = test_authority();
         let initial_endpoint = endpoint(&authority, 9);
         let initial_snapshot = snapshot(&authority, &initial_endpoint, 9);
         let mut state = HrmPoolStatsState::new();
@@ -2316,7 +2767,7 @@ mod tests {
         )
         .expect("initial generation");
 
-        let mut replacement = authority.clone();
+        let mut replacement = test_authority();
         replacement.authority_revision += 1;
         replacement.hrm_sequence += 1;
         replacement.hrm_envelope_hash = [33; 32];
@@ -2345,7 +2796,7 @@ mod tests {
 
     #[test]
     fn endpoint_and_snapshot_replacement_are_monotonic_and_equivocation_is_sticky() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint_one = endpoint(&authority, 1);
         let snapshot_one = snapshot(&authority, &endpoint_one, 1);
         let mut state = HrmPoolStatsState::new();
@@ -2413,19 +2864,19 @@ mod tests {
 
     #[test]
     fn equal_aggregate_revision_cannot_carry_a_changed_hrm_or_service_observation() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 1);
 
         for changed in [
             {
-                let mut changed = authority.clone();
+                let mut changed = test_authority();
                 changed.hrm_sequence += 1;
                 changed.hrm_envelope_hash = [44; 32];
                 changed
             },
             {
-                let mut changed = authority.clone();
+                let mut changed = test_authority();
                 changed.hrm_sequence += 1;
                 changed.service_generation += 1;
                 changed.service_delegation_id = [45; 32];
@@ -2450,7 +2901,7 @@ mod tests {
 
     #[test]
     fn time_only_advance_is_committed_but_requires_a_fresh_aggregate_revision() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 1);
         let mut state = HrmPoolStatsState::new();
@@ -2462,7 +2913,7 @@ mod tests {
         )
         .expect("initial authority");
 
-        let mut stale_revision = authority.clone();
+        let mut stale_revision = test_authority();
         stale_revision.trusted_operation_time = NOW + 1;
         let mut commits = 0;
         let result = verify_hrm_and_commit(
@@ -2506,7 +2957,7 @@ mod tests {
 
     #[test]
     fn persistence_failure_withholds_snapshot_and_preserves_loaded_state() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 1);
         let mut state = HrmPoolStatsState::new();
@@ -2527,7 +2978,7 @@ mod tests {
 
     #[test]
     fn historical_result_rejects_authority_state_and_lease_changes() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 1);
         let mut state = HrmPoolStatsState::new();
@@ -2538,7 +2989,7 @@ mod tests {
             &mut state,
         )
         .expect("verified");
-        let mut replaced_lease = authority.clone();
+        let mut replaced_lease = test_authority();
         replaced_lease.operation_lease_generation += 1;
         assert!(matches!(
             verified.reconfirm_current(&replaced_lease, request(NOW), &state),
@@ -2553,7 +3004,7 @@ mod tests {
 
     #[test]
     fn state_encoding_is_canonical_and_corruption_detecting() {
-        let authority = authority();
+        let authority = test_authority();
         let endpoint = endpoint(&authority, 1);
         let snapshot = snapshot(&authority, &endpoint, 1);
         let mut state = HrmPoolStatsState::new();

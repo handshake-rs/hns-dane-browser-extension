@@ -122,6 +122,76 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aead"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
+dependencies = [
+ "crypto-common 0.1.7",
+ "generic-array",
+]
+
+[[package]]
+name = "aead"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1973cfbc1a2daf9cf550e74e1f088c28e7f7d8c1e1418fb6c9dc5184b7e84c99"
+dependencies = [
+ "crypto-common 0.2.2",
+ "inout 0.2.2",
+]
+
+[[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher 0.4.4",
+ "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "aes"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8eb277bec05f56a0e0591f155a484cbd0f4f07ff2905051a48c72f004f7ed58"
+dependencies = [
+ "cipher 0.5.2",
+ "cpubits",
+ "cpufeatures 0.3.0",
+]
+
+[[package]]
+name = "aes-gcm"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "831010a0f742e1209b3bcea8fab6a8e149051ba6099432c8cb2cc117dec3ead1"
+dependencies = [
+ "aead 0.5.2",
+ "aes 0.8.4",
+ "cipher 0.4.4",
+ "ctr 0.9.2",
+ "ghash 0.5.1",
+ "subtle",
+]
+
+[[package]]
+name = "aes-gcm"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdf011db2e21ce0d575593d749db5554b47fed37aff429e4dc50bc91ac93a028"
+dependencies = [
+ "aead 0.6.1",
+ "aes 0.9.2",
+ "cipher 0.5.2",
+ "ctr 0.10.1",
+ "ghash 0.6.0",
+ "subtle",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -514,7 +584,7 @@ version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
 dependencies = [
- "digest",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -524,6 +594,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "block-buffer"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
+dependencies = [
+ "hybrid-array",
 ]
 
 [[package]]
@@ -680,6 +759,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common 0.1.7",
+ "inout 0.1.4",
+]
+
+[[package]]
+name = "cipher"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
+dependencies = [
+ "block-buffer 0.12.1",
+ "crypto-common 0.2.2",
+ "inout 0.2.2",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -727,6 +827,12 @@ checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
 dependencies = [
  "error-code",
 ]
+
+[[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "codespan-reporting"
@@ -802,7 +908,7 @@ dependencies = [
  "bitflags 1.3.2",
  "core-foundation",
  "core-graphics-types",
- "foreign-types",
+ "foreign-types 0.5.0",
  "libc",
 ]
 
@@ -818,10 +924,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpubits"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "cpufeatures"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
 ]
@@ -866,7 +987,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
+ "rand_core 0.6.4",
  "typenum",
+]
+
+[[package]]
+name = "crypto-common"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
+name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher 0.4.4",
+]
+
+[[package]]
+name = "ctr"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baaca1c4b237092596f64d571e9db6ce4109c4ef9742e27590f1709594461f21"
+dependencies = [
+ "cipher 0.5.2",
+]
+
+[[package]]
+name = "ctutils"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+dependencies = [
+ "cmov",
 ]
 
 [[package]]
@@ -874,6 +1032,31 @@ name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+
+[[package]]
+name = "curve25519-dalek"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "curve25519-dalek-derive",
+ "fiat-crypto",
+ "rustc_version",
+ "subtle",
+]
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
 
 [[package]]
 name = "data-encoding"
@@ -917,10 +1100,21 @@ version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
- "block-buffer",
+ "block-buffer 0.10.4",
  "const-oid",
- "crypto-common",
+ "crypto-common 0.1.7",
  "subtle",
+]
+
+[[package]]
+name = "digest"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+dependencies = [
+ "block-buffer 0.12.1",
+ "crypto-common 0.2.2",
+ "ctutils",
 ]
 
 [[package]]
@@ -987,7 +1181,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee27f32b5c5292967d2d4a9d7f1e0b0aed2c15daded5a60300e4abb9d8020bca"
 dependencies = [
  "der",
- "digest",
+ "digest 0.10.7",
  "elliptic-curve",
  "rfc6979",
  "signature",
@@ -1129,7 +1323,7 @@ checksum = "b5e6043086bf7973472e0c7dff2142ea0b680d30e18d9cc40f267efbf222bd47"
 dependencies = [
  "base16ct",
  "crypto-bigint",
- "digest",
+ "digest 0.10.7",
  "ff",
  "generic-array",
  "group",
@@ -1220,7 +1414,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1309,6 +1503,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fiat-crypto"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1347,12 +1547,21 @@ dependencies = [
 
 [[package]]
 name = "foreign-types"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
+dependencies = [
+ "foreign-types-shared 0.1.1",
+]
+
+[[package]]
+name = "foreign-types"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d737d9aa519fb7b749cbc3b962edcf310a8dd1f4b67c91c4f83975dbdd17d965"
 dependencies = [
  "foreign-types-macros",
- "foreign-types-shared",
+ "foreign-types-shared 0.3.1",
 ]
 
 [[package]]
@@ -1365,6 +1574,12 @@ dependencies = [
  "quote",
  "syn 3.0.3",
 ]
+
+[[package]]
+name = "foreign-types-shared"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
 name = "foreign-types-shared"
@@ -1539,6 +1754,26 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi 6.0.0",
+ "rand_core 0.10.1",
+]
+
+[[package]]
+name = "ghash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
+dependencies = [
+ "opaque-debug",
+ "polyval 0.6.2",
+]
+
+[[package]]
+name = "ghash"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
+dependencies = [
+ "polyval 0.7.3",
 ]
 
 [[package]]
@@ -1789,18 +2024,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac 0.12.1",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac 0.13.0",
+]
+
+[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
- "digest",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "hmac"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+dependencies = [
+ "digest 0.11.3",
 ]
 
 [[package]]
 name = "hns-browser-chain"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-browser-primitives",
  "rusqlite",
@@ -1810,19 +2072,19 @@ dependencies = [
 [[package]]
 name = "hns-browser-dane"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-browser-dnssec",
  "hns-browser-primitives",
  "hns-browser-urkel",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "hns-browser-dnssec"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-browser-primitives",
  "num-bigint",
@@ -1830,14 +2092,14 @@ dependencies = [
  "p256",
  "ring",
  "sha1",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "hns-browser-gateway"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-browser-dane",
  "hns-browser-primitives",
@@ -1852,7 +2114,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-loopback-proxy"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "base64",
  "hns-browser-dane",
@@ -1872,7 +2134,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-observability"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-browser-runtime",
  "hns-icann-dane",
@@ -1884,7 +2146,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-p2p"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "getrandom 0.3.4",
  "hns-browser-primitives",
@@ -1896,7 +2158,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-primitives"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "blake2",
  "hex",
@@ -1910,7 +2172,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-resolver"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-browser-dane",
  "hns-browser-dnssec",
@@ -1924,7 +2186,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-runtime"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 
 [[package]]
 name = "hns-browser-setup"
@@ -1936,7 +2198,7 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
  "winit",
 ]
@@ -1944,7 +2206,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-sync"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-browser-chain",
  "hns-browser-p2p",
@@ -1956,7 +2218,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-transport"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "bytes",
  "h2",
@@ -1967,7 +2229,7 @@ dependencies = [
  "http",
  "quinn",
  "rustls",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
  "tokio-rustls",
@@ -1977,7 +2239,7 @@ dependencies = [
 [[package]]
 name = "hns-browser-urkel"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-browser-primitives",
  "thiserror 2.0.19",
@@ -1986,10 +2248,25 @@ dependencies = [
 [[package]]
 name = "hns-cache"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
 dependencies = [
  "hns-dns-wire",
- "sha2",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-chat-protocol"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03d4f9e58c102174f12f40d32d917227e1e73cea8770ce9c48e53c23f1795f17"
+dependencies = [
+ "hex",
+ "hns-covenants",
+ "hns-encoding",
+ "hns-service-authority",
+ "hns-transaction",
+ "k256",
  "thiserror 2.0.19",
 ]
 
@@ -2012,7 +2289,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 2.0.19",
  "zeroize",
 ]
@@ -2038,19 +2315,162 @@ dependencies = [
  "http",
  "httparse",
  "rusqlite",
- "sha2",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-covenants"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94d542befdfdab32b260a4a8894e8f67d270e72724c04a4cb69e552b3b400469"
+dependencies = [
+ "blake2",
+ "hns-encoding",
+ "hns-primitives",
+ "sha3",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-dane"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+dependencies = [
+ "hns-dns-wire",
+ "openssl",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "hns-dane-engine"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+dependencies = [
+ "blake2",
+ "hns-browser-observability",
+ "hns-browser-runtime",
+ "hns-dane",
+ "hns-dns-wire",
+ "hns-gateway",
+ "hns-header-consensus",
+ "hns-hnsr-protocol",
+ "hns-hrm",
+ "hns-light-chain",
+ "hns-namespace-resolution",
+ "hns-p2p-transport",
+ "hns-p2p-wire",
+ "hns-resolution-policy",
+ "hns-resolver",
+ "hns-rollback-journal",
+ "hns-service-authority",
+ "hns-transport",
+]
+
+[[package]]
+name = "hns-dns-relay-protocol"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2bcabfea3f81359f8bd93a2a5a92c0002e59f85e50216240f985f2f3d4a3eef"
+dependencies = [
+ "hns-encoding",
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "hns-dns-wire"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+
+[[package]]
+name = "hns-dnssec"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+dependencies = [
+ "hns-dns-wire",
+ "openssl",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-encoding"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbf5d8e32d897faa22ac2a5954b0aff574f9e826d0368f09cb92adb08fa6e616"
+dependencies = [
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-gateway"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+dependencies = [
+ "hns-resolution-policy",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-header-consensus"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dced1aeb330304784498d2bf3e515e7f0f2cb05676a0f89b1fd9b88733627cb5"
+dependencies = [
+ "blake2",
+ "hns-encoding",
+ "hns-primitives",
+ "sha3",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-hnsr-protocol"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e0af1a712c245580ae908521cbfe4f8e2a7ce5e78d1118453225114ee6f1055"
+dependencies = [
+ "blake2",
+ "getrandom 0.4.3",
+ "hns-chat-protocol",
+ "hns-encoding",
+ "hns-service-authority",
+ "hns-transaction",
+ "k256",
+ "thiserror 2.0.19",
+ "zeroize",
+]
+
+[[package]]
+name = "hns-hrm"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d9189482639742382135d47d3849eed471149261325da90fbe458490bf602de"
+dependencies = [
+ "base64",
+ "blake2",
+ "k256",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "zeroize",
+]
 
 [[package]]
 name = "hns-icann-dane"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+
+[[package]]
+name = "hns-light-chain"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+dependencies = [
+ "hns-covenants",
+ "hns-encoding",
+ "hns-header-consensus",
+ "hns-primitives",
+ "hns-urkel-proof",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "hns-meshmine-pool-stats"
@@ -2058,23 +2478,208 @@ version = "0.6.1"
 dependencies = [
  "blake2",
  "hex",
+ "hns-dane-engine",
+ "hns-hrm",
+ "hns-service-authority",
  "k256",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "sha3",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-mining"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "816e5b7c28cf898075a5e5b00651a7af45267928e9cf0d7439ebd0d13901741e"
+dependencies = [
+ "blake2",
+ "hns-covenants",
+ "hns-encoding",
+ "hns-header-consensus",
+ "hns-primitives",
+ "hns-transaction",
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "hns-namespace-resolution"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+
+[[package]]
+name = "hns-odoh-protocol"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a82ee38cf6b27d30cb90ae509c19ff146931b8d87f21da7616bb0bb98ad7703a"
+dependencies = [
+ "aes-gcm 0.10.3",
+ "blake2",
+ "hkdf 0.12.4",
+ "hns-encoding",
+ "hpke",
+ "k256",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "zeroize",
+]
+
+[[package]]
+name = "hns-p2p-experimental"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbdeb23f0365ee718f68a7ce45cea4cb7369b0f38706fe9bc9b9c481f42232ee"
+dependencies = [
+ "hex",
+ "hns-encoding",
+ "hns-primitives",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "toml",
+]
+
+[[package]]
+name = "hns-p2p-transport"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+dependencies = [
+ "hex",
+ "hns-dns-relay-protocol",
+ "hns-dns-wire",
+ "hns-gateway",
+ "hns-odoh-protocol",
+ "hns-p2p-experimental",
+ "hns-transport",
+ "k256",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-p2p-wire"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0905ebb49c7f5831258d4a63c083af077042ac8c2cdd423c68bd50253ab2d3fd"
+dependencies = [
+ "blake2",
+ "hns-encoding",
+ "hns-header-consensus",
+ "hns-mining",
+ "hns-primitives",
+ "hns-transaction",
+ "hns-urkel-proof",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-primitives"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "724f87f5d2f47f8e8f8c719e307d543969b1b3aa8939f1d37a51977088c349b0"
+dependencies = [
+ "hex",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "hns-resolution-policy"
 version = "0.2.1"
-source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=65c397e8347f37085ea67d2c9c745ce896328e64#65c397e8347f37085ea67d2c9c745ce896328e64"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+
+[[package]]
+name = "hns-resolver"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+dependencies = [
+ "hns-dns-wire",
+ "hns-dnssec",
+ "hns-icann-dane",
+ "hns-light-chain",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-rollback-journal"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94f822a24923f802ca1995d2009864497e739689e0b961687fcc3ff4cb71c30a"
+dependencies = [
+ "blake2",
+ "hns-encoding",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-service-authority"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "627e6f900180c5facca6e006f3ef81181a4830d40685260f02ec2bba5ffe72bb"
+dependencies = [
+ "blake2",
+ "hns-encoding",
+ "hns-hrm",
+ "k256",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "zeroize",
+]
+
+[[package]]
+name = "hns-transaction"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68ee844748fd6a7fbad3a60d6c88ae5b044967df5563e5449ee7245263b0e806"
+dependencies = [
+ "blake2",
+ "hns-covenants",
+ "hns-encoding",
+ "hns-primitives",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-transport"
+version = "0.2.1"
+source = "git+https://github.com/handshake-rs/hns-dane-engine.git?rev=69e60d7bfce368d7d23c6c901946f02b173f00c4#69e60d7bfce368d7d23c6c901946f02b173f00c4"
+dependencies = [
+ "hns-covenants",
+ "hns-dns-wire",
+ "hns-header-consensus",
+ "hns-light-chain",
+ "hns-primitives",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hns-urkel-proof"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9091569305ff44693cc2649b4ce9cd9ab499e005752af197d10ac0eac3ce7e78"
+dependencies = [
+ "blake2",
+ "hns-primitives",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "hpke"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd5130e119706b4d8c2180da6126f7e60b6c38c2d340d539219f57051f0a7af7"
+dependencies = [
+ "aead 0.6.1",
+ "aes-gcm 0.11.0",
+ "getrandom 0.4.3",
+ "hkdf 0.13.0",
+ "hybrid-array",
+ "rand_core 0.10.1",
+ "sha2 0.11.0",
+ "subtle",
+ "x25519-dalek",
+ "zeroize",
+]
 
 [[package]]
 name = "http"
@@ -2091,6 +2696,15 @@ name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
+dependencies = [
+ "typenum",
+]
 
 [[package]]
 name = "icu_collections"
@@ -2220,6 +2834,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
+name = "inout"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4250ce6452e92010fdf7268ccc5d14faa80bb12fc741938534c58f16804e03c7"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2329,7 +2961,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "once_cell",
- "sha2",
+ "sha2 0.10.9",
  "signature",
 ]
 
@@ -2339,7 +2971,7 @@ version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
 dependencies = [
- "cpufeatures",
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -2957,6 +3589,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "opaque-debug"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "openssl"
+version = "0.10.81"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77823a27f0babb03091cb9ed9ef80af3b39dbc82f97e8fa530374b7dafd87a45"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "foreign-types 0.3.2",
+ "libc",
+ "openssl-macros",
+ "openssl-sys",
+]
+
+[[package]]
+name = "openssl-macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "openssl-sys"
+version = "0.9.117"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
 name = "orbclient"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2985,7 +3660,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "primeorder",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -3175,6 +3850,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyval"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "opaque-debug",
+ "universal-hash 0.5.1",
+]
+
+[[package]]
+name = "polyval"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0fa31d631f2b2cb2a544d0aa321ce847a94764d701ca2becc411138b93d49cd"
+dependencies = [
+ "cpubits",
+ "cpufeatures 0.3.0",
+ "universal-hash 0.6.1",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3228,7 +3926,7 @@ version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
 dependencies = [
- "toml_edit",
+ "toml_edit 0.25.13+spec-1.1.0",
 ]
 
 [[package]]
@@ -3383,6 +4081,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_core"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3451,7 +4155,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
 dependencies = [
- "hmac",
+ "hmac 0.12.1",
  "subtle",
 ]
 
@@ -3547,7 +4251,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3693,14 +4397,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
 dependencies = [
  "cfg-if",
- "cpufeatures",
- "digest",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -3710,8 +4423,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
- "cpufeatures",
- "digest",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -3720,7 +4444,7 @@ version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
 dependencies = [
- "digest",
+ "digest 0.10.7",
  "keccak",
 ]
 
@@ -3746,7 +4470,7 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
- "digest",
+ "digest 0.10.7",
  "rand_core 0.6.4",
 ]
 
@@ -3980,7 +4704,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4130,6 +4854,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "0.8.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
+dependencies = [
+ "serde",
+ "serde_spanned",
+ "toml_datetime 0.6.11",
+ "toml_edit 0.22.27",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "1.1.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4140,14 +4885,28 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
+version = "0.22.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
+dependencies = [
+ "indexmap",
+ "serde",
+ "serde_spanned",
+ "toml_datetime 0.6.11",
+ "toml_write",
+ "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml_edit"
 version = "0.25.13+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6975367e4d2ef766d86af01ffad14b622fecc8d4357a998fbc4deb6e9bacaf9b"
 dependencies = [
  "indexmap",
- "toml_datetime",
+ "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
- "winnow",
+ "winnow 1.0.4",
 ]
 
 [[package]]
@@ -4156,8 +4915,14 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow",
+ "winnow 1.0.4",
 ]
+
+[[package]]
+name = "toml_write"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tracing"
@@ -4240,6 +5005,26 @@ name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+
+[[package]]
+name = "universal-hash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
+dependencies = [
+ "crypto-common 0.1.7",
+ "subtle",
+]
+
+[[package]]
+name = "universal-hash"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4987bdc12753382e0bec4a65c50738ffaabc998b9cdd1f952fb5f39b0048a96"
+dependencies = [
+ "crypto-common 0.2.2",
+ "ctutils",
+]
 
 [[package]]
 name = "untrusted"
@@ -4707,7 +5492,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4955,6 +5740,15 @@ dependencies = [
 
 [[package]]
 name = "winnow"
+version = "0.7.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "winnow"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
@@ -5005,6 +5799,16 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
+
+[[package]]
+name = "x25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e8131a03190127fb2263afc72b322ecadae46b6ff8c6f399ff5d02f5559af6"
+dependencies = [
+ "curve25519-dalek",
+ "rand_core 0.10.1",
+]
 
 [[package]]
 name = "x509-parser"
@@ -5117,7 +5921,7 @@ dependencies = [
  "uds_windows",
  "uuid",
  "windows-sys 0.61.2",
- "winnow",
+ "winnow 1.0.4",
  "zbus_macros",
  "zbus_names",
  "zvariant",
@@ -5169,7 +5973,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8bf88b4a3ff53e883001e0e0115b297a9d53c31b9c1edd2bfdd853e3428624e"
 dependencies = [
  "serde",
- "winnow",
+ "winnow 1.0.4",
  "zvariant",
 ]
 
@@ -5180,7 +5984,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1586c021a01ca0a9216dcd874e546382e156a5cbab5fab6cb5f10087e22682a"
 dependencies = [
  "serde",
- "winnow",
+ "winnow 1.0.4",
  "zbus_names",
  "zvariant",
 ]
@@ -5231,6 +6035,20 @@ name = "zeroize"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
 
 [[package]]
 name = "zerotrie"
@@ -5295,7 +6113,7 @@ dependencies = [
  "endi",
  "enumflags2",
  "serde",
- "winnow",
+ "winnow 1.0.4",
  "zvariant_derive",
  "zvariant_utils",
 ]
@@ -5323,5 +6141,5 @@ dependencies = [
  "quote",
  "serde",
  "syn 2.0.118",
- "winnow",
+ "winnow 1.0.4",
 ]

@@ -16,8 +16,8 @@
 
 The Chromium adapter now consumes the consolidated engine source through one
 exact reviewed Git revision,
-`65c397e8347f37085ea67d2c9c745ce896328e64`, for both private browser adapters
-and the five canonical `0.2.1` contracts:
+`69e60d7bfce368d7d23c6c901946f02b173f00c4`, for both private browser adapters
+and the canonical `0.2.1` contracts, including the authority-broker facade:
 
 - runtime request authority;
 - checked browser observability;
@@ -58,8 +58,9 @@ change.
 
 - `hns-meshmine-pool-stats` implements schema 2 of the private `0xff00`
   read-only profile over an opaque current HRM/HNSA named-service authority.
-  The authority has no public constructor until a sole trusted broker can
-  validate and durably settle the complete current HRM aggregate.
+  Its production-shaped entrypoint now consumes the canonical engine's
+  `CurrentCommittedNamedService` guard and maps only its exact active service;
+  the local authority remains noncloneable and has no public constructor.
 - The core binds exact network/name/profile, HRM root and current revision,
   service resource/delegation IDs and generation, service key and constraints,
   one trusted operation time and lease generation, a canonical low-S
@@ -76,10 +77,12 @@ change.
   authority identity, and rejects zero only for fields whose HRM, HNSA, or
   private application-profile definition explicitly requires nonzero.
 - The superseded `hsa1`/fixed service-authorization code and `hns-rs`
-  dependency are removed. Native capabilities report schema 2 while keeping
-  the HRM adapter and verified-feed capabilities false and explicitly
-  reporting that legacy `hsa1` is not accepted. JavaScript remains
-  display-only, and HNSR stays disabled.
+  fallback are removed. Exact engine revision `69e60d7` supplies the canonical
+  broker guard. Integration coverage exercises full HRM/HNSA admission and
+  proves that lease loss after profile persistence withholds the result. Native
+  capabilities still keep the platform adapter and verified-feed capabilities
+  false and explicitly report that legacy `hsa1` is not accepted. JavaScript
+  remains display-only, and HNSR stays disabled.
 
 ### Desktop Setup and signed macOS distribution
 
@@ -248,23 +251,21 @@ separate explicit field, validates and hashes it before network I/O, and never
 derives an endpoint from the active tab. That local selection is not yet a
 native authority input and does not authenticate a feed.
 
-Join the existing Chromium proof/sync runtime to one subject-wide HRM/HNSA
-broker without fabricating current authority. The broker must validate the
-authenticated `hrm1` selection, deterministic envelope, controller signature,
-complete snapshot, exact named-service resource/delegation and generation,
-withdrawal/reorganization rules, and trusted time; atomically persist its
-authenticated aggregate with an initialized marker and external revision
-floor; and hold a fenced namespace lease through dependent use. Only that
-broker may gain an internal constructor for the opaque verifier authority.
-The configured HTTP endpoint and objects it serves remain untrusted transport
+Implement Chromium's platform backend for the canonical subject-wide HRM/HNSA
+broker without fabricating current authority. Extend the proof/sync boundary to
+retain complete authenticated NameState and hash-matched HRM bytes, supply
+trusted time, atomically persist the authenticated aggregate through exact CAS
+with an initialized marker and independently anchored revision floor, and hold
+a real cross-process fenced namespace lease through dependent use. The
+configured HTTP endpoint and objects it serves remain untrusted transport
 input, never identity or state authority.
 
 Installed-browser qualification must cover HRM replacement, withdrawal and
 accepted reorganization, malformed/noncanonical objects, every identity,
 network, profile, route, endpoint and generation mismatch, clock/sequence
 rollback, equal-sequence conflict across restart, ambiguous commit retry,
-lease loss, authority rotation, and expiry. Until that broker, store, request,
-UI, profile review, and qualification land, `meshmineHrmAuthorityAdapter` and
+lease loss, authority rotation, and expiry. Until that backend, request, UI,
+profile review, and qualification land, `meshmineHrmAuthorityAdapter` and
 `meshmineVerifiedPoolStats` remain false and the popup remains unverified.
 
 Retain only the browser-specific listener, native-messaging, CA/TLS, lifecycle,

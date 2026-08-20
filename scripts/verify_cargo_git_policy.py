@@ -23,11 +23,12 @@ ENGINE_REQUIREMENTS = {
     package: f"={version}" for package, version in ENGINE_VERSIONS.items()
 }
 ENGINE_GIT_URL = "https://github.com/handshake-rs/hns-dane-engine.git"
-ENGINE_REVISION = "65c397e8347f37085ea67d2c9c745ce896328e64"
+ENGINE_REVISION = "69e60d7bfce368d7d23c6c901946f02b173f00c4"
 APPROVED_ENGINE_GIT = {
     package: ("0.2.1", ENGINE_REVISION)
     for package in {
         "hns-dane",
+        "hns-dane-engine",
         "hns-browser-dane",
         "hns-dnssec",
         "hns-browser-dnssec",
@@ -51,6 +52,8 @@ APPROVED_ENGINE_GIT = {
         "hns-browser-transport",
         "hns-loopback-proxy",
         "hns-browser-loopback-proxy",
+        "hns-light-chain",
+        "hns-p2p-transport",
         "hns-browser-observability",
         "hns-browser-runtime",
         "hns-icann-dane",

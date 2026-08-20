@@ -20,6 +20,16 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Connect the dormant MeshMine schema-2 verifier directly to the canonical
+  engine's `CurrentCommittedNamedService` guard at exact Git revision
+  `69e60d7bfce368d7d23c6c901946f02b173f00c4`. The adapter accepts no
+  caller-shaped authority fields, rejects withdrawal, maps the exact durable
+  revision, trusted time, fence, HRM root, service identity, delegation,
+  generation, controller, intervals, capabilities, and constraints, commits
+  profile replay state before release, and checks the engine lease again before
+  returning. Integration coverage proves a lease lost after profile commit
+  withholds the result. No Chromium platform backend or product capability is
+  enabled by this source bridge.
 - Add a dormant, additive private `hnsWalletAuthorityContextV1` operation
   beside the frozen six-operation `hnsReadOperationsV1` surface. A trusted
   one-shot bootstrap source must now bind the retained database to canonical
@@ -46,9 +56,9 @@ All notable changes to this project will be documented in this file.
   then canonically parses and verifies the service-signed endpoint delegation
   and endpoint-signed record, including exact application profile, route,
   endpoint ID/sequence, capabilities, constraints, generation, and expiry.
-- Add explicit native capabilities reporting that no HRM authority adapter is
-  available and legacy `hsa1` is not accepted. The opaque authority has no
-  public constructor, the verified-feed capability remains false, and no
+- Add explicit native capabilities reporting that no Chromium HRM platform
+  adapter is available and legacy `hsa1` is not accepted. The opaque authority
+  has no public constructor, the verified-feed capability remains false, and no
   provider, HNSR, wallet, value, or marketplace gate is enabled.
 - Add a display-only Chromium wallet-readiness panel. The service worker
   projects the native `walletAbi` status through an exact closed schema, and

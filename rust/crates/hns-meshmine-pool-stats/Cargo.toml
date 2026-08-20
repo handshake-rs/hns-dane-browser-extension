@@ -9,9 +9,14 @@ publish.workspace = true
 [dependencies]
 blake2.workspace = true
 hex.workspace = true
+hns-dane-engine.workspace = true
 k256.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sha3.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+hns-hrm = "=0.3.0"
+hns-service-authority = "=0.3.0"

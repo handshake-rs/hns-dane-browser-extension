@@ -218,23 +218,26 @@ explicitly unavailable.
   adapters from `hns-dane-engine` for the Handshake header and proof trust path.
   The source-policy gate forbids restoring product-local copies.
 - `hns-meshmine-pool-stats`: schema-2 profile verification beneath an opaque
-  current HRM/HNSA broker authority. It verifies the canonical service-signed
-  endpoint delegation and endpoint-signed, route-bound snapshot and maintains
-  bounded commit-before-release replacement state. The opaque authority has no
-  public constructor, so this crate has no current product, HTTP, HNSR, wallet,
-  value, provider, or marketplace role.
+  current HRM/HNSA broker authority. Its production-shaped entrypoint consumes
+  the canonical engine's `CurrentCommittedNamedService` guard, maps only its
+  exact active service, verifies the service-signed endpoint delegation and
+  endpoint-signed route-bound snapshot, commits bounded replacement state, and
+  checks the engine lease again before returning. The mapped authority has no
+  public constructor, so this crate still has no current product, HTTP, HNSR,
+  wallet, value, provider, or marketplace role.
 
 The product-specific adapter remains in this repository. The canonical engine
 contracts constrain authority and policy without claiming that every product
 adapter has already been consolidated into the engine.
 
 The current Chromium cache exposes browsing proof results but not the complete
-current HRM/HNSA authority aggregate. Consequently the verifier core is a
+authenticated NameState needed by the canonical broker. The engine now owns
+the sole broker and guarded consumer contract, but Chromium supplies none of
+its required platform backend: current HNS/HRM retrieval, trusted time,
+authenticated exact-CAS aggregate storage, independently anchored rollback
+floor, or cross-process fenced lease. Consequently the verifier core is a
 native dependency and reported capability, but no message reaches it and no
-verified pool value reaches JavaScript. A future sole broker must preserve the
-authenticated current name/root, deterministic HRM, exact service observation,
-trusted-time, withdrawal/generation history, revision floor and fenced lease,
-then commit complete state atomically before returning a minimized snapshot.
+verified pool value reaches JavaScript.
 
 The display-only popup already collects the expected exact canonical HNS root
 separately from the public HTTP endpoint, validates Handshake's consensus name

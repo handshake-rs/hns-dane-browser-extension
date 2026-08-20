@@ -123,10 +123,15 @@ endpoint keys. Core unsigned network/time and cryptographic digest/ID fields
 are not treated as absence sentinels; the HNSA-required service generation and
 endpoint sequence and the profile's record sequence remain nonzero.
 
-This verifier is deliberately dormant. `CurrentHrmNamedService` has no public
-constructor because the Chromium product does not yet have the sole trusted
-subject-wide HRM/HNSA broker, authenticated aggregate store, external revision
-floor, fenced operation lease, or current-HRM adapter required to issue it.
+This verifier is deliberately dormant. Its production-shaped entrypoint now
+consumes the canonical engine's nonconstructible
+`CurrentCommittedNamedService` guard, maps only that guard's exact active HNSA
+service into the private profile authority, commits profile state, and checks
+the engine lease again before returning. `CurrentHrmNamedService` remains
+noncloneable and has no public constructor. The Chromium product still has no
+platform backend for cross-process fencing, authenticated exact-CAS aggregate
+storage, an independently anchored revision floor, trusted time, or current
+HNS/HRM retrieval, and no native message invokes the entrypoint.
 Native hello therefore reports schema 2, `meshmineHrmAuthorityAdapter: false`,
 `meshmineLegacyHsa1Accepted: false`, and
 `meshmineVerifiedPoolStats: false`. The popup parses only the new bounded

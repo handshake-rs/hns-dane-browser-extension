@@ -22,10 +22,10 @@ The local Chromium adapter, loopback listener, native messaging, per-install
 CA, lifecycle, storage, and origin transport remain product code.
 
 The MeshMine public-feed verifier no longer consumes the superseded
-`hns-service-authority`/`hsa1` model or any `hns-rs` dependency. Its HRM-backed
-authority is an opaque local type with no public constructor; only a future
-subject-wide native broker may issue it after current HRM/HNSA validation and
-durable acknowledgement.
+`hns-service-authority`/`hsa1` model. Its production-shaped boundary consumes
+only the canonical engine's nonconstructible current HRM/HNSA guard; the mapped
+local authority remains noncloneable and has no public constructor. Chromium
+does not yet implement the engine broker's platform backend.
 
 The setup application is a distribution boundary, not a browser trust anchor.
 Every released target embeds the native host and canonical header bootstrap
@@ -81,9 +81,12 @@ authority. It requires an opaque `CurrentHrmNamedService` bound to the exact
 network/name, HRM sequence and envelope hash, current aggregate revision and
 trusted operation time, service resource/delegation IDs and generation,
 service key, validity intervals, capability/constraint policy, and fenced
-lease generation. That type has no public constructor: only a future trusted
-subject-wide broker may issue it after complete current-HRM validation and
-durable acknowledgement.
+lease generation. That type has no public constructor. The sole
+production-shaped adapter accepts only the canonical engine's live
+`CurrentCommittedNamedService`, rejects withdrawal, maps its exact active
+service, and checks the engine lease both before mapping and after profile
+persistence. The surrounding engine broker retains and release-checks the
+owned guard across the complete callback.
 
 Beneath that boundary, schema 2 canonically parses the HRM-backed HNSA endpoint
 delegation, verifies its strict-DER low-S service-controller signature under
@@ -124,11 +127,13 @@ service generation, across endpoint keys; changing signed bytes at an equal
 sequence is equivocation. Service-controller replacement clears both histories
 only after a greater service generation is admitted.
 
-No complete HRM validator, authority broker, store, constructor, native
-message, or UI join exists. The local endpoint/profile implementation mirrors
-the current drafts but must be reconciled with canonical published crates and
-cross-language vectors before any adapter is enabled. Native capabilities
-therefore report `meshmineHrmAuthorityAdapter: false`,
+The canonical engine now supplies complete HRM/HNSA validation, durable
+authority-state transitions, and the guarded broker/consumer contract, and the
+profile crate is joined to that guard. Chromium still supplies no qualified
+backend for current HNS/HRM retrieval, trusted time, authenticated aggregate
+CAS, external rollback floor, or cross-process fencing, and it has no native
+message or UI join. Native capabilities therefore report
+`meshmineHrmAuthorityAdapter: false`,
 `meshmineLegacyHsa1Accepted: false`, and
 `meshmineVerifiedPoolStats: false`; the JavaScript decoder remains explicitly
 unverified and advances no native state. HNSR, private/admin feeds,
