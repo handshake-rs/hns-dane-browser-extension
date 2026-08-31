@@ -120,7 +120,7 @@ function completedStore() {
     actualSelectedTransport: "localHnsProof",
     transportPolicy: { directAuthoritativeFirst: true },
     providerReadiness: { dnsRelay: "disabled" },
-    registryProfile: "denuoV1"
+    registryProfile: "shakescapeV1"
   };
   assert.equal(store.beginRequest(request, runtime), true);
   assert.equal(

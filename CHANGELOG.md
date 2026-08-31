@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Replaced the retired experimental registry and extension-envelope profile
+  with the single Shakescape V1 identity, moved the canonical engine boundary
+  from its historical Git pin to exact published crate releases, and retained
+  Denuo Web only as the publisher, package, domain, and signing identity.
+
 ## 1.0.0 - 2026-08-20
 
 ### Changed

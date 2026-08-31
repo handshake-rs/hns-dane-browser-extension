@@ -15,7 +15,7 @@ export const LEGACY_HNS_DOH_KEYS = Object.freeze([
 
 const P2P_ODOH_MODES = new Set(["off", "preferred", "required", "directAllowed"]);
 const PRIVACY_DOWNGRADES = new Set(["failClosed", "allowDirect"]);
-const WIRE_PROFILES = new Set(["stable", "hipDrafts", "denuoExtension"]);
+const WIRE_PROFILES = new Set(["stable", "hipDrafts", "shakescapeExtension"]);
 const MAX_RECURSIVE_HNS_DOH_URL_BYTES = 2_048;
 
 export function normalizePolicy(value) {

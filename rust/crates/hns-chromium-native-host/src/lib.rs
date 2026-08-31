@@ -155,7 +155,7 @@ pub enum ExperimentalWireProfile {
     #[default]
     Stable,
     HipDrafts,
-    DenuoExtension,
+    ShakescapeExtension,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -181,7 +181,7 @@ enum CanonicalSecurityStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum ChromiumRegistryProfile {
-    DenuoV1,
+    ShakescapeV1,
     Official,
     Auto,
 }
@@ -1124,7 +1124,7 @@ fn canonical_readiness_state(state: CanonicalReadinessState) -> &'static str {
 
 fn canonical_registry_profile(profile: WireProfile) -> ChromiumRegistryProfile {
     match profile {
-        WireProfile::DenuoV1 => ChromiumRegistryProfile::DenuoV1,
+        WireProfile::ShakescapeV1 => ChromiumRegistryProfile::ShakescapeV1,
         WireProfile::Official => ChromiumRegistryProfile::Official,
         WireProfile::Auto => ChromiumRegistryProfile::Auto,
     }
@@ -2131,7 +2131,7 @@ fn shared_resolution_policy(
             odoh_target: false,
             market_gossip: false,
         },
-        wire_profile: WireProfile::DenuoV1,
+        wire_profile: WireProfile::ShakescapeV1,
         allow_legacy_regtest_compatibility: false,
     };
     config.validate().map_err(|error| {
@@ -2370,7 +2370,7 @@ mod tests {
                 market_gossip: false,
             }
         );
-        assert_eq!(shared.wire_profile, WireProfile::DenuoV1);
+        assert_eq!(shared.wire_profile, WireProfile::ShakescapeV1);
         assert!(!shared.allow_legacy_regtest_compatibility);
 
         let plan = TransportPlan::for_policy(shared);
@@ -2611,7 +2611,7 @@ mod tests {
         assert_eq!(encoded["localDaneState"], "verified");
         assert_eq!(encoded["peerIdentity"], Value::Null);
         assert_eq!(encoded["chainAnchor"]["localBestHeight"], 42);
-        assert_eq!(encoded["registryProfile"], "denuoV1");
+        assert_eq!(encoded["registryProfile"], "shakescapeV1");
     }
 
     #[test]

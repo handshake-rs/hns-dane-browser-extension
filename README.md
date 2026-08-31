@@ -37,7 +37,7 @@ DANE.
 The native host integrates the five canonical browser contracts and the
 consolidated private adapters from
 [`handshake-rs/hns-dane-engine`](https://github.com/handshake-rs/hns-dane-engine)
-through one exact reviewed Git revision recorded in `rust/Cargo.toml` and
+through exact reviewed crate releases recorded in `rust/Cargo.toml` and
 `rust/Cargo.lock`:
 
 - `hns-browser-runtime`;

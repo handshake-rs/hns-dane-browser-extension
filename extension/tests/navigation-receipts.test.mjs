@@ -42,7 +42,7 @@ function securityResult(host, eventSequence, overrides = {}) {
     actualSelectedTransport: "localHnsProof",
     transportPolicy: { directAuthoritativeFirst: true },
     providerReadiness: { dnsRelay: "disabled" },
-    registryProfile: "denuoV1",
+    registryProfile: "shakescapeV1",
     ...overrides
   };
 }
@@ -91,7 +91,7 @@ function connectDecision(host, eventSequence, observedAtUnixMs, overrides = {}) 
     proxyTargetSeparation: "notApplicable",
     directRelayFallback: false,
     providerReadiness: { dnsRelay: "disabled" },
-    registryProfile: "denuoV1",
+    registryProfile: "shakescapeV1",
     registryFingerprint: null,
     protocolVersion: null,
     ...overrides

@@ -36,7 +36,7 @@ function result(overrides = {}) {
     actualSelectedTransport: "directAuthoritativeTcp",
     transportPolicy: { directAuthoritativeFirst: true },
     providerReadiness: { dnsRelay: "disabled" },
-    registryProfile: "denuoV1",
+    registryProfile: "shakescapeV1",
     ...overrides
   };
 }
@@ -85,7 +85,7 @@ function connectDecision(overrides = {}) {
     proxyTargetSeparation: "notApplicable",
     directRelayFallback: false,
     providerReadiness: { dnsRelay: "disabled" },
-    registryProfile: "denuoV1",
+    registryProfile: "shakescapeV1",
     registryFingerprint: null,
     protocolVersion: null,
     ...overrides

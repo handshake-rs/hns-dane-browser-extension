@@ -456,7 +456,7 @@ fn canonical_policy_snapshot(
             odoh_target: false,
             market_gossip: false,
         },
-        wire_profile: CanonicalWireProfile::DenuoV1,
+        wire_profile: CanonicalWireProfile::ShakescapeV1,
         allow_legacy_regtest_compatibility: false,
     };
     CanonicalPolicySnapshot::new(generation.max(1), config)
@@ -17388,6 +17388,9 @@ mod tests {
             }
             TlsTrustPolicy::WebPkiInsecureDelegation => {
                 tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiInsecureDelegation);
+            }
+            TlsTrustPolicy::StatelessDane => {
+                panic!("native-TLSA test helper cannot construct stateless DANE")
             }
             TlsTrustPolicy::Cleartext => panic!("HTTPS test plan cannot be cleartext"),
         }

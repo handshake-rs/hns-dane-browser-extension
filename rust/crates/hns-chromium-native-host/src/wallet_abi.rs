@@ -7616,15 +7616,29 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn read_session_rejects_a_child_without_the_admitted_database_descriptor() {
+        use std::os::unix::process::CommandExt;
+
         let root = test_root("wallet-read-missing-database-fd");
         let (_, database) = install_test_wallet_database(&root);
-        let child = Command::new("/bin/sleep")
+        let database_descriptor = database.database_file.as_raw_fd();
+        let mut command = Command::new("/bin/sleep");
+        command
             .arg("30")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::null());
+        // SAFETY: the child hook closes only its inherited copy of the exact
+        // admitted database descriptor before exec. This makes the negative
+        // fixture independent of descriptor-flag mutations in earlier tests.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::close(database_descriptor) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().unwrap();
         let process_id = child.id() as libc::pid_t;
         let controller = test_spawned_wallet_controller(child, 12, Duration::from_secs(1));
 

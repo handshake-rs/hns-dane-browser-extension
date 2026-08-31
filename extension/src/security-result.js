@@ -59,7 +59,7 @@ const ICANN_ROOT_STATES = new Set([
 ]);
 
 const CANONICAL_STATUS_STATES = new Set(["available"]);
-const REGISTRY_PROFILES = new Set(["denuoV1", "official", "auto"]);
+const REGISTRY_PROFILES = new Set(["shakescapeV1", "official", "auto"]);
 const NETWORKS = new Set(["mainnet", "testnet", "regtest"]);
 
 export function currentSecurityResult(candidate, runtime) {
