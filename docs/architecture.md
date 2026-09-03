@@ -4,9 +4,12 @@ This repository is the Chromium extension, native-host, and desktop setup
 product. Current Android and iOS work lives in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-The Chromium adapter consumes five canonical browser contracts and the private
-Chromium adapters from one exact reviewed `handshake-rs/hns-dane-engine`
-`0.2.1` Git revision. The canonical
+The active Chromium adapter consumes the published engine cohort: compatible
+browser adapters at `0.2.2`, stateless-DANE fixes at `0.2.3`, and the
+Shakescape policy/facade packages at `0.3.0`. The independent fuzz workspace
+alone retains the exact reviewed `handshake-rs/hns-dane-engine` `0.2.1` Git
+revision `69e60d7bfce368d7d23c6c901946f02b173f00c4`; it is not an active product
+dependency. The canonical
 `hns-browser-runtime` owns session-bound request authority;
 `hns-browser-observability` checks typed status;
 `hns-icann-dane` owns ICANN TLSA policy;
@@ -91,6 +94,10 @@ without rotating the header-maintenance epoch. Publication rotates that epoch
 when the exact authoritative network, root height, or tree-root hash changes
 or becomes unavailable, invalidating proof-cache and status evidence bound to
 the old name state.
+
+The toolbar mirrors that authority boundary: peer-evidence maintenance within
+the current name-tree epoch remains `Current`, while `Syncing` is reserved for
+a run whose corroborated target requires a newer tree root.
 
 Live currentness is intentionally separate from cache retention:
 
