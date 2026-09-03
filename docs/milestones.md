@@ -14,10 +14,12 @@
 
 ### Canonical browser contracts
 
-The Chromium adapter now consumes the consolidated engine source through one
-exact reviewed Git revision,
-`69e60d7bfce368d7d23c6c901946f02b173f00c4`, for both private browser adapters
-and the canonical `0.2.1` contracts, including the authority-broker facade:
+The active Chromium adapter now consumes the published engine graph: browser
+adapters at `0.2.2`, stateless-DANE packages at `0.2.3`, and Shakescape
+policy/facade packages at `0.3.0`. The independent fuzz workspace retains exact
+reviewed engine Git revision
+`69e60d7bfce368d7d23c6c901946f02b173f00c4` at `0.2.1`; it is not part of the
+shipping native host or Setup graph. The active contracts include:
 
 - runtime request authority;
 - checked browser observability;
@@ -77,7 +79,7 @@ change.
   authority identity, and rejects zero only for fields whose HRM, HNSA, or
   private application-profile definition explicitly requires nonzero.
 - The superseded `hsa1`/fixed service-authorization code and `hns-rs`
-  fallback are removed. Exact engine revision `69e60d7` supplies the canonical
+  fallback are removed. The published engine facade supplies the canonical
   broker guard. Integration coverage exercises full HRM/HNSA admission and
   proves that lease loss after profile persistence withholds the result. Native
   capabilities still keep the platform adapter and verified-feed capabilities
