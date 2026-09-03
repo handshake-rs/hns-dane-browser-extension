@@ -8,9 +8,12 @@ proxy, and their local Handshake and ICANN resolution stack. Current mobile
 security claims belong to
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-Five canonical contracts and the consolidated private adapters are pinned to
-one exact reviewed `handshake-rs/hns-dane-engine` Git revision recorded in
-the manifest, lockfile, source-policy verifier, and notices:
+The canonical contracts and browser adapters are pinned to the reviewed
+published engine cohort recorded in the manifest, lockfile, source-policy
+verifier, and notices: compatible adapters at `0.2.2`, stateless-DANE fixes at
+`0.2.3`, and Shakescape policy/facade packages at `0.3.0`. Only the independent
+fuzz workspace retains the exact reviewed historical engine Git source. The
+active contracts provide:
 
 - session-bound browser request authority;
 - checked browser observability;
