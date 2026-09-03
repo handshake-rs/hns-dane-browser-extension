@@ -67,9 +67,27 @@ test("header UI uses authoritative freshness and exposes active synchronization"
   assert.equal(stale.state, "Name state ready");
   assert.match(stale.detail, /4 blocks behind/);
 
-  const syncing = headerChainView(headerSync(), { syncing: true });
+  const maintaining = headerChainView(headerSync(), { syncing: true });
+  assert.equal(maintaining.state, "Current");
+  assert.match(maintaining.detail, /name state.*remains ready/i);
+
+  const syncing = headerChainView(
+    headerSync({
+      authoritativeTreeRootHeight: 339_949,
+      treeRootReady: false,
+      blocksUntilAuthoritativeTreeRoot: 22
+    }),
+    { syncing: true }
+  );
   assert.equal(syncing.state, "Syncing");
   assert.match(syncing.detail, /Synchronizing validated headers/);
+
+  const expired = headerChainView(
+    headerSync({ targetEvidenceExpired: true }),
+    { syncing: true }
+  );
+  assert.equal(expired.state, "Syncing");
+  assert.match(expired.detail, /Synchronizing validated headers/);
 });
 
 test("raw peer claims and schedule estimates never synthesize authoritative freshness", () => {
@@ -92,6 +110,9 @@ test("raw peer claims and schedule estimates never synthesize authoritative fres
 });
 
 test("header UI rejects inconsistent freshness and keeps page proof anchors separate", () => {
+  assert.equal(currentHeaderSync(headerSync({ network: "simnet" })), null);
+  assert.equal(currentHeaderSync(headerSync({ network: "" })), null);
+  assert.equal(authoritativeHeaderSync(headerSync({ treeIntervalBlocks: 5 })), null);
   assert.equal(
     currentHeaderSync(headerSync({ freshness: "current", lagBlocks: 3 })),
     null

@@ -11,6 +11,15 @@ All notable changes to this project will be documented in this file.
   from its historical Git pin to exact published crate releases, and retained
   Denuo Web only as the publisher, package, domain, and signing identity.
 
+### Fixed
+
+- Keep an authoritative Handshake name-tree root presented as current while
+  background peer evidence is refreshed. The extension now reserves the
+  visible `Syncing` state for catch-up that is actually required to reach a
+  newer tree-root epoch.
+- Reject native header-status envelopes for unsupported Handshake networks
+  before they can be displayed as authoritative or activate the proxy.
+
 ## 1.0.0 - 2026-08-20
 
 ### Changed

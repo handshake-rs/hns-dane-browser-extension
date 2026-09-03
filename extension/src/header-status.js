@@ -11,6 +11,11 @@ const SYNC_STATES = new Set([
 ]);
 const FRESHNESS_STATES = new Set(["current", "stale", "unknown"]);
 const TARGET_SOURCES = new Set(["corroboratedPeers", "unknown"]);
+const HANDSHAKE_TREE_INTERVALS = new Map([
+  ["mainnet", 36],
+  ["testnet", 36],
+  ["regtest", 5]
+]);
 const SUCCESSFUL_REFRESH_STATES = new Set([
   "syncing",
   "synced",
@@ -22,8 +27,7 @@ const REQUIRED_TARGET_PEER_GROUPS = 3;
 export function currentHeaderSync(candidate) {
   if (
     !isRecord(candidate) ||
-    typeof candidate.network !== "string" ||
-    candidate.network.length === 0 ||
+    !HANDSHAKE_TREE_INTERVALS.has(candidate.network) ||
     !SYNC_STATES.has(candidate.status) ||
     !optionalHeight(candidate.bestHeight) ||
     !optionalHeight(candidate.bestPeerHeight) ||
@@ -161,9 +165,11 @@ export function headerChainView(candidate, operation = {}) {
     operationError ??
     (typeof sync.error === "string" && sync.error.length > 0 ? sync.error : null);
   const authoritative = authoritativeHeaderSync(sync) != null;
-  const state = syncing
+  const hasUsableTreeRoot = authoritative && sync.treeRootReady === true;
+  const treeRootSyncing = syncing && !hasUsableTreeRoot;
+  const state = treeRootSyncing
     ? "Syncing"
-    : authoritative && sync.treeRootReady === true
+    : hasUsableTreeRoot
       ? sync.freshness === "current"
         ? "Current"
         : "Name state ready"
@@ -180,7 +186,12 @@ export function headerChainView(candidate, operation = {}) {
     lag: authoritative ? formatBlocks(sync.lagBlocks) : "—",
     threshold: authoritative ? formatBlocks(sync.freshnessThresholdBlocks) : "—",
     state,
-    detail: headerDetail(sync, { authoritative, syncing, syncError })
+    detail: headerDetail(sync, {
+      authoritative,
+      syncing: treeRootSyncing,
+      maintaining: syncing && !treeRootSyncing,
+      syncError
+    })
   };
 }
 
@@ -228,9 +239,9 @@ function validFreshness(candidate) {
 }
 
 function validNameTreeCurrentness(candidate) {
+  const expectedTreeInterval = HANDSHAKE_TREE_INTERVALS.get(candidate.network);
   if (
-    !isHeight(candidate.treeIntervalBlocks) ||
-    candidate.treeIntervalBlocks === 0 ||
+    candidate.treeIntervalBlocks !== expectedTreeInterval ||
     !optionalHeight(candidate.authoritativeTreeRootHeight) ||
     !optionalHeight(candidate.localTreeRootHeight) ||
     !optionalHeight(candidate.blocksUntilAuthoritativeTreeRoot) ||
@@ -270,10 +281,15 @@ function validNameTreeCurrentness(candidate) {
   );
 }
 
-function headerDetail(sync, { authoritative, syncing, syncError }) {
+function headerDetail(sync, { authoritative, syncing, maintaining, syncError }) {
   const diagnosticNote =
     "The highest peer claim and schedule estimate are diagnostic only.";
   if (syncing) return "Synchronizing validated headers with Handshake peers…";
+  if (maintaining) {
+    return `The authoritative HNS name state at ${formatHeight(
+      sync.authoritativeTreeRootHeight
+    )} remains ready while peer evidence is refreshed.`;
+  }
   if (syncError) return `The last header sync failed: ${syncError}`;
   if (!authoritative || sync.freshness === "unknown") {
     const reason =
