@@ -1,6 +1,6 @@
 # Version Audit
 
-Audit date: 2026-08-20
+Audit date: 2026-09-02
 
 This table records configured versions for the Chromium extension, native
 host, and Setup build. It does not claim that each entry is the newest
@@ -14,7 +14,8 @@ upstream release.
 | Rust toolchain | `1.92.0` |
 | Node.js | `>=22` |
 | eframe | `0.35.0` |
-| Consolidated engine source | Git `69e60d7bfce368d7d23c6c901946f02b173f00c4`, version `0.2.1` |
+| Active engine graph | registry adapters `0.2.2`, stateless-DANE packages `0.2.3`, Shakescape policy/facade packages `0.3.0` |
+| Fuzz-only engine source | Git `69e60d7bfce368d7d23c6c901946f02b173f00c4`, version `0.2.1` |
 | MeshMine HNSA profile core | Dormant schema 2 over canonical engine guard; no Chromium platform backend |
 | rustls | `0.23.41` |
 | webpki-roots | `1.0.8` |
@@ -29,8 +30,9 @@ upstream release.
 | webbrowser | `1.2.2` |
 
 Published `v0.5.5` used the five checksum-verified crates.io `0.1.0` packages
-below. The `1.0.0` candidate consumes their `0.2.1` successors and the private
-adapters from the one exact, final dated engine Git revision shown above:
+below. The `1.0.0` source consumes their published `0.2.2`/`0.2.3`/`0.3.0`
+successors and the matching browser adapters from the registry; the exact Git
+revision above is retained only by the independent fuzz workspace:
 
 - `hns-browser-runtime`;
 - `hns-browser-observability`;
