@@ -118,7 +118,7 @@ any disabled capability becomes available. Remove the disposable profile,
 registration, CA, runtime data, and extracted artifacts afterward; retain only
 non-secret hashes and observations in release evidence.
 
-## Current `0.5.6` exact-artifact evidence (partial)
+## Retained `0.5.6` exact-artifact evidence (partial)
 
 Exact source `5a7683e70162220c8bfbdae9e8a7d4c3c37acf02` passed
 [CI run 31404782077](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31404782077)
@@ -195,6 +195,7 @@ any later release candidate passed installed-browser qualification. The
 temporary profile and registration were removed and the normal profile was
 not changed.
 
-The current `0.5.6` candidate repins the engine to
+The historical `0.5.6` candidate repinned the engine to
 `2b23bd55d14d36fe60073606869d75b4796c54f7`; its newer exact-artifact evidence
-and remaining positive-origin gate are recorded above.
+and remaining positive-origin gate are recorded above. Current `1.0.0` source
+must produce and qualify its own exact artifact; this evidence is not inherited.
