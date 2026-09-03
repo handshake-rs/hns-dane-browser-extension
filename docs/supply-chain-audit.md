@@ -1,6 +1,6 @@
 # Build and Supply-Chain Audit
 
-Last audited: 2026-08-10
+Last audited: 2026-09-02
 
 ## Scope
 
@@ -14,17 +14,19 @@ desktop notices. Mobile build and release evidence is maintained in
 - Rust is pinned to toolchain 1.92.0.
 - Cargo metadata, build, test, Clippy, cargo-deny, and notice generation use
   the committed `rust/Cargo.lock` with `--locked`.
-- Cargo Git dependencies are denied except for the exact reviewed
-  `handshake-rs/hns-dane-engine` revision; other dependencies resolve only
-  from checksum-verified registries. The removed legacy `hns-rs`
-  service-authority source is no longer allowlisted.
-- Exactly five canonical engine packages are required:
-  `hns-browser-runtime`, `hns-browser-observability`, `hns-icann-dane`,
-  `hns-namespace-resolution`, and `hns-resolution-policy`.
-- Every canonical package and private Chromium adapter is pinned and locked to
-  engine version `0.2.1` at that same revision.
+- The active Cargo workspace resolves engine and protocol dependencies only
+  from checksum-verified registries. It pins the compatible browser adapter
+  cohort at `0.2.2`, the stateless-DANE patches at `0.2.3`, and the Shakescape
+  policy/facade packages at `0.3.0`.
+- The independent fuzz workspace alone retains the exact reviewed
+  `handshake-rs/hns-dane-engine` `0.2.1` Git revision
+  `69e60d7bfce368d7d23c6c901946f02b173f00c4`. No active product crate may use
+  that Git source or an adjacent engine checkout.
+- The removed legacy `hns-rs` service-authority source is no longer
+  allowlisted. The active lock selects the canonical Shakescape protocol
+  packages from the registry, including `hns-p2p-experimental 0.4.0`.
 - The source-policy verifier and its negative tests reject unreviewed Git
-  inputs, moving engine revisions, canonical registry fallbacks, and different
+  inputs, moving fuzz-engine revisions, product Git fallbacks, and different
   locked versions.
 - cargo-deny reviews active licenses, advisories, bans, and sources.
 - Node.js 22 or later is required for extension lint, tests, and the unpacked
