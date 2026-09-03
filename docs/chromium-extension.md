@@ -24,10 +24,12 @@ malformed data, and resolver failure fail closed. TCP applications use
 `_<port>._tcp.<host>` and HTTPS/SVCB-selected HTTP/3 uses
 `_<port>._udp.<host>`. The UI describes this as `DANE via ICANN DoH`.
 
-The five canonical browser contracts and consolidated private adapters are
-pinned to one exact reviewed `handshake-rs/hns-dane-engine` Git revision. The
-manifest, lockfile, source policy, and notices reject a split revision or
-registry fallback.
+The active browser contracts and adapters are pinned to the reviewed published
+engine cohort: browser adapters `0.2.2`, stateless-DANE fixes `0.2.3`, and
+Shakescape policy/facade packages `0.3.0`. The manifest, lockfile, source
+policy, and notices reject version drift or an active-product Git fallback;
+only the independent fuzz workspace retains the exact historical engine Git
+pin.
 
 ## Header currentness and UI
 
