@@ -135,7 +135,7 @@ reachable DNSSEC/TLSA-qualified service. Documentation-only main
 and CodeQL
 [31409753614](https://github.com/handshake-rs/hns-dane-browser-extension/actions/runs/31409753614).
 See the exact hashes and retained boundary in
-[installed-browser qualification](installed-browser-qualification.md#current-056-exact-artifact-evidence-partial).
+[installed-browser qualification](installed-browser-qualification.md#retained-056-exact-artifact-evidence-partial).
 
 ## Residual risks
 
