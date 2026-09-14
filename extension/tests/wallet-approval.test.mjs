@@ -86,6 +86,7 @@ const APPROVAL_CASES = Object.freeze([
       payment: amount("HNS", "5000"),
       recipient: "hs1qseller",
       maximumFee: amount("HNS", "50"),
+      automaticFinalizeMaximumFee: amount("HNS", "60"),
       warnings: []
     }
   },
@@ -160,6 +161,17 @@ test("all twelve ABI-v2 approval variants use approval schema v3 trusted rows", 
   }
   assert.equal(approvalStorageKey(APPROVAL_ID), `walletApproval:${APPROVAL_ID}`);
   assert.equal(validateApprovalDecision("reject"), "reject");
+  const purchase = approvalPromptDisplay(
+    approve(
+      APPROVAL_CASES[7].method,
+      APPROVAL_CASES[7].params,
+      APPROVAL_CASES[7].summary
+    )
+  );
+  assert.deepEqual(
+    purchase.rows.find(([label]) => label === "Automatic FINALIZE fee cap"),
+    ["Automatic FINALIZE fee cap", "60 HNS"]
+  );
 });
 
 test("approval envelopes reject origin, method, version, expiry, and unknown-field substitution", () => {

@@ -188,6 +188,9 @@ export function approvalPromptDisplay(prompt) {
       addAmount("Payment", summary.payment);
       add("Recipient", summary.recipient);
       addAmount("Maximum fee", summary.maximumFee);
+      if (summary.automaticFinalizeMaximumFee != null) {
+        addAmount("Automatic FINALIZE fee cap", summary.automaticFinalizeMaximumFee);
+      }
       addWarnings();
       break;
     case "marketIntent":
@@ -365,11 +368,18 @@ function validateApprovalSummary(candidate, method, expectedRequest) {
     }
     case "nameMarketPurchase": {
       requireExactFields(candidate, [
-        "kind", "name", "listingId", "payment", "recipient", "maximumFee", "warnings"
+        "kind", "name", "listingId", "payment", "recipient", "maximumFee",
+        "automaticFinalizeMaximumFee", "warnings"
       ]);
       const payment = validateAmount(candidate.payment, false);
       const maximumFee = validateAmount(candidate.maximumFee, true);
-      if (payment.asset !== "HNS" || maximumFee.asset !== "HNS") throw invalidApproval();
+      const automaticFinalizeMaximumFee = candidate.automaticFinalizeMaximumFee == null
+        ? null
+        : validateAmount(candidate.automaticFinalizeMaximumFee, false);
+      if (
+        payment.asset !== "HNS" || maximumFee.asset !== "HNS" ||
+        (automaticFinalizeMaximumFee != null && automaticFinalizeMaximumFee.asset !== "HNS")
+      ) throw invalidApproval();
       return frozenRecord({
         kind: candidate.kind,
         name: validatePublicString(candidate.name),
@@ -377,6 +387,7 @@ function validateApprovalSummary(candidate, method, expectedRequest) {
         payment,
         recipient: validatePublicString(candidate.recipient),
         maximumFee,
+        automaticFinalizeMaximumFee,
         warnings: validateWarnings(candidate.warnings)
       });
     }
