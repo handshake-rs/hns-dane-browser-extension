@@ -6,10 +6,7 @@ product. Current Android and iOS work lives in
 
 The active Chromium adapter consumes the published engine cohort: compatible
 browser adapters at `0.2.2`, stateless-DANE fixes at `0.2.3`, and the
-Shakescape policy/facade packages at `0.3.0`. The independent fuzz workspace
-alone retains the exact reviewed `handshake-rs/hns-dane-engine` `0.2.1` Git
-revision `69e60d7bfce368d7d23c6c901946f02b173f00c4`; it is not an active product
-dependency. The canonical
+Shakescape policy/facade packages at `0.3.0`. The canonical
 `hns-browser-runtime` owns session-bound request authority;
 `hns-browser-observability` checks typed status;
 `hns-icann-dane` owns ICANN TLSA policy;
@@ -210,11 +207,11 @@ explicitly unavailable.
 - `hns-chromium-platform-runtime`: Chromium storage/network adapter, sync,
   dual-root plan construction, canonical authority integration, and status
   observation.
-- `hns-loopback-proxy`: exact-commit engine-owned Chromium adapter for the
+- `hns-loopback-proxy`: engine-owned Chromium adapter for the
   authenticated HTTP/CONNECT endpoint, local DANE TLS termination, raw
   browser-WebPKI duplex tunneling, response-head publication, and Upgrade
   tunneling.
-- `hns-gateway` and `hns-transport`: exact-commit engine-owned Chromium
+- `hns-gateway` and `hns-transport`: engine-owned Chromium
   adapters for selected-plan HTTP/TLS/QUIC execution and exact-IP split
   browser-WebPKI sockets.
 - `hns-resolver`, `hns-dnssec`, `hns-dane`: exact-commit private adapters from
@@ -238,7 +235,7 @@ contracts constrain authority and policy without claiming that every product
 adapter has already been consolidated into the engine.
 
 The current Chromium cache exposes browsing proof results but not the complete
-authenticated NameState needed by the canonical broker. The engine now owns
+authenticated NameState needed by the canonical broker. The engine owns
 the sole broker and guarded consumer contract, but Chromium supplies none of
 its required platform backend: current HNS/HRM retrieval, trusted time,
 authenticated exact-CAS aggregate storage, independently anchored rollback
@@ -356,7 +353,7 @@ closed set unchanged. It joins canonical `NetworkKind`/magic and one trusted
 nonzero namespace/lease generation to exact service wallet, HNS account,
 authority revisions, and persistence/recovery/retirement/readiness state.
 
-A dormant Linux-only native composition now joins that controller to admitted
+A dormant Linux-only native composition joins that controller to admitted
 artifact launch around one single-use `WalletBootstrapLease` obtained for the
 new restart generation. The lease owns one typed, explicitly supplied,
 pre-existing wallet database configuration and one opaque read-only
@@ -436,7 +433,7 @@ availability gates.
 No production trust root, release pin, or release floor is configured yet, and
 test keys are compiled only for tests. No independently released service,
 released Chromium transport join, or native-to-public approval projection
-adapter is joined, and no production broker can construct the new namespace
+adapter is joined, and no production broker can construct the namespace
 guard. The HRM/HNSA wallet-consumer qualification constant remains false and
 readiness also requires an active nonpoisoned session that negotiated the exact
 authority marker. The browser controller therefore never calls the launcher.
@@ -473,7 +470,7 @@ unimplemented and fail closed.
 
 ## Explicit recursive HNS DoH recovery
 
-The new user-configured recursive endpoint is a terminal, separately
+The user-configured recursive endpoint is a terminal, separately
 generation-bound requester transport:
 
 ```text
@@ -484,7 +481,7 @@ direct authoritative UDP/TCP
   -> fail closed
 ```
 
-The last edge exists only when the new URL is nonblank and Rust accepts its
+The last edge exists only when the URL is nonblank and Rust accepts its
 strict HTTPS/hostname/port form. It is taken only for `DnsTransport` or
 positively confirmed `Port53InterceptionDetected`. Response codes, malformed
 wire data, DNSSEC failure, relay DNSSEC failure, and stale/missing chain or

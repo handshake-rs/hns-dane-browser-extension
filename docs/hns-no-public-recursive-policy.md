@@ -3,8 +3,8 @@
 The Chromium browser path must not send Handshake names to a public recursive
 DNS or DoH service automatically. A user may separately and explicitly
 configure a recursive HNS DoH recovery endpoint. The field is blank by
-default, no endpoint is prefilled or contacted while blank, and historical
-resolver values are never migrated into this new consent.
+default, and no endpoint is prefilled or contacted while blank. The user must
+configure and apply the endpoint explicitly.
 
 ## Allowed HNS authority order
 
@@ -68,10 +68,8 @@ does not make the service an HNS recursive resolver.
 Authenticated ICANN TLSA denial or an unsigned delegation may use WebPKI.
 Bogus or indeterminate DNSSEC never becomes “no TLSA” and fails closed.
 
-## Legacy settings
+## Configuration boundary
 
-Historical public-HNS-DoH values are normalized to disabled without granting
-P2P requester consent or populating the new recursive URL. The documented
-HNSDoH pool example is `https://hnsdoh.com/dns-query`; Zorro is a listed pool
-node, not a separate documented HTTPS endpoint. HNSR and P2P ODoH are not
-implemented and fail closed.
+Recursive HNS DoH requires an explicit endpoint. It does not grant relay
+consent or authority over locally validated DNSSEC and TLSA evidence. HNSR and
+P2P ODoH are unavailable and fail closed.

@@ -28,8 +28,7 @@ The active browser contracts and adapters are pinned to the reviewed published
 engine cohort: browser adapters `0.2.2`, stateless-DANE fixes `0.2.3`, and
 Shakescape policy/facade packages `0.3.0`. The manifest, lockfile, source
 policy, and notices reject version drift or an active-product Git fallback;
-only the independent fuzz workspace retains the exact historical engine Git
-pin.
+the independent fuzz workspace has its own immutable source pins.
 
 ## Header currentness and UI
 
@@ -59,14 +58,12 @@ declarative rule exists before the MV3 worker or an updated native process can
 start, and moves HTTP(S) GET navigations to a local waiting page. The worker
 adds an exact-target redirect while closed; once the live PAC and corroborated
 name-tree authority are ready, a still-higher-priority session rule opens the
-gate and the waiting document resumes its exact credential-free URL once. The
-packaged bootstrap also covers the first upgrade from an older extension that
-had no dynamic gate and restored tabs after browser restart, without retrying
-POST requests or loosening the mandatory proxy. Before proxy or root
-invalidation, the worker transfers top-level GETs that already passed the
-session allow-rule to the same local page. A request-time safety path also
-catches an allow-rule left behind across worker suspension or OS sleep and
-recovers the exact GET if Chromium reports a proxy/tunnel failure.
+gate and the waiting document resumes its exact credential-free URL once.
+Before proxy or root invalidation, the worker transfers top-level GETs that
+already passed the session allow-rule to the same local page. A request-time
+safety path catches an allow-rule left behind across worker suspension or OS
+sleep and recovers the exact GET if Chromium reports a proxy/tunnel failure.
+The gate never retries POST requests or loosens the mandatory proxy.
 
 `Sync headers now` performs one explicit synchronization without rotating the
 proxy generation or changing policy. A failed sync is reported in the header
@@ -92,9 +89,9 @@ validates and hashes the label before contacting the endpoint, never derives
 or probes an endpoint from the active tab, and stores the pair only after an
 explicit successful load. A failed load clears earlier displayed values.
 
-The bounded display parser accepts only the new
-`meshmine-pool-stats-hrm-v1` shape and schema-2 profile record; it rejects the
-superseded `hsa1`/fixed-service-authorization document and mixed legacy fields.
+The bounded display parser accepts only the
+`meshmine-pool-stats-hrm-v1` shape and schema-2 profile record. Unknown schemas
+and mixed authority fields are rejected.
 This is preparation for the native verifier boundary, not verification. The
 current browser path does not bind that name to complete current HRM/HNSA
 authority, a broker lease, or an authenticated rollback-resistant state
@@ -183,11 +180,10 @@ roles are off.
 
 HNSR is not offered in the UI. HNSR, P2P ODoH, unsupported privacy
 downgrades, and draft wire profiles remain unimplemented and fail closed.
-Historical public-HNS-DoH settings are removed without granting relay
-requester consent.
+Requester consent requires an explicit browser setting.
 
-The recursive HNS DoH recovery field is a new, independent opt-in. It is blank
-by default and historical resolver values are never migrated into it. The
+The recursive HNS DoH recovery field is an independent opt-in. It is blank
+by default and a resolver value requires explicit configuration. The
 example `https://hnsdoh.com/dns-query` names the HNSDoH pool; Zorro is a
 listed pool node, not a separate documented HTTPS URL. The example is not
 prefilled or contacted automatically.
@@ -309,7 +305,7 @@ Opera, or Brave/Vivaldi on Windows, can write a location that Chrome also
 reads even if Chrome was not selected.
 
 The manual Linux fallback requires a system `certutil` from `libnss3-tools` or
-`nss-tools`. It uses the existing Chromium legacy database at
+`nss-tools`. It uses the Chromium NSS database at
 `~/.pki/nssdb`, or otherwise the XDG data database at
 `${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. macOS resolves the user's
 actual login keychain through `security login-keychain` and removes the exact

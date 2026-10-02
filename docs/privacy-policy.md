@@ -64,8 +64,8 @@ remain untrusted and are validated locally.
 A separate recursive HNS DoH field is blank by default and no request is sent
 to such an operator while it remains blank. If the user enters and applies a
 URL, that operator can observe HNS qnames and qtypes, request timing, and the
-user's source IP when the typed recovery path is selected. Historical
-resolver values are not migrated. The configured hostname is bootstrapped
+user's source IP when the typed recovery path is selected. The configured
+hostname is bootstrapped
 through built-in validating ICANN DoH rather than system DNS; the configured
 operator's raw replies remain subject to local HNS DNSSEC/TLSA/DANE
 validation, and its AD bit is not trusted.

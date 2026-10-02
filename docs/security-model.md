@@ -11,8 +11,8 @@ security claims belong to
 The canonical contracts and browser adapters are pinned to the reviewed
 published engine cohort recorded in the manifest, lockfile, source-policy
 verifier, and notices: compatible adapters at `0.2.2`, stateless-DANE fixes at
-`0.2.3`, and Shakescape policy/facade packages at `0.3.0`. Only the independent
-fuzz workspace retains the exact reviewed historical engine Git source. The
+`0.2.3`, and Shakescape policy/facade packages at `0.3.0`. The independent
+fuzz workspace has its own immutable source pins. The
 active contracts provide:
 
 - session-bound browser request authority;
@@ -24,9 +24,7 @@ active contracts provide:
 The local Chromium adapter, loopback listener, native messaging, per-install
 CA, lifecycle, storage, and origin transport remain product code.
 
-The MeshMine public-feed verifier no longer consumes the superseded
-`hns-service-authority`/`hsa1` model. Its production-shaped boundary consumes
-only the canonical engine's nonconstructible current HRM/HNSA guard; the mapped
+The MeshMine public-feed verifier consumes only the canonical engine's nonconstructible current HRM/HNSA guard; the mapped
 local authority remains noncloneable and has no public constructor. Chromium
 does not yet implement the engine broker's platform backend.
 
@@ -97,9 +95,7 @@ the exact HNSA domain, and matches network, service IDs/generation, endpoint
 key/sequence, time, lifetime, capabilities, and constraints. The endpoint-
 signed application record separately binds those values, the calculated
 endpoint-delegation ID, private profile `0xff00`, an independently selected
-route ID, record sequence, and expiry under a distinct profile domain. The old
-`hsa1`, fixed service authorization, and old document schema are rejected, not
-fallbacks.
+route ID, record sequence, and expiry under a distinct profile domain. Unsupported document schemas and authority fields are rejected.
 
 Handshake root labels use consensus grammar, which permits interior `_` as
 well as `-` and rejects `example`, `invalid`, `local`, `localhost`, and `test`;
@@ -130,14 +126,13 @@ service generation, across endpoint keys; changing signed bytes at an equal
 sequence is equivocation. Service-controller replacement clears both histories
 only after a greater service generation is admitted.
 
-The canonical engine now supplies complete HRM/HNSA validation, durable
+The canonical engine supplies complete HRM/HNSA validation, durable
 authority-state transitions, and the guarded broker/consumer contract, and the
 profile crate is joined to that guard. Chromium still supplies no qualified
 backend for current HNS/HRM retrieval, trusted time, authenticated aggregate
 CAS, external rollback floor, or cross-process fencing, and it has no native
 message or UI join. Native capabilities therefore report
-`meshmineHrmAuthorityAdapter: false`,
-`meshmineLegacyHsa1Accepted: false`, and
+`meshmineHrmAuthorityAdapter: false` and
 `meshmineVerifiedPoolStats: false`; the JavaScript decoder remains explicitly
 unverified and advances no native state. HNSR, private/admin feeds,
 wallet/value operations, provider roles, settlement, and marketplaces remain
@@ -164,8 +159,8 @@ retain WebPKI hostname authentication, so the system resolver cannot select
 the endpoint. Returned RFC 8484 bytes remain untrusted until the local
 HNS-derived DS chain, DNSSEC denial/positive data, HTTPS/SVCB, TLSA, and DANE
 checks accept them. Resolver AD is never trust evidence. A blank setting sends
-nothing to a recursive HNS DoH operator, and historical resolver settings
-cannot revive the new consent.
+nothing to a recursive HNS DoH operator. Consent requires the user to configure
+and apply an endpoint.
 
 For HTTPS/SVCB, supported protocols in the effective RFC 9460 ALPN set are
 evaluated in `h3` → `h2` → `http/1.1` order; the HTTP/1.1 HTTPS default applies
@@ -401,7 +396,7 @@ P2P state, or private headers.
 The extension renders a result only when its session, runtime generation,
 policy generation, and event identity match current authority. Missing exact
 transport or namespace evidence produces explicit unavailable state. Error
-strings and legacy trace fields cannot fabricate DNSSEC, TLSA, DANE, or
+strings and unchecked trace fields cannot fabricate DNSSEC, TLSA, DANE, or
 namespace success.
 
 ## Experimental relay

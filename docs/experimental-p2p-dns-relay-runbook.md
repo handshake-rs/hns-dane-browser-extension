@@ -41,7 +41,7 @@ The fast tier uses deterministic scripted roles:
 | `hsd-proof` | no relay | Handshake/proof source |
 | `hsd-relay-good` | relay | Valid DNS, UDP-to-TCP fallback, connection reuse |
 | `hsd-relay-bad` | relay | Deterministic mismatch, timeout, busy, and size failures |
-| `hsd-legacy` | no relay | Negotiation compatibility boundary |
+| ordinary node | no relay | Negotiation compatibility boundary |
 
 It validates framing, current-handshake capability, zero-service requester
 handshakes, complete HIP query-profile enforcement, strict correlation,
@@ -66,7 +66,7 @@ the client must retry the good relay.
 | `hsd-owner-good` | yes | mines/registers, supplies proofs, completes relay DNS |
 | `hsd-proof` | no | independent synchronized proof-capable node |
 | `hsd-relay-bad` | yes | advertises service but refuses the private authority |
-| `hsd-legacy` | no | synchronized node without the private capability |
+| ordinary node | no | synchronized node without the private capability |
 
 Acceptance requires:
 
@@ -77,7 +77,7 @@ Acceptance requires:
 - relayed A/AAAA, denial, HTTPS/SVCB, and TLSA data are locally validated;
 - the certificate matches the secure TLSA policy;
 - the HTTPS origin returns the expected response; and
-- no legacy public HNS resolver is contacted.
+- no unconfigured public HNS resolver is contacted.
 
 The full-tier native client enables the explicit requester policy for the test.
 It does not advertise an opaque relay or output-node service.

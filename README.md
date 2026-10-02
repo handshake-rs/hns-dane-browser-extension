@@ -79,8 +79,8 @@ role. Ecosystem defaults for opaque relaying and explicit output-node consent
 belong to the products that implement those services.
 
 The options page also accepts an explicit recursive HNS DoH recovery URL. It
-is blank and disabled by default, is never inherited from historical resolver
-settings, and is generation-bound separately from P2P consent. The exact HNS
+is blank and disabled by default, requires explicit configuration, and is
+generation-bound separately from P2P consent. The exact HNS
 transport order is direct authoritative UDP/TCP, proof-anchored owner
 authoritative DoH, an opted-in requester-only P2P relay, then the configured
 recursive endpoint. The final endpoint is eligible only after a typed
@@ -104,7 +104,7 @@ malformed objects, and labels every decoded value unverified. The feed endpoint
 is not an identity authority: an authorization contains a name hash, not a
 reversible HNS label.
 
-The native Rust workspace now contains a schema-2 verifier core for MeshMine's
+The native Rust workspace contains a schema-2 verifier core for MeshMine's
 private `0xff00` `pool-stats` application profile under current HRM-backed
 HNSA semantics. It accepts only an opaque broker-issued current named-service
 authority bound to the exact network, name hash, HRM sequence/envelope hash,
@@ -123,7 +123,7 @@ endpoint keys. Core unsigned network/time and cryptographic digest/ID fields
 are not treated as absence sentinels; the HNSA-required service generation and
 endpoint sequence and the profile's record sequence remain nonzero.
 
-This verifier is deliberately dormant. Its production-shaped entrypoint now
+This verifier is deliberately dormant. Its production-shaped entrypoint
 consumes the canonical engine's nonconstructible
 `CurrentCommittedNamedService` guard, maps only that guard's exact active HNSA
 service into the private profile authority, commits profile state, and checks
@@ -132,12 +132,11 @@ noncloneable and has no public constructor. The Chromium product still has no
 platform backend for cross-process fencing, authenticated exact-CAS aggregate
 storage, an independently anchored revision floor, trusted time, or current
 HNS/HRM retrieval, and no native message invokes the entrypoint.
-Native hello therefore reports schema 2, `meshmineHrmAuthorityAdapter: false`,
-`meshmineLegacyHsa1Accepted: false`, and
-`meshmineVerifiedPoolStats: false`. The popup parses only the new bounded
+Native hello therefore reports schema 2, `meshmineHrmAuthorityAdapter: false`, and
+`meshmineVerifiedPoolStats: false`. The popup parses only the bounded
 schema but still labels every value unverified; it advances no native state and
-cannot turn an HTTP response into authority. The superseded `hsa1` and fixed
-service-authorization path has been removed rather than retained as fallback.
+cannot turn an HTTP response into authority. Only the canonical HRM/HNSA
+authority schema is accepted.
 
 ## Optional wallet provider
 
@@ -168,7 +167,7 @@ This source composition is not an interoperability claim for the current
 checked-in wallet executable. That executable still selects its locked
 control-only runtime; synchronized HNS reads need a separately trusted unlock,
 exact account, and authenticated node configuration, and it advertises neither
-the exact HNS-read marker nor the new authority-context marker. The sealed test
+the exact HNS-read marker nor the authority-context marker. The sealed test
 fixture proves the browser boundary only; exact released-service,
 single-process/no-descendant, real broker-lease, and installed-product
 qualification remain release requirements.
@@ -184,16 +183,9 @@ Artifact authenticity, transport, runtime, engine authority, provider, and
 value gates therefore remain false in production, and no staged artifact is
 launched.
 
-Focused offline verifier evidence at exact source
-`a39f8759c0161b5e49cb93c0c5aea1f0298e3108` is 17 passed, 0 failed, and
-24 filtered in the library target, plus 0 main-target tests. The first
-invocation at `17d3efae6e0367e1f0ee2ef8cdafa67b5cdc20af` compiled
-successfully but correctly rejected fixture directories inherited as mode
-`0775`: 2 pure encoding tests passed and the other 15 failed at the shared
-`walletArtifactDirectoryUnsafe` precondition. Commit `a39f8759` changed only
-the fixtures to mode `0700`; the cached rerun passed. This is focused source
-evidence, not the full gate, a release build/package, installed-browser
-qualification, or product readiness.
+Qualify the complete provider boundary through the repository gate and an
+installed browser using exact candidate artifacts before enabling production
+trust roots or capabilities.
 See
 [Handshake wallet provider](docs/wallet-provider.md) and
 [wallet privacy](docs/wallet-privacy.md).
@@ -210,7 +202,7 @@ See
 - `rust/fuzz/`: parser fuzz targets.
 - `tests/experimental-dns-relay/`: isolated and four-node regtest relay
   acceptance harnesses.
-- `docs/`: architecture, security, operations, and audit notes.
+- `docs/`: architecture, security, and operational guidance.
 - `scripts/`: local policy, supply-chain, test, and qualification gates.
 
 ## Validate

@@ -190,7 +190,7 @@ The memfd seal covers only the main executable. A dynamically linked
 interpreter/library closure and the local wall clock used for signed
 not-before/expiry checks remain explicit production-qualification inputs.
 
-The Linux source now contains the smallest read-only child-pipe controller for
+The Linux source contains a read-only child-pipe controller for
 a future qualified release. It performs one synchronous request at a time using
 the ABI-v2 four-byte big-endian frame, one absolute I/O deadline, fresh random
 host/request IDs, exact restart/session/directional sequence correlation,
@@ -283,7 +283,7 @@ session. The production bootstrap source is deliberately unavailable, and no
 production path invokes it while verifier-owned trust, qualification, and floor
 tables remain empty.
 
-`WalletBootstrapLease` remains single-use launch authorization, but now also
+`WalletBootstrapLease` remains single-use launch authorization, but also
 transfers an ongoing session-owned namespace guard. That guard, not descriptor
 lifetime or a revision reread, must provide currentness/exclusion through every
 dependent use and final revalidation. This repository deliberately has no
@@ -362,24 +362,14 @@ authority fields as authentication, never exports secrets, advertises
 `handshakeWalletProvider: false`, and injects no MAIN-world provider.
 The DANE runtime continues to work independently.
 
-## Focused verifier evidence
+## Qualification
 
-At exact source `a39f8759c0161b5e49cb93c0c5aea1f0298e3108`, the focused
-offline `wallet_abi::tests` filter passed 17 tests with 0 failures and 24
-filtered in the library target; the main target contained 0 tests. The first
-invocation at `17d3efae6e0367e1f0ee2ef8cdafa67b5cdc20af` compiled
-successfully, with 2 pure encoding passes and 15 shared
-`walletArtifactDirectoryUnsafe` failures caused only by fixture directories
-inheriting mode `0775`. Production was correct to reject them. Commit
-`a39f8759` made the fixture root and ABI directory `0700`, and the cached
-rerun passed.
-
-This focused result does not cover the full repository gate, builds or
-packages, installed browsers, platform launchers, transport, engine authority,
-provider projection, or product qualification. Production roots, pins, and
-floors remain empty and every provider/value gate remains false. The exact
-command is recorded in
-[milestones](milestones.md#current-qualification-evidence-and-remaining-release-work).
+Run the complete repository gate and the exact-candidate
+[installed-browser qualification](installed-browser-qualification.md).
+Production roots, pins, and floors remain empty, and provider/value gates remain
+false until the separately released wallet artifact and complete private
+transport, browser authority, and approval path satisfy the
+[release procedure](release.md).
 
 The static demonstration application is in `demo-dapp/`. It must be served from
 an HTTPS logical origin approved by the browser trust layer; opening it as a

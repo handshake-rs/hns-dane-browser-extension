@@ -25,8 +25,7 @@ The canonical release/default extension ID and the public key from which it is
 derived are recorded in `release/extension-identity.json`. Store catalogs can
 assign different IDs. Set the public `CHROME_EXTENSION_ID`,
 `EDGE_EXTENSION_ID`, and `OPERA_EXTENSION_ID` repository variables before
-tagging when those IDs are known. The legacy `CHROMIUM_EXTENSION_ID` remains a
-single-catalog compatibility input. Native bundles and Setup receive the
+tagging when those IDs are known. Native bundles and Setup receive the
 validated, deduplicated set with the canonical ID. The `-mv3.zip`
 GitHub/unpacked package injects the public key into its
 packaged manifest so unpacked installations derive the canonical ID. The
@@ -41,7 +40,7 @@ release asset, and must be exercised only in a disposable profile as documented
 in
 [`docs/installed-browser-qualification.md`](../docs/installed-browser-qualification.md).
 
-The tag workflow itself now contains protected, environment-scoped platform
+The tag workflow itself contains protected, environment-scoped platform
 jobs. Windows uses the project's persistent, pinned self-signed certificate to
 Authenticode-sign and RFC 3161 SHA-256 timestamp each native host before
 embedding it and each Setup executable afterward. macOS uses the approved
@@ -49,10 +48,6 @@ Developer ID Application identity, notarizes both products, and staples Setup.
 Linux uses GitHub keyless artifact attestations. Only after all six Setup
 archives are finalized does the read-only extension job embed them; only after
 that does the `release` environment publish.
-
-The manual replacement workflows remain for historical releases, including
-v0.5.5. Current store packages cannot be finalized by replacing separate assets
-after publication because their installer bytes are already inside the ZIP.
 
 Windows signing uses the protected `windows-signing` environment. The encrypted
 PFX and its password are environment secrets; only the public DER certificate
@@ -74,7 +69,7 @@ only as the environment secrets documented in `docs/release.md`. Store the
 approved certificate identity, fingerprint, Team ID, API key ID, and Team API
 issuer ID as environment variables. It imports the certificate into an
 ephemeral keychain after normalizing modern OpenSSL 3 PKCS#12 input into an
-ephemeral legacy-compatible bundle with a one-time password. It verifies the
+ephemeral macOS-compatible bundle with a one-time password. It verifies the
 pinned SHA-256 fingerprint and Team ID, selects the exact corresponding SHA-1
 keychain identity for `codesign`, queues native-host and Setup notarization
 submissions together, and tolerates transient Apple status-network failures
@@ -83,7 +78,7 @@ submission IDs, status, and logs as workflow artifacts, including after
 failure. The `.p8` key is unencrypted API key material; no `.p8` password is
 used.
 
-The final write-enabled publisher and historical `replace` jobs use the
+The final write-enabled publisher uses the
 separate `release` environment. Its deployment policy permits only `main` and
 `v*` tags. It currently has no required reviewer, so repository administrators
 can add one if releases should pause for a second explicit approval.

@@ -64,13 +64,9 @@ write permission.
 
 The qualification CI artifact has no signing credentials and is not a release
 asset. It exists to avoid a second local Rust build while preserving exact
-source/native/extension identity. The retained `0.5.6` code artifact has partial
-exact-artifact observations recorded in
-[installed-browser qualification](installed-browser-qualification.md#retained-056-exact-artifact-evidence-partial),
-but the positive known-good HNS/DANE navigation remains open. A later release
-checkout must be qualified under its own SHA. None of the artifact's disabled
-HNSA, HNSR, wallet-provider, value, or marketplace fields may be promoted by
-the packaging job.
+source/native/extension identity. Qualify the exact candidate under its own source SHA before creating a release.
+Packaging cannot promote disabled provider, service-role, wallet, or marketplace
+capabilities.
 
 ## Wallet service artifact qualification
 
@@ -121,17 +117,6 @@ after all of the following are reviewed from immutable release evidence:
    complete repository gate and Linux target qualification then pass at the
    exact browser commit.
 
-The focused verifier filter passed at exact source
-`a39f8759c0161b5e49cb93c0c5aea1f0298e3108`: 17 passed, 0 failed, and
-24 filtered in the library target, with 0 main-target tests. Its first
-invocation at `17d3efae6e0367e1f0ee2ef8cdafa67b5cdc20af` compiled
-successfully but had 15 fixture-only
-`walletArtifactDirectoryUnsafe` failures because the environment created the
-test directories as `0775`; the 2 pure encoding tests passed. Production
-correctly rejects that mode. `a39f8759` forced only test fixture directories
-to `0700`, and the cached rerun passed. The exact command and target/temp paths
-are recorded in [milestones](milestones.md#current-qualification-evidence-and-remaining-release-work).
-
 The current tables are empty. Linux is the only implemented sealed-execution
 boundary; macOS and Windows must stay unavailable until equivalent reviewed
 ownership and immutable-execution mechanisms land. Even a launch-admitted
@@ -139,10 +124,10 @@ artifact must not make provider or value gates true until the private
 exact-database/child-pipe composition, runtime negotiation, browser-engine
 opaque authority, public approval projection, restart lifecycle, and
 installed-browser qualification all pass.
-The focused filter is not the full repository gate, a release build/package,
-installed-browser testing, or wallet product qualification and does not
-authorize populating the production trust-root, release-pin, or floor tables.
-The Linux source fixture now proves the browser-side sealed-launch/read
+Focused tests alone do not authorize populating the production trust-root,
+release-pin, or floor tables. Qualification requires the complete repository
+gate, release packaging, and installed-browser interoperability.
+The Linux source fixture exercises the browser-side sealed-launch/read
 boundary with an exact marker-bearing test manifest and hello, all six reads,
 restart kill/reap, stale-generation rejection, and database-inode fail-closed
 cleanup. It does not prove exact released-wallet-service interoperability: the
@@ -196,9 +181,7 @@ The Windows and macOS target jobs also launch a real Setup window under a
 30-second bound. Windows closes after its visible native window receives the
 first operating-system redraw event, avoiding a hosted-runner dependency on a
 hardware OpenGL context; normal Setup launches still use the complete eframe
-renderer. macOS closes after the first rendered eframe GUI frame. The
-credentialed replacement workflows retain a bounded normal-window fallback
-solely for immutable tags that predate that smoke-test mode.
+renderer. macOS closes after the first rendered eframe GUI frame.
 
 ## Signing and store submission
 
@@ -210,17 +193,7 @@ the six exact checksums and release metadata and embeds those files. A missing
 credential, failed attestation, unsigned Windows executable, or
 unnotarized/unstapled macOS app blocks publication.
 
-The manual replacement workflows remain only for historical immutable releases
-that predate this final-artifact DAG. They are not a way to change an installer
-already embedded in a current store ZIP.
-
 ### Windows self-signed Authenticode
-
-The tag release and historical Windows replacement workflows run on an x64
-Windows 2025 runner and cross-build ARM64. They sign each native host before it
-is embedded, build Setup around those exact signed bytes and the pinned header
-snapshot, then sign Setup. Both signatures use SHA-256 and an RFC 3161 SHA-256
-timestamp. SignTool warning exit code `2` is a release failure, not success.
 
 The persistent public identity is committed as
 `release/windows-self-signed-code-signing.cer`; its exact attributes and
@@ -262,30 +235,10 @@ temporary trust anchor and confirms each executable remains signed and
 timestamped but returns to an untrusted state. The signing key and temporary
 trust anchor are never packaged.
 
-Run and follow the manual workflow with:
-
-```sh
-release_tag=vX.Y.Z
-gh workflow run resign-windows-release.yml \
-  --repo handshake-rs/hns-dane-browser-extension \
-  --ref main \
-  -f release_tag="$release_tag" \
-  -f confirm_replacement=true
-gh run watch \
-  --repo handshake-rs/hns-dane-browser-extension \
-  --exit-status
-```
-
-The Windows publisher downloads and verifies all 29 current release assets
-before any write, retains a workflow-artifact backup, uploads nine replacements
-under temporary names, verifies their GitHub SHA-256 digests, then swaps only
-the four Windows archives, their sidecars, and `SHA256SUMS`. It verifies all 29
-final names, sizes, and digests and updates the release signing disclosure.
-
 ### macOS Developer ID
 
 The workflow normalizes the stored modern OpenSSL 3 PKCS#12 certificate into
-an ephemeral legacy-compatible import bundle protected by a one-time password.
+an ephemeral macOS-compatible import bundle protected by a one-time password.
 It verifies the pinned certificate name, SHA-256 fingerprint, and Team ID,
 then resolves `codesign` to the one imported SHA-1 keychain identity that
 matches that certificate. It signs each native host before embedding it,
@@ -312,12 +265,10 @@ Configure these non-secret environment variables:
 - `APPLE_NOTARY_API_KEY_ID`
 - `APPLE_NOTARY_API_ISSUER_ID`
 
-The final publisher and historical `replace` jobs use a separate `release`
+The final publisher uses a separate `release`
 environment and `contents: write`. Its policy permits only `main` and `v*`
 tags. No required reviewer is currently configured; add one if a second human
-approval is desired. Both historical replacement workflows reject a
-non-default-branch dispatch and require explicit confirmation, exact
-tag/source/version identity, and post-replacement digest verification.
+approval is desired.
 
 The issuer ID must be copied from App Store Connect under **Users and Access >
 Integrations > App Store Connect API > Team Keys** for the Team key matching
@@ -346,24 +297,6 @@ printf %s "$HNS_P12_PASSWORD" |
     --repo handshake-rs/hns-dane-browser-extension
 unset HNS_P12_PASSWORD
 ```
-
-After configuring the issuer ID, run and follow the manual workflow with:
-
-```sh
-release_tag=vX.Y.Z
-gh workflow run resign-macos-release.yml \
-  --repo handshake-rs/hns-dane-browser-extension \
-  --ref main \
-  -f release_tag="$release_tag" \
-  -f confirm_replacement=true
-gh run watch \
-  --repo handshake-rs/hns-dane-browser-extension \
-  --exit-status
-```
-
-The macOS publisher follows the same backup, temporary-upload, digest-check,
-and exact-swap process for only the four macOS archives, their sidecars, and
-`SHA256SUMS`.
 
 Repository automation does not submit store dashboards. Publisher accounts,
 domain verification, final catalog IDs, privacy declarations, review, and
