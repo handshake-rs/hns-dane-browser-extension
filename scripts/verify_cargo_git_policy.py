@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tomllib
@@ -13,11 +14,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE_VERSIONS = {
-    "hns-browser-observability": "0.2.1",
-    "hns-browser-runtime": "0.2.1",
-    "hns-icann-dane": "0.2.1",
-    "hns-namespace-resolution": "0.2.1",
-    "hns-resolution-policy": "0.2.1",
+    "hns-browser-observability": "0.3.0",
+    "hns-browser-runtime": "0.2.2",
+    "hns-icann-dane": "0.2.2",
+    "hns-namespace-resolution": "0.2.3",
+    "hns-resolution-policy": "0.3.0",
 }
 ENGINE_REQUIREMENTS = {
     package: f"={version}" for package, version in ENGINE_VERSIONS.items()
@@ -137,7 +138,8 @@ def validate_manifests(root: Path, manifests: list[Path]) -> None:
             package = location[-1] if location else ""
             approved = APPROVED_CARGO_GIT.get(package)
             if (
-                approved is None
+                relative_path not in {Path("rust/fuzz/Cargo.toml"), Path("tools/hns-header-snapshot-exporter/Cargo.toml")}
+                or approved is None
                 or specification.get("git") != approved[1]
                 or specification.get("rev") != approved[2]
                 or specification.get("version") != f"={approved[0]}"
@@ -160,24 +162,19 @@ def validate_manifests(root: Path, manifests: list[Path]) -> None:
         requirement = (
             specification.get("version")
             if isinstance(specification, Mapping)
-            else None
+            else specification
         )
         expected_requirement = ENGINE_REQUIREMENTS[package]
         if requirement != expected_requirement:
             raise CargoSourcePolicyError(
-                f"{ROOT_MANIFEST}: {package} must be pinned to "
+                f"{ROOT_MANIFEST}: {package} must use exact reviewed registry version "
                 f"{expected_requirement!r}, found {requirement!r}"
             )
-        if (
-            specification.get("git") != ENGINE_GIT_URL
-            or specification.get("rev") != ENGINE_REVISION
-            or {"path", "registry", "branch", "tag", "package"}.intersection(
-                specification
-            )
-        ):
+        if isinstance(specification, Mapping) and set(specification) - {
+            "version", "features", "default-features"
+        }:
             raise CargoSourcePolicyError(
-                f"{ROOT_MANIFEST}: {package} must use the exact reviewed "
-                f"hns-dane-engine revision {ENGINE_REVISION}"
+                f"{ROOT_MANIFEST}: {package} must use its exact reviewed registry source"
             )
 
 
@@ -198,7 +195,8 @@ def validate_lockfiles(root: Path) -> None:
                 )
                 revision = source.rsplit("#", 1)[-1]
                 if (
-                    approved is None
+                    relative_path not in {Path("rust/fuzz/Cargo.lock"), Path("tools/hns-header-snapshot-exporter/Cargo.lock")}
+                    or approved is None
                     or package.get("version") != approved[0]
                     or not source.startswith(expected_prefix)
                     or revision != approved[2]
@@ -206,19 +204,23 @@ def validate_lockfiles(root: Path) -> None:
                     raise CargoSourcePolicyError(
                         f"{relative_path}: locked Cargo Git package {name!r} is not allowed"
                     )
-                if relative_path == Path("rust/Cargo.lock") and name in root_packages:
-                    root_packages[name] += 1
                 continue
-            if name in APPROVED_CARGO_GIT:
-                raise CargoSourcePolicyError(
-                    f"{relative_path}: {name} must come from its exact reviewed "
-                    f"HNS source revision, found {source!r}"
-                )
+            if name in ENGINE_PACKAGES and relative_path == Path("rust/Cargo.lock"):
+                if (
+                    package.get("version") != ENGINE_VERSIONS[name]
+                    or source != CRATES_IO_SOURCE
+                    or not isinstance(package.get("checksum"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", package["checksum"]) is None
+                ):
+                    raise CargoSourcePolicyError(
+                        f"{relative_path}: {name} must use its exact reviewed registry version and checksum"
+                    )
+                root_packages[name] += 1
 
     for package, count in sorted(root_packages.items()):
         if count != 1:
             raise CargoSourcePolicyError(
-                "rust/Cargo.lock: expected exactly one reviewed Git package for "
+                "rust/Cargo.lock: expected exactly one reviewed registry package for "
                 f"{package} {ENGINE_VERSIONS[package]}, found {count}"
             )
 
