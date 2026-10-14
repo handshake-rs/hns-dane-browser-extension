@@ -377,7 +377,7 @@ does not tear down the native connection or clear proxy control.
 - Header publications retain established work only when the exact
   authoritative `(network, height, tree root)` tuple is unchanged. A root
   boundary or readiness loss revokes it; generation-only changes at the same
-  root no longer abort established ICANN WebPKI tunnels.
+  root preserve established ICANN WebPKI tunnels.
 - Namespace fingerprints partition pools, TLS verification and resumption, and
   Alt-Svc state.
 - Selected HNS HTTPS never falls back to WebPKI. It never contacts a recursive
