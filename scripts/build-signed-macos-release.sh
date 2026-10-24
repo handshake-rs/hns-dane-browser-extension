@@ -459,8 +459,23 @@ wait_for_notary_acceptance \
   "$setup_status" \
   "$setup_log"
 
+validate_stapled_app() {
+  local app_path="$1"
+  local attempt
+  for attempt in 1 2 3; do
+    if xcrun stapler validate "$app_path"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt 3 ]]; then
+      echo "::warning::Apple stapler validation was temporarily unavailable for $(basename "$app_path"); retrying."
+      sleep 10
+    fi
+  done
+  return 1
+}
+
 xcrun stapler staple "$app"
-xcrun stapler validate "$app"
+validate_stapled_app "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 spctl --assess --type execute --verbose=4 "$app"
 
@@ -476,7 +491,7 @@ mkdir "$verification_stage"
 tar -xzf "$setup_archive" -C "$verification_stage"
 verified_app="$verification_stage/$setup_stem/HNS DANE Browser Setup.app"
 codesign --verify --deep --strict --verbose=2 "$verified_app"
-xcrun stapler validate "$verified_app"
+validate_stapled_app "$verified_app"
 spctl --assess --type execute --verbose=4 "$verified_app"
 run_setup_gui_smoke \
   "$verified_app/Contents/MacOS/hns-dane-browser-setup"
