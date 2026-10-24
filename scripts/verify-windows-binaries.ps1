@@ -432,8 +432,8 @@ if (-not [string]::IsNullOrWhiteSpace($EvidenceOutput)) {
   }
   $resolvedEvidenceParent = (Resolve-Path -LiteralPath $evidenceParent).Path
   $candidateEvidencePath = Join-Path `
-    $resolvedEvidenceParent `
-    [System.IO.Path]::GetFileName($evidencePath)
+    -Path $resolvedEvidenceParent `
+    -ChildPath ([System.IO.Path]::GetFileName($evidencePath))
   if ($candidateEvidencePath -ne $evidencePath) {
     throw 'The Windows signing-evidence path does not have a stable parent.'
   }
