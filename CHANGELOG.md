@@ -1,5 +1,13 @@
 # Current application source
 
+## 1.0.3 - 2026-10-24
+
+- Verify the pinned Windows self-signed code signature and timestamp without
+  importing its certificate into the build runner's trust store. Qualify the
+  verifier against an altered signed executable.
+- Retry Apple stapler validation after transient network failures during
+  notarized macOS release packaging.
+
 ## 1.0.2 - 2026-10-24
 
 - Link the legacy pool-stats OpenSSL dependency from audited vendored source

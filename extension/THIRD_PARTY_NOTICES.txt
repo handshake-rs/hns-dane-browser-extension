@@ -36,10 +36,10 @@ Generated input SHA-256:
   release/license-texts/CC0-1.0.txt = 8c5bfd05728b98356d25742d60344c8f39a82faacf5758451c2628b0f9f9773f
   extension/assets/fonts/Orbitron-VariableFont_wght.ttf = f42db2dd16e642258e35782916eceb1dcdbea06fb958d77ad71dc5963587e8fd
   extension/assets/fonts/OFL-Orbitron.txt = dd6fdb6716fd179d1fe891759efb3f9200753fdf6abf513b55b712c4ae16e512
-  rust/Cargo.toml = 837937719e7ba27d6b608901cbb93ad296268a4e69e9ae194fd0390ffd1eb97d
-  rust/Cargo.lock = cc4faa465503f16d733cddd62a10c416cfb09389d23c37b80441310242f1d187
-  extension/manifest.json = bda97421920e99ccc1e03150185715601595df699bdd685dc351e835d31115c8
-  package.json = 6b614fdc70411aa2e84455fe84ce895b846b66226b4764e1b699839eb786e385
+  rust/Cargo.toml = 773e36fda1553710d0f7ead4392f689278604c327a7808d57f9e14b2ae89761a
+  rust/Cargo.lock = 84ad1b0c420e16e3ad6363861b44e422bc74cfb32c2ee6f151dadaf070d8de2e
+  extension/manifest.json = fcf368c88d53e11eece557f5aa53ea517d227fc1157e79b2be385366e568159f
+  package.json = 2e887a486730750ddbe730f2d13bf654bd316af7a7540f9a095568687e27fb38
   rust/crates/hns-browser-setup/Cargo.toml = f18f125de18678fa95e2429fe454c9a9fc2ef735c66ef5cad3f0750a7a651bb2
   rust/crates/hns-chromium-native-host/Cargo.toml = fd91c86f3618f94a8fc2b45d70f51a0fca67cc4734bd8fbf7aca073050fd4019
   rust/crates/hns-chromium-platform-runtime/Cargo.toml = d0600a601098c2f0cb2119fa33ea115711fa2a4d4fb5929bf27b8c22e4fddff9

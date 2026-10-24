@@ -26,7 +26,7 @@ class ResignMacosWorkflowTests(unittest.TestCase):
     ) -> None:
         self.assertIn("workflow_dispatch:", self.workflow)
         self.assertNotIn("push:", self.workflow)
-        self.assertIn("default: v1.0.2", self.workflow)
+        self.assertIn("default: v1.0.3", self.workflow)
         self.assertIn("confirm_replacement:", self.workflow)
         self.assertIn(
             "GH_REPO\" != handshake-rs/hns-dane-browser-extension",
@@ -159,10 +159,9 @@ class ResignMacosWorkflowTests(unittest.TestCase):
         self.assertIn("if: ${{ failure() }}", self.workflow)
         self.assertIn("failed-macos-notary-evidence-", self.workflow)
         self.assertIn("xcrun stapler staple", self.build_script)
-        self.assertGreaterEqual(
-            self.build_script.count("xcrun stapler validate"),
-            2,
-        )
+        self.assertIn("xcrun stapler validate", self.build_script)
+        self.assertIn('validate_stapled_app "$app"', self.build_script)
+        self.assertIn('validate_stapled_app "$verified_app"', self.build_script)
         self.assertGreaterEqual(
             self.build_script.count("codesign --verify"),
             4,
