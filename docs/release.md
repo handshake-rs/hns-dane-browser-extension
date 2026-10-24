@@ -19,17 +19,21 @@ Setup field still accepts a deliberately reviewed exact ID.
 
 ## Dependency security gate
 
-The current `rust/Cargo.toml` and `rust/Cargo.lock` select affected
-`hns-browser-dane` and `hns-browser-transport` 0.2.2. The lockfile also selects
-`rustls-webpki` 0.103.15, `webpki-roots` 1.0.9, and Tokio 1.53.1. Before the
-next release, update the DANE and transport dependencies to at least 0.2.5,
-refresh the lockfile to resolve `rustls-webpki` 0.103.16 or newer,
-`webpki-roots` 1.0.10 or newer, and Tokio 1.53.3 or newer, then run the full
-source and installed-browser qualification at the exact release commit. See
+The source pins `hns-browser-dane` and `hns-browser-transport` 0.2.5. The
+lockfile selects `rustls-webpki` 0.103.16, `webpki-roots` 1.0.11, and Tokio
+1.54.1. Before the next release, verify these versions in the locked graph,
+run the full source and installed-browser qualification at the exact release
+commit, and distribute newly built artifacts. See
 the [engine upgrade note](https://github.com/handshake-rs/hns-dane-engine/blob/main/release/dane-trust-anchor-security-2026-10-23.md)
 and the [RustSec advisories for rustls-webpki](https://rustsec.org/advisories/RUSTSEC-2026-0382.html),
 [webpki-roots](https://rustsec.org/advisories/RUSTSEC-2026-0381.html), and
 [Tokio](https://rustsec.org/advisories/RUSTSEC-2026-0386.html).
+
+As of 2026-10-24, the advisory gate still reports the pre-existing
+`crypto-bigint` 0.5.5 finding and unmaintained `zbus_names`, `zvariant`, and
+`zvariant_derive` packages in the Setup dependency tree. This source update
+does not qualify a new release; resolve those findings under the release
+security policy before tagging or distributing artifacts.
 
 ## Publish
 

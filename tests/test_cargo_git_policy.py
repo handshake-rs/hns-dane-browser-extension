@@ -53,12 +53,11 @@ class CargoSourcePolicyTests(unittest.TestCase):
         )
         (root / "rust/Cargo.lock").write_text("version = 4\n\n" + locked)
         (root / "rust/fuzz/Cargo.toml").write_text(
-            '[dependencies]\nhns-dane = { version = "=0.2.1", '
-            f'git = "{ENGINE_GIT_URL}", rev = "{ENGINE_REVISION}" }}\n'
+            '[dependencies]\nhns-dane = { package = "hns-browser-dane", version = "=0.2.5" }\n'
         )
         (root / "rust/fuzz/Cargo.lock").write_text(
-            'version = 4\n\n[[package]]\nname = "hns-browser-dane"\nversion = "0.2.1"\n'
-            f'source = "git+{ENGINE_GIT_URL}?rev={ENGINE_REVISION}#{ENGINE_REVISION}"\n'
+            'version = 4\n\n[[package]]\nname = "hns-browser-dane"\nversion = "0.2.5"\n'
+            f'source = "{CRATES_IO_SOURCE}"\nchecksum = "{"a" * 64}"\n'
         )
         (root / "tools/hns-header-snapshot-exporter/Cargo.toml").write_text(
             '[dependencies]\nhns-sync = { version = "=0.2.1", '
@@ -107,11 +106,8 @@ class CargoSourcePolicyTests(unittest.TestCase):
         with temporary:
             manifest = root / "rust/fuzz/Cargo.toml"
             manifest.write_text(
-                manifest.read_text(encoding="utf-8").replace(
-                    ENGINE_GIT_URL,
-                    "https://example.invalid/engine.git",
-                    1,
-                ),
+                manifest.read_text(encoding="utf-8")
+                + f'hns-core = {{ version = "=0.2.1", git = "{ENGINE_GIT_URL}", rev = "{ENGINE_REVISION}" }}\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
@@ -137,7 +133,7 @@ class CargoSourcePolicyTests(unittest.TestCase):
     def test_rejects_split_manifest_revision(self) -> None:
         temporary, root = self.create_fixture()
         with temporary:
-            manifest = root / "rust/fuzz/Cargo.toml"
+            manifest = root / "tools/hns-header-snapshot-exporter/Cargo.toml"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
                     ENGINE_REVISION,
@@ -167,7 +163,7 @@ class CargoSourcePolicyTests(unittest.TestCase):
     def test_rejects_split_locked_revision(self) -> None:
         temporary, root = self.create_fixture()
         with temporary:
-            lockfile = root / "rust/fuzz/Cargo.lock"
+            lockfile = root / "tools/hns-header-snapshot-exporter/Cargo.lock"
             lockfile.write_text(
                 lockfile.read_text(encoding="utf-8").replace(
                     ENGINE_REVISION,

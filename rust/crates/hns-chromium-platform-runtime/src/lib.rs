@@ -9712,6 +9712,10 @@ fn doh_origin_request(
     connect_host: Option<String>,
     body: Vec<u8>,
 ) -> OriginRequest {
+    let tls = TlsValidation {
+        service_port: endpoint.port,
+        ..TlsValidation::default()
+    };
     OriginRequest {
         method: "POST".to_owned(),
         scheme: "https".to_owned(),
@@ -9720,7 +9724,7 @@ fn doh_origin_request(
         port: endpoint.port,
         path_and_query: endpoint.path_and_query.clone(),
         protocol: OriginProtocol::Http11,
-        tls: TlsValidation::default(),
+        tls,
         headers: vec![
             ("Accept".to_owned(), "application/dns-message".to_owned()),
             (
@@ -9770,7 +9774,10 @@ fn fetch_authoritative_doh_message(
 
 fn authoritative_doh_tls_validation(endpoint: &AuthoritativeDohEndpoint) -> TlsValidation {
     match &endpoint.tls_authentication {
-        AuthoritativeDohTlsAuthentication::WebPki => TlsValidation::default(),
+        AuthoritativeDohTlsAuthentication::WebPki => TlsValidation {
+            service_port: endpoint.port,
+            ..TlsValidation::default()
+        },
         AuthoritativeDohTlsAuthentication::HnsProofTlsa(records) => {
             let mut validation = TlsValidation::hns_strict(true, records.clone());
             validation.tlsa_source = Some(TlsaRecordSource::HnsProofTxt);
@@ -15802,6 +15809,7 @@ mod tests {
             body: Vec::new(),
         };
         unavailable.tls.dnssec_secure = true;
+        unavailable.tls.service_port = address.port();
         unavailable.tls.namespace_fingerprint = Some("selected-icann".to_owned());
         unavailable.tls.browser_tls_decision = Some(BrowserTlsDecision::WebPkiAuthenticatedAbsence);
         let mut guarded = unavailable.clone();
@@ -15812,7 +15820,10 @@ mod tests {
             .err()
             .expect("revoked authority must stop before the second endpoint dial");
 
-        assert!(matches!(failure, TransportError::Io(_)));
+        assert!(
+            matches!(failure, TransportError::Io(_)),
+            "unexpected transport failure: {failure:?}"
+        );
         assert_eq!(probe_calls.load(Ordering::Acquire), 4);
         assert_eq!(
             listener.accept().unwrap_err().kind(),
@@ -19164,15 +19175,16 @@ mod tests {
             ns: DnsName::from_ascii("ns1.welcome").unwrap(),
             host: "doh.example".to_owned(),
             connect_addr: "203.0.113.53".parse().unwrap(),
-            port: 443,
+            port: 8443,
             path_and_query: "/dns-query".to_owned(),
             tls_authentication: AuthoritativeDohTlsAuthentication::WebPki,
         };
 
-        assert_eq!(
-            authoritative_doh_tls_validation(&endpoint),
-            TlsValidation::default()
-        );
+        let expected = TlsValidation {
+            service_port: endpoint.port,
+            ..TlsValidation::default()
+        };
+        assert_eq!(authoritative_doh_tls_validation(&endpoint), expected);
     }
 
     #[test]
@@ -19215,6 +19227,16 @@ mod tests {
         assert_eq!(request.path_and_query, "/dns-query");
         assert_eq!(request.tls, TlsValidation::default());
         assert_eq!(request.body, vec![0x12, 0x34]);
+
+        let endpoint =
+            parse_configured_hns_doh_endpoint("https://hnsdoh.com:8443/dns-query").unwrap();
+        let request = configured_doh_origin_request(
+            &endpoint,
+            "203.0.113.53".parse().unwrap(),
+            vec![0x12, 0x34],
+        );
+        assert_eq!(request.port, 8443);
+        assert_eq!(request.tls.service_port, request.port);
     }
 
     #[test]

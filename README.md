@@ -5,14 +5,13 @@ messaging host, and the cross-platform Shakescape Setup application.
 Android and iOS are maintained separately in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-**Dependency security status:** This source still pins
-`hns-browser-dane` and `hns-browser-transport` 0.2.2 in `rust/Cargo.toml` and
-`rust/Cargo.lock`. Those versions are affected by the
+**Dependency security status:** The source pins `hns-browser-dane` and
+`hns-browser-transport` 0.2.5, including the fix for the
 [browser DANE trust-anchor advisory](https://github.com/handshake-rs/hns-dane-engine/security/advisories/GHSA-r8xp-m5q9-f5hq).
-The lockfile also contains `rustls-webpki` 0.103.15 and `webpki-roots` 1.0.9.
-Upgrade the application dependencies, refresh the lockfile, qualify the exact
-source, and rebuild before publishing another browser release. See the
-[release gate](docs/release.md#dependency-security-gate).
+The locked TLS dependency graph also selects patched `rustls-webpki`,
+`webpki-roots`, and Tokio releases. These source changes require an exact-build
+qualification and a new distribution before they affect installed browsers.
+See the [release gate](docs/release.md#dependency-security-gate).
 
 The extension installs a syntax-only PAC that sends every ordinary DNS
 hostname used by HTTP, HTTPS, WebSocket, and secure WebSocket requests to an

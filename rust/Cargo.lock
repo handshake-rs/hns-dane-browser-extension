@@ -832,9 +832,9 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "clipboard-win"
-version = "5.4.1"
+version = "5.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+checksum = "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a"
 dependencies = [
  "error-code",
 ]
@@ -1031,9 +1031,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.2"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+checksum = "38d28fb6aa7dd680b3ffd1a3e64e115c177bdba63c0ae7f9cd48129ff05c4fa0"
 dependencies = [
  "cmov",
 ]
@@ -2003,11 +2003,11 @@ dependencies = [
 
 [[package]]
 name = "hashlink"
-version = "0.11.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "824e001ac4f3012dd16a264bec811403a67ca9deb6c102fc5049b32c4574b35f"
+checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
 dependencies = [
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -2072,9 +2072,9 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-chain"
-version = "0.2.2"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62e1a39a0cb1c306c11ac05affd88adac9424cfe795f6f84d169719859d19b7"
+checksum = "7c83755e8966b1f4f317f83d31525791d7efeb7cc8bae94276fd77b98c83add1"
 dependencies = [
  "hns-browser-primitives",
  "rusqlite",
@@ -2083,9 +2083,9 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-dane"
-version = "0.2.2"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62ad07b8758f1c7f0442c303179dd3e095bd58178a0fbf68f6db246e11f0c6ec"
+checksum = "13095f7af4696fff3c39e418ca2427087f8f2af3766aae5c115b0d8e1c1709fc"
 dependencies = [
  "hns-browser-dnssec",
  "hns-browser-primitives",
@@ -2096,9 +2096,9 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-dnssec"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "147ec51710989e72dd7eda41d1459803fc3dfe84718a5b14026acb19f0e57221"
+checksum = "fab22061d53558674dbc759cbfbbd8777870486fa37f56caf01924e9c356a0b6"
 dependencies = [
  "hns-browser-primitives",
  "num-bigint",
@@ -2112,9 +2112,9 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-gateway"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daab85f1edf6570408d7dcf7a858b1dc344038affe9a0c9eb16c2cd85b28c23e"
+checksum = "1215f4d34dce1fa8bc3c9f6f4ed697b4f0500d4d0388bece4d6ba55272f70791"
 dependencies = [
  "hns-browser-dane",
  "hns-browser-primitives",
@@ -2128,9 +2128,9 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-loopback-proxy"
-version = "0.2.2"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81357f0f018c5b692d2db16e01a6b5175d2dd7ce399aa5a7b99532b76af8a208"
+checksum = "44e5c652a3ff6dbba7507b8d9d9f61f3c8036f0e6cd178ad2689bd9e4a3af2a5"
 dependencies = [
  "base64",
  "hns-browser-dane",
@@ -2162,9 +2162,9 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-p2p"
-version = "0.2.2"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bc9ebdacfe1e3b440efc242ea8ba11d1d92e59ccc9f8c938cab10a052760688"
+checksum = "91f90fa844ad63a93cb766394a91bcdb0b5630b8fd5876d420b03a1bf2ebc079"
 dependencies = [
  "getrandom 0.3.4",
  "hns-browser-primitives",
@@ -2190,9 +2190,9 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-resolver"
-version = "0.2.2"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a9ce47ecee7f6dc2a468de72693dd3aa52f80d0866d1eca35a0604d3aaaf5fb"
+checksum = "a1fce11bc19d79885b866117ee9fab877674500e8d23afac9dcc31f5ab44b220"
 dependencies = [
  "hns-browser-dane",
  "hns-browser-dnssec",
@@ -2239,9 +2239,9 @@ dependencies = [
 
 [[package]]
 name = "hns-browser-transport"
-version = "0.2.2"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "229e21bdfbb6463c15c291faecf099db19e716ec956a2d36ada2a388cca4223b"
+checksum = "51397fa6be08e1daa9546e178f463820d521be4cd2d6b239972fd13cb224e757"
 dependencies = [
  "bytes",
  "h2",
@@ -2252,11 +2252,13 @@ dependencies = [
  "http",
  "quinn",
  "rustls",
+ "rustls-webpki",
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
  "tokio-rustls",
  "webpki-roots",
+ "x509-parser",
 ]
 
 [[package]]
@@ -3074,9 +3076,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.37.0"
+version = "0.38.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
+checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
 dependencies = [
  "cc",
  "pkg-config",
@@ -4039,9 +4041,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.17"
+version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04759210543be93709136e28212294a659ef5001836ff4eab4d663e4529bba83"
+checksum = "0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe"
 dependencies = [
  "bytes",
  "getrandom 0.4.3",
@@ -4228,9 +4230,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.39.0"
+version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0d2b0146dd9661bf67bb107c0bb2a55064d556eeb3fc314151b957f313bcd4e"
+checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
 dependencies = [
  "bitflags 2.13.1",
  "fallible-iterator",
@@ -4299,9 +4301,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "once_cell",
  "ring",
@@ -4323,9 +4325,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4861,9 +4863,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -5404,9 +5406,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]

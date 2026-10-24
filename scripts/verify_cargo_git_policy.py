@@ -28,38 +28,15 @@ ENGINE_REVISION = "69e60d7bfce368d7d23c6c901946f02b173f00c4"
 APPROVED_ENGINE_GIT = {
     package: ("0.2.1", ENGINE_REVISION)
     for package in {
-        "hns-dane",
-        "hns-dane-engine",
-        "hns-browser-dane",
-        "hns-dnssec",
-        "hns-browser-dnssec",
-        "hns-p2p",
-        "hns-browser-p2p",
-        "hns-resolver",
-        "hns-browser-resolver",
-        "hns-sync",
         "hns-browser-sync",
         "hns-chain",
         "hns-browser-chain",
-        "hns-urkel",
         "hns-browser-urkel",
         "hns-core",
         "hns-browser-primitives",
-        "hns-cache",
-        "hns-dns-wire",
-        "hns-gateway",
-        "hns-browser-gateway",
-        "hns-transport",
-        "hns-browser-transport",
-        "hns-loopback-proxy",
-        "hns-browser-loopback-proxy",
-        "hns-light-chain",
-        "hns-p2p-transport",
-        "hns-browser-observability",
-        "hns-browser-runtime",
-        "hns-icann-dane",
-        "hns-namespace-resolution",
-        "hns-resolution-policy",
+        "hns-p2p",
+        "hns-browser-p2p",
+        "hns-sync",
     }
 }
 APPROVED_CARGO_GIT = {
@@ -138,7 +115,7 @@ def validate_manifests(root: Path, manifests: list[Path]) -> None:
             package = location[-1] if location else ""
             approved = APPROVED_CARGO_GIT.get(package)
             if (
-                relative_path not in {Path("rust/fuzz/Cargo.toml"), Path("tools/hns-header-snapshot-exporter/Cargo.toml")}
+                relative_path != Path("tools/hns-header-snapshot-exporter/Cargo.toml")
                 or approved is None
                 or specification.get("git") != approved[1]
                 or specification.get("rev") != approved[2]
@@ -195,7 +172,7 @@ def validate_lockfiles(root: Path) -> None:
                 )
                 revision = source.rsplit("#", 1)[-1]
                 if (
-                    relative_path not in {Path("rust/fuzz/Cargo.lock"), Path("tools/hns-header-snapshot-exporter/Cargo.lock")}
+                    relative_path != Path("tools/hns-header-snapshot-exporter/Cargo.lock")
                     or approved is None
                     or package.get("version") != approved[0]
                     or not source.startswith(expected_prefix)
