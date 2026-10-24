@@ -19,7 +19,7 @@ const cargoTargetDir = resolve(
       execFileSync(
         "cargo",
         [
-          "+1.92.0",
+          "+1.98.1",
           "metadata",
           "--no-deps",
           "--format-version",

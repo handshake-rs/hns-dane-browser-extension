@@ -217,15 +217,15 @@ with proven glue and a TLSA pin, or the supported authenticated
 
 ## Build
 
-Install Rust 1.92.0 and Node.js 22 or later, then run:
+Install Rust 1.98.1 and Node.js 22 or later, then run:
 
 ```sh
-cargo +1.92.0 build --release --locked \
+cargo +1.98.1 build --release --locked \
   --manifest-path rust/Cargo.toml \
   -p hns-chromium-native-host
 HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
 HNS_HEADER_SNAPSHOT_PATH="$PWD/release/hns_headers_300000.snapshot.gzip" \
-  cargo +1.92.0 build --release --locked \
+  cargo +1.98.1 build --release --locked \
     --manifest-path rust/Cargo.toml \
     -p hns-browser-setup \
     --features embedded-host
@@ -419,11 +419,11 @@ python3 scripts/generate-third-party-notices.py --check
 ./scripts/check-version-consistency.sh
 ./scripts/check-runtime-boundaries.sh
 ./scripts/verify-supply-chain.sh
-cargo +1.92.0 fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
+cargo +1.98.1 fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo +1.98.1 clippy --locked --manifest-path rust/Cargo.toml \
   --workspace --all-targets -- -D warnings
-cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
-cargo +1.92.0 build --locked --release \
+cargo +1.98.1 test --locked --manifest-path rust/Cargo.toml --workspace
+cargo +1.98.1 build --locked --release \
   --manifest-path rust/Cargo.toml -p hns-chromium-native-host
 npm run check:extension
 ```

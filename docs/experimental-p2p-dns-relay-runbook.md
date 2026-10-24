@@ -9,7 +9,7 @@ Chromium extension, or turn the relay into a general resolver.
 - Python 3 and OpenSSL;
 - Docker with Compose support for `up --wait`;
 - a sibling patched `hsd` checkout with installed dependencies; and
-- Rust 1.92.0 for the native full-tier client.
+- Rust 1.98.1 for the native full-tier client.
 
 Set `HSD_REPO` when the checkout is not `../hsd`.
 

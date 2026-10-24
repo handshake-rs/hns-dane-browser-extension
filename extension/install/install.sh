@@ -105,7 +105,7 @@ for browser in "${browsers[@]}"; do
 done
 [[ -f "$native_host" && -x "$native_host" ]] || {
   echo "Release native host is missing or not executable: $native_host" >&2
-  echo "Build it with: cargo +1.92.0 build --release --locked --manifest-path rust/Cargo.toml -p hns-chromium-native-host" >&2
+  echo "Build it with: cargo +1.98.1 build --release --locked --manifest-path rust/Cargo.toml -p hns-chromium-native-host" >&2
   exit 1
 }
 [[ -s "$notice_source" ]] || {
