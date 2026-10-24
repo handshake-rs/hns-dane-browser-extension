@@ -17,10 +17,10 @@ sha2.workspace = true
 sha3.workspace = true
 thiserror.workspace = true
 
-# The installed-browser qualification artifact is a static musl build. Its
-# target sysroot does not provide OpenSSL, which hns-dane-engine uses
-# transitively, so build OpenSSL from its audited crate source on musl only.
-[target.'cfg(target_env = "musl")'.dependencies]
+# The native host release must not depend on a runner's OpenSSL installation.
+# hns-dane-engine uses OpenSSL transitively; vendor it for musl, Windows, and
+# macOS so the packaged host is self-contained on every shipping platform.
+[target.'cfg(any(target_env = "musl", target_os = "windows", target_os = "macos"))'.dependencies]
 openssl = { version = "0.10.81", features = ["vendored"] }
 
 [dev-dependencies]

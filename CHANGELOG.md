@@ -1,5 +1,11 @@
 # Current application source
 
+## 1.0.2 - 2026-10-24
+
+- Link the legacy pool-stats OpenSSL dependency from audited vendored source
+  on Windows and macOS as well as musl, so release binaries do not depend on
+  the build runner's OpenSSL installation.
+
 ## 1.0.1 - 2026-10-24
 
 - Refresh the browser engine and protocol crates to the published patched
