@@ -1858,7 +1858,7 @@ checksum = "bbdc7aecafbfdb12e6314d06016f5e6a8a3fb799da880da0e8b746156e55895a"
 
 [[package]]
 name = "hns-browser-setup"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "base64",
  "clap",
@@ -1946,7 +1946,7 @@ dependencies = [
 
 [[package]]
 name = "hns-chromium-native-host"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "base64",
  "getrandom 0.3.4",
@@ -1970,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "hns-chromium-platform-runtime"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "hns-browser-chain",
  "hns-browser-dane",
@@ -2156,7 +2156,7 @@ dependencies = [
 
 [[package]]
 name = "hns-meshmine-pool-stats"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "blake2",
  "hex",

@@ -1,5 +1,12 @@
 # Current application source
 
+## 1.0.4 - 2026-10-24
+
+- Correct Windows signing-evidence path construction and qualify the exact
+  emitted evidence against a signed, timestamped executable.
+- Retry macOS stapling when Apple's ticket service drops a connection, while
+  retaining a bounded failure if the ticket cannot be fetched.
+
 ## 1.0.3 - 2026-10-24
 
 - Verify the pinned Windows self-signed code signature and timestamp without
