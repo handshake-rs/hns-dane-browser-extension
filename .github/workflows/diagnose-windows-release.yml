@@ -52,6 +52,9 @@ jobs:
 
       - name: Verify signed probe
         shell: pwsh
+        env:
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
         run: |
           $ErrorActionPreference = 'Stop'
           & ./scripts/import-msvc-environment.ps1 -Architecture x64
@@ -72,4 +75,28 @@ jobs:
             Write-Host "Diagnostic: $([IO.Path]::GetFileName($candidate)) status=$($signature.Status) message=$($signature.StatusMessage)"
             & $signTool.FullName verify /pa /all /v /tw $candidate | Out-Host
             Write-Host "Diagnostic: $([IO.Path]::GetFileName($candidate)) SignTool exit=$LASTEXITCODE"
+          }
+          & ./scripts/verify-windows-binaries.ps1 `
+            -Path @($probe) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+            -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer'
+          Write-Host 'Diagnostic: signed probe passed verifier.'
+          $tamperRejected = $false
+          try {
+            & ./scripts/verify-windows-binaries.ps1 `
+              -Path @($tampered) `
+              -RequireAuthenticode `
+              -AllowSelfSigned `
+              -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+              -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+              -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer'
+          } catch {
+            $tamperRejected = $true
+            Write-Host "Diagnostic: tampered probe rejected: $($_.Exception.Message)"
+          }
+          if (-not $tamperRejected) {
+            throw 'The verifier accepted the tampered probe.'
           }

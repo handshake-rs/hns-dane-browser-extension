@@ -247,13 +247,12 @@ non-exportably into `CurrentUser\\My`, selects it by exact SHA-1 thumbprint,
 and removes the store entry, secret environment values, PFX bytes, and
 temporary directory in `finally` cleanup.
 
-Verification temporarily adds only the matching committed public certificate
-to the runner's `CurrentUser\\Root` store. It requires an embedded (not
-catalog) signature, exact signer bytes/subject/fingerprint, timestamp EKU,
-SignTool policy success, and the complete DLL allowlist. It then removes that
-temporary trust anchor and confirms each executable remains signed and
-timestamped but returns to an untrusted state. The signing key and temporary
-trust anchor are never packaged.
+Verification leaves the runner's trust stores unchanged. It requires an
+embedded (not catalog) signature, exact signer bytes/subject/fingerprint,
+timestamp EKU, the complete DLL allowlist, and SignTool's sole policy failure
+to be the expected untrusted root. A separately tampered signed executable
+must fail with a hash mismatch in the Windows qualification run. The signing
+key is never packaged.
 
 ### macOS Developer ID
 

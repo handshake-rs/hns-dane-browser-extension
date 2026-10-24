@@ -166,37 +166,11 @@ class ResignWindowsWorkflowTests(unittest.TestCase):
         self.assertIn("1.3.6.1.5.5.7.3.8", self.verify_script)
         self.assertIn("KeySize -lt 3072", self.verify_script)
         self.assertIn("Certificate.Issuer -ne $ExpectedPublisher", self.verify_script)
-        self.assertIn(
-            "CertResyncCertificateChainEngine",
-            self.verify_script,
-        )
-        self.assertGreaterEqual(
-            self.verify_script.count(
-                "Sync-CurrentUserCertificateChainEngine"
-            ),
-            3,
-        )
-        trust = self.verify_script.index("$selfSignedRootStore.Add")
-        trust_resync = self.verify_script.index(
-            "Sync-CurrentUserCertificateChainEngine",
-            trust,
-        )
-        trusted_verify = self.verify_script.index("signtool verify /pa /all /v /tw")
-        remove = self.verify_script.index("$selfSignedRootStore.Remove")
-        removal_resync = self.verify_script.index(
-            "Sync-CurrentUserCertificateChainEngine",
-            remove,
-        )
-        untrusted_verify = self.verify_script.index(
-            "$untrustedSignature = Get-AuthenticodeSignature"
-        )
-        self.assertLess(trust, trust_resync)
-        self.assertLess(trust_resync, trusted_verify)
-        self.assertLess(trust, trusted_verify)
-        self.assertLess(trusted_verify, remove)
-        self.assertLess(remove, removal_resync)
-        self.assertLess(removal_resync, untrusted_verify)
-        self.assertLess(remove, untrusted_verify)
+        self.assertNotIn("$selfSignedRootStore.Add", self.verify_script)
+        self.assertNotIn("$selfSignedRootStore.Remove", self.verify_script)
+        self.assertIn("$untrustedRootError", self.verify_script)
+        self.assertIn("$signToolExitCode -ne 1", self.verify_script)
+        self.assertIn("$signatureCount -ne 1", self.verify_script)
         self.assertIn("acceptableUntrustedStatuses", self.verify_script)
         self.assertIn("[string]$EvidenceOutput", self.verify_script)
         self.assertIn("schemaVersion = 1", self.verify_script)

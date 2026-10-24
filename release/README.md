@@ -53,11 +53,11 @@ Windows signing uses the protected `windows-signing` environment. The encrypted
 PFX and its password are environment secrets; only the public DER certificate
 and its metadata are committed. The runner imports the key non-exportably into
 its current-user store, signs by exact thumbprint, and deletes the key and
-temporary PFX on every exit path. Verification temporarily trusts only the
-committed public certificate, checks the exact certificate bytes, subject,
-RSA-3072 key, code-signing EKU, embedded signature, timestamp, and SignTool
-policy, then removes that temporary trust and confirms the files return to an
-intact-but-untrusted state. Users' systems never install the publisher
+temporary PFX on every exit path. Verification leaves trust stores unchanged
+and checks the exact certificate bytes, subject, RSA-3072 key, code-signing
+EKU, embedded signature, timestamp, and SignTool's sole expected untrusted-root
+policy failure. A tampered signed probe must fail with a hash mismatch in the
+Windows qualification run. Users' systems never install the publisher
 certificate. It is not publicly trusted, so SmartScreen or **Unknown Publisher**
 warnings remain expected; verify each archive SHA-256 and the published
 certificate fingerprint.

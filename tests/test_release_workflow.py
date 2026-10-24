@@ -323,7 +323,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("HNS_HEADER_SNAPSHOT_PATH", self.source)
         self.assertIn("HNS_EXTENSION_IDS", self.source)
 
-    def test_self_signed_windows_certificate_policy_is_pinned_and_reversible(
+    def test_self_signed_windows_certificate_policy_is_pinned_and_untrusted(
         self,
     ) -> None:
         for script in (self.windows_sign, self.windows_verify):
@@ -344,15 +344,12 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("TimeStamperCertificate", self.windows_sign)
         self.assertIn("SignatureType.ToString() -ne 'Authenticode'", self.windows_verify)
         self.assertIn("1.3.6.1.5.5.7.3.8", self.windows_verify)
-        trust = self.windows_verify.index("$selfSignedRootStore.Add")
-        trusted_verify = self.windows_verify.index("signtool verify /pa /all /v /tw")
-        remove = self.windows_verify.index("$selfSignedRootStore.Remove")
-        untrusted_verify = self.windows_verify.index(
-            "$untrustedSignature = Get-AuthenticodeSignature"
-        )
-        self.assertLess(trust, trusted_verify)
-        self.assertLess(trusted_verify, remove)
-        self.assertLess(remove, untrusted_verify)
+        self.assertNotIn("$selfSignedRootStore.Add", self.windows_verify)
+        self.assertNotIn("$selfSignedRootStore.Remove", self.windows_verify)
+        self.assertIn("signtool verify /pa /all /v /tw", self.windows_verify)
+        self.assertIn("$untrustedRootError", self.windows_verify)
+        self.assertIn("$signToolExitCode -ne 1", self.windows_verify)
+        self.assertIn("$signatureCount -ne 1", self.windows_verify)
         self.assertIn("acceptableUntrustedStatuses", self.windows_verify)
         self.assertIn("[string]$EvidenceOutput", self.windows_verify)
         self.assertIn("schemaVersion = 1", self.windows_verify)

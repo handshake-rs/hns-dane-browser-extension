@@ -37,33 +37,6 @@ if (-not [string]::IsNullOrWhiteSpace($EvidenceOutput) -and
   throw 'Signing evidence can be emitted only for the exact self-signed policy.'
 }
 
-if ($AllowSelfSigned -and
-    $null -eq ('HnsDaneBrowser.WindowsCrypt32' -as [type])) {
-  Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-namespace HnsDaneBrowser {
-  public static class WindowsCrypt32 {
-    [DllImport("crypt32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool CertResyncCertificateChainEngine(
-      IntPtr chainEngine
-    );
-  }
-}
-'@
-}
-
-function Sync-CurrentUserCertificateChainEngine {
-  if (-not [HnsDaneBrowser.WindowsCrypt32]::CertResyncCertificateChainEngine(
-      [IntPtr]::Zero
-    )) {
-    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-    throw "Unable to resynchronize the current-user certificate chain engine: $errorCode"
-  }
-}
-
 function Get-CertificateSha256 {
   param(
     [Parameter(Mandatory = $true)]
@@ -211,11 +184,9 @@ function Find-VisualStudioTool {
   return $located
 }
 
-$selfSignedRootStore = $null
 $selfSignedPinnedCertificate = $null
 $selfSignedPinnedCertificateRaw = $null
 $selfSignedRootThumbprint = $null
-$selfSignedRootAdded = $false
 $verifiedBinaries = [System.Collections.Generic.List[string]]::new()
 $signingEvidenceFiles = [System.Collections.Generic.List[object]]::new()
 
@@ -233,29 +204,9 @@ try {
     Write-Host 'Windows verification: pinned certificate accepted.'
     $selfSignedPinnedCertificateRaw = $selfSignedPinnedCertificate.RawData
     $selfSignedRootThumbprint = $selfSignedPinnedCertificate.Thumbprint
-    $selfSignedRootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-      [System.Security.Cryptography.X509Certificates.StoreName]::Root,
-      [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-    )
-    Write-Host 'Windows verification: opening temporary trust store.'
-    $selfSignedRootStore.Open(
-      [System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite
-    )
-    Write-Host 'Windows verification: querying temporary trust store.'
-    $existing = $selfSignedRootStore.Certificates.Find(
-      [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-      $selfSignedPinnedCertificate.Thumbprint,
-      $false
-    )
-    if ($existing.Count -ne 0) {
-      throw 'The self-signed Windows release certificate unexpectedly already exists in CurrentUser\Root.'
+    if (Test-Path -LiteralPath "Cert:\CurrentUser\Root\$selfSignedRootThumbprint") {
+      throw 'The self-signed Windows release certificate is unexpectedly trusted in CurrentUser\Root.'
     }
-    Write-Host 'Windows verification: adding temporary trust anchor.'
-    $selfSignedRootStore.Add($selfSignedPinnedCertificate)
-    $selfSignedRootAdded = $true
-    Write-Host 'Windows verification: resynchronizing certificate chains.'
-    Sync-CurrentUserCertificateChainEngine
-    Write-Host 'Windows verification: temporary trust ready.'
   }
 
   Write-Host 'Windows verification: locating toolchain inspection tools.'
@@ -364,7 +315,16 @@ foreach ($candidate in $Path) {
     if ($signature.SignatureType.ToString() -ne 'Authenticode') {
       throw "$binary does not have an embedded Authenticode signature."
     }
-    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    if ($AllowSelfSigned) {
+      if ($signature.Status -notin @(
+          [System.Management.Automation.SignatureStatus]::NotTrusted,
+          [System.Management.Automation.SignatureStatus]::UnknownError
+        ) -or
+          $signature.StatusMessage -notmatch
+            'A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider\.') {
+        throw "$binary did not have the expected intact-but-untrusted signature: $($signature.StatusMessage)"
+      }
+    } elseif ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
       throw "$binary does not have a valid Authenticode signature: $($signature.StatusMessage)"
     }
     if ($null -eq $signature.SignerCertificate -or
@@ -389,8 +349,20 @@ foreach ($candidate in $Path) {
       throw "$binary timestamp certificate lacks the time-stamping EKU."
     }
     Write-Host 'Windows verification: running SignTool policy verification.'
-    & $signtool verify /pa /all /v /tw $binary | Out-Host
-    if ($LASTEXITCODE -ne 0) {
+    $signToolOutput = & $signtool verify /pa /all /v /tw $binary 2>&1 | Out-String
+    $signToolExitCode = $LASTEXITCODE
+    Write-Host $signToolOutput
+    if ($AllowSelfSigned) {
+      $untrustedRootError = 'SignTool Error: A certificate chain processed, but terminated in a root\s+certificate which is not trusted by the trust provider\.'
+      $signatureCount = [regex]::Matches($signToolOutput, 'Signature Index:').Count
+      if ($signToolExitCode -ne 1 -or
+          $signToolOutput -notmatch $untrustedRootError -or
+          $signatureCount -ne 1 -or
+          $signToolOutput -notmatch 'Number of signatures successfully Verified: 0' -or
+          $signToolOutput -notmatch 'Number of errors: 1') {
+        throw "SignTool did not report only the expected untrusted-root policy failure for $binary."
+      }
+    } elseif ($signToolExitCode -ne 0) {
       throw "SignTool rejected the Authenticode signature on $binary."
     }
     [void]$verifiedBinaries.Add($binary)
@@ -412,25 +384,13 @@ foreach ($candidate in $Path) {
 
 Write-Output 'Windows import and Authenticode policy verification passed.'
 } finally {
-  Write-Host 'Windows verification: removing temporary trust.'
-  try {
-    if ($selfSignedRootAdded -and $null -ne $selfSignedRootStore) {
-      $selfSignedRootStore.Remove($selfSignedPinnedCertificate)
-      Sync-CurrentUserCertificateChainEngine
-    }
-  } finally {
-    if ($null -ne $selfSignedRootStore) {
-      $selfSignedRootStore.Close()
-      $selfSignedRootStore.Dispose()
-    }
-    if ($null -ne $selfSignedPinnedCertificate) {
-      $selfSignedPinnedCertificate.Dispose()
-    }
+  if ($null -ne $selfSignedPinnedCertificate) {
+    $selfSignedPinnedCertificate.Dispose()
   }
 }
 
 if ($AllowSelfSigned) {
-  Write-Host 'Windows verification: checking untrusted post-cleanup state.'
+  Write-Host 'Windows verification: checking that the signer remains untrusted.'
   if ([string]::IsNullOrWhiteSpace($selfSignedRootThumbprint) -or
       (Test-Path -LiteralPath "Cert:\CurrentUser\Root\$selfSignedRootThumbprint")) {
     throw 'The temporary self-signed trust anchor was not completely removed.'
@@ -442,6 +402,8 @@ if ($AllowSelfSigned) {
       [System.Management.Automation.SignatureStatus]::UnknownError
     )
     if ($untrustedSignature.Status -notin $acceptableUntrustedStatuses -or
+        $untrustedSignature.StatusMessage -notmatch
+          'A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider\.' -or
         $untrustedSignature.SignatureType.ToString() -ne 'Authenticode' -or
         $null -eq $untrustedSignature.SignerCertificate -or
         $null -eq $untrustedSignature.TimeStamperCertificate -or
@@ -452,10 +414,10 @@ if ($AllowSelfSigned) {
         -not (Test-ByteArraysEqual `
           -Left $untrustedSignature.SignerCertificate.RawData `
           -Right $selfSignedPinnedCertificateRaw)) {
-      throw "$binary did not return to the expected intact-but-untrusted self-signed state."
+      throw "$binary did not remain in the expected intact-but-untrusted self-signed state."
     }
   }
-  Write-Output 'Self-signed trust was removed; signatures remain intact but are not publicly trusted.'
+  Write-Output 'Self-signed signatures remain intact but are not publicly trusted.'
 }
 
 if (-not [string]::IsNullOrWhiteSpace($EvidenceOutput)) {
