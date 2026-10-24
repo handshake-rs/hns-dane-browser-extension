@@ -220,6 +220,7 @@ $verifiedBinaries = [System.Collections.Generic.List[string]]::new()
 $signingEvidenceFiles = [System.Collections.Generic.List[object]]::new()
 
 try {
+  Write-Host 'Windows verification: loading certificate policy.'
   if ($AllowSelfSigned) {
     $certificatePath = (Resolve-Path -LiteralPath $SelfSignedCertificate).Path
     $certificateBytes = [System.IO.File]::ReadAllBytes($certificatePath)
@@ -250,6 +251,7 @@ try {
     Sync-CurrentUserCertificateChainEngine
   }
 
+  Write-Host 'Windows verification: locating toolchain inspection tools.'
   $dumpbin = Find-VisualStudioTool -Name 'dumpbin.exe'
   $signtool = if ($RequireAuthenticode) {
     Find-VisualStudioTool -Name 'signtool.exe'
@@ -313,6 +315,7 @@ foreach ($candidate in $Path) {
     throw "Windows release binary is missing: $candidate"
   }
 
+  Write-Host 'Windows verification: checking import allowlist.'
   $dependencyOutput = & $dumpbin /dependents $binary | Out-String
   if ($LASTEXITCODE -ne 0) {
     throw "Unable to inspect Windows dependencies for $binary."
@@ -349,6 +352,7 @@ foreach ($candidate in $Path) {
   }
 
   if ($RequireAuthenticode) {
+    Write-Host 'Windows verification: checking Authenticode certificate.'
     $signature = Get-AuthenticodeSignature -LiteralPath $binary
     if ($signature.SignatureType.ToString() -ne 'Authenticode') {
       throw "$binary does not have an embedded Authenticode signature."
@@ -377,6 +381,7 @@ foreach ($candidate in $Path) {
       -Oid '1.3.6.1.5.5.7.3.8')) {
       throw "$binary timestamp certificate lacks the time-stamping EKU."
     }
+    Write-Host 'Windows verification: running SignTool policy verification.'
     & $signtool verify /pa /all /v /tw $binary | Out-Host
     if ($LASTEXITCODE -ne 0) {
       throw "SignTool rejected the Authenticode signature on $binary."
@@ -400,6 +405,7 @@ foreach ($candidate in $Path) {
 
 Write-Output 'Windows import and Authenticode policy verification passed.'
 } finally {
+  Write-Host 'Windows verification: removing temporary trust.'
   try {
     if ($selfSignedRootAdded -and $null -ne $selfSignedRootStore) {
       $selfSignedRootStore.Remove($selfSignedPinnedCertificate)
@@ -417,6 +423,7 @@ Write-Output 'Windows import and Authenticode policy verification passed.'
 }
 
 if ($AllowSelfSigned) {
+  Write-Host 'Windows verification: checking untrusted post-cleanup state.'
   if ([string]::IsNullOrWhiteSpace($selfSignedRootThumbprint) -or
       (Test-Path -LiteralPath "Cert:\CurrentUser\Root\$selfSignedRootThumbprint")) {
     throw 'The temporary self-signed trust anchor was not completely removed.'

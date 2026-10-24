@@ -1,0 +1,74 @@
+name: Diagnose Windows release gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: ${{ github.repository == 'handshake-rs/hns-dane-browser-extension' && github.ref == 'refs/heads/main' }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    environment: windows-signing
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Build native host
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/import-msvc-environment.ps1 -Architecture x64
+          Write-Host 'Diagnostic: MSVC environment ready.'
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup target add --toolchain 1.98.1 x86_64-pc-windows-msvc
+          $env:RUSTFLAGS = (
+            "$env:RUSTFLAGS -C target-feature=+crt-static"
+          ).Trim()
+          cargo +1.98.1 build --locked --release `
+            --manifest-path rust/Cargo.toml `
+            -p hns-chromium-native-host `
+            --target x86_64-pc-windows-msvc
+          Write-Host 'Diagnostic: native host built.'
+
+      - name: Sign native host
+        shell: pwsh
+        env:
+          WINDOWS_AUTHENTICODE_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          WINDOWS_SELF_SIGNED_PFX_BASE64: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_BASE64 }}
+          WINDOWS_SELF_SIGNED_PFX_PASSWORD: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nativeHost = (
+            Resolve-Path 'rust/target/x86_64-pc-windows-msvc/release/hns-chromium-native-host.exe'
+          ).Path
+          & ./scripts/sign-self-signed-windows.ps1 `
+            -Path @($nativeHost) `
+            -PinnedCertificate 'release/windows-self-signed-code-signing.cer'
+          Write-Host 'Diagnostic: native host signed.'
+
+      - name: Verify signed native host
+        shell: pwsh
+        env:
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/import-msvc-environment.ps1 -Architecture x64
+          Write-Host 'Diagnostic: verifier starting.'
+          $nativeHost = (
+            Resolve-Path 'rust/target/x86_64-pc-windows-msvc/release/hns-chromium-native-host.exe'
+          ).Path
+          & ./scripts/verify-windows-binaries.ps1 `
+            -Path @($nativeHost) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:EXPECTED_PUBLISHER `
+            -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer'
+          Write-Host 'Diagnostic: signed host verified.'
