@@ -195,13 +195,13 @@ if [[ "$signing_identity" != "$certificate_sha1" ]]; then
   exit 1
 fi
 
-rustup toolchain install 1.92.0 --profile minimal
+rustup toolchain install 1.98.1 --profile minimal
 rustup target add \
-  --toolchain 1.92.0 \
+  --toolchain 1.98.1 \
   "$NATIVE_RUST_TARGET" \
   "$SETUP_RUST_TARGET"
 
-cargo +1.92.0 build \
+cargo +1.98.1 build \
   --locked \
   --release \
   --manifest-path "$SOURCE_ROOT/rust/Cargo.toml" \
@@ -218,7 +218,7 @@ codesign \
 codesign --verify --strict --verbose=2 "$native_host"
 
 HNS_NATIVE_HOST_PATH="$native_host" \
-  cargo +1.92.0 build \
+  cargo +1.98.1 build \
     --locked \
     --release \
     --manifest-path "$SOURCE_ROOT/rust/Cargo.toml" \

@@ -104,8 +104,8 @@ DECLARED_LICENSE_FALLBACK_IDS = {
 }
 
 CANONICAL_CRATE_LICENSE_SOURCES = {
-    "MIT": (("quinn", "0.11.11"), "LICENSE-MIT"),
-    "Apache-2.0": (("quinn", "0.11.11"), "LICENSE-APACHE"),
+    "MIT": (("quinn", "0.11.12"), "LICENSE-MIT"),
+    "Apache-2.0": (("quinn", "0.11.12"), "LICENSE-APACHE"),
     "Zlib": (("glow", "0.17.0"), "LICENSE-ZLIB"),
 }
 
@@ -115,7 +115,7 @@ REVIEWED_LICENSE_TEXT_SOURCES = {
 }
 
 SUPPLEMENTAL_PACKAGE_LICENSE_FILES = {
-    ("epaint_default_fonts", "0.35.0"): (
+    ("epaint_default_fonts", "0.37.0"): (
         "fonts/Hack-Regular.txt",
         "fonts/OFL.txt",
         "fonts/UFL.txt",
@@ -199,7 +199,7 @@ def check_committed_asset() -> int:
 def cargo_metadata(target: str) -> dict:
     command = [
         "cargo",
-        "+1.92.0",
+        "+1.98.1",
         "metadata",
         "--offline",
         "--locked",

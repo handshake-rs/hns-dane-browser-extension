@@ -6,7 +6,7 @@ Android and iOS are maintained separately in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
 **Dependency security status:** The source pins `hns-browser-dane` and
-`hns-browser-transport` 0.2.5, including the fix for the
+`hns-browser-transport` 0.2.6, including the fix for the
 [browser DANE trust-anchor advisory](https://github.com/handshake-rs/hns-dane-engine/security/advisories/GHSA-r8xp-m5q9-f5hq).
 The locked TLS dependency graph also selects patched `rustls-webpki`,
 `webpki-roots`, and Tokio releases. These source changes require an exact-build
@@ -215,18 +215,18 @@ See
 
 ## Validate
 
-Required development tools are Rust 1.92.0 and Node.js 22 or later.
+Required development tools are Rust 1.98.1 and Node.js 22 or later.
 
 ```sh
-cargo +1.92.0 fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo +1.92.0 clippy --locked --manifest-path rust/Cargo.toml \
+cargo +1.98.1 fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo +1.98.1 clippy --locked --manifest-path rust/Cargo.toml \
   --workspace --all-targets -- -D warnings
-cargo +1.92.0 test --locked --manifest-path rust/Cargo.toml --workspace
-cargo +1.92.0 build --locked --release \
+cargo +1.98.1 test --locked --manifest-path rust/Cargo.toml --workspace
+cargo +1.98.1 build --locked --release \
   --manifest-path rust/Cargo.toml -p hns-chromium-native-host
 HNS_NATIVE_HOST_PATH="$PWD/rust/target/release/hns-chromium-native-host" \
 HNS_HEADER_SNAPSHOT_PATH="$PWD/release/hns_headers_300000.snapshot.gzip" \
-  cargo +1.92.0 build --locked --release \
+  cargo +1.98.1 build --locked --release \
     --manifest-path rust/Cargo.toml -p hns-browser-setup \
     --features embedded-host
 python3 scripts/verify_cargo_git_policy.py

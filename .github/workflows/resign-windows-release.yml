@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Existing published release tag to preserve
         required: true
-        default: v1.0.0
+        default: v1.0.1
         type: string
       confirm_replacement:
         description: Replace only that release's Windows assets and SHA256SUMS
@@ -212,12 +212,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           & release-tools/scripts/import-msvc-environment.ps1 `
             -Architecture $env:ARCHITECTURE
-          rustup toolchain install 1.92.0 --profile minimal
-          rustup target add --toolchain 1.92.0 $env:RUST_TARGET
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup target add --toolchain 1.98.1 $env:RUST_TARGET
           $env:RUSTFLAGS = (
             "$env:RUSTFLAGS -C target-feature=+crt-static"
           ).Trim()
-          cargo +1.92.0 build --locked --release `
+          cargo +1.98.1 build --locked --release `
             --manifest-path source/rust/Cargo.toml `
             -p hns-chromium-native-host `
             --target $env:RUST_TARGET
@@ -267,7 +267,7 @@ jobs:
             "$env:RUSTFLAGS -C target-feature=+crt-static"
           ).Trim()
           $env:HNS_NATIVE_HOST_PATH = $nativeHost
-          cargo +1.92.0 build --locked --release `
+          cargo +1.98.1 build --locked --release `
             --manifest-path source/rust/Cargo.toml `
             -p hns-browser-setup `
             --bin hns-dane-browser-setup `

@@ -181,11 +181,11 @@ jobs:
       - name: Install pinned release tools
         run: |
           set -euo pipefail
-          rustup toolchain install 1.92.0 \
+          rustup toolchain install 1.98.1 \
             --profile minimal \
             --component rustfmt \
             --component clippy
-          cargo +1.92.0 install cargo-deny --version 0.19.9 --locked
+          cargo +1.98.1 install cargo-deny --version 0.19.9 --locked
 
       - name: Run the complete portable release gate
         run: bash scripts/check.sh
@@ -347,13 +347,13 @@ jobs:
           SETUP_RUST_TARGET: ${{ matrix.setup-rust-target }}
         run: |
           $ErrorActionPreference = 'Stop'
-          rustup toolchain install 1.92.0 --profile minimal
+          rustup toolchain install 1.98.1 --profile minimal
           $targets = @(
             $env:NATIVE_RUST_TARGET,
             $env:SETUP_RUST_TARGET
           ) | Select-Object -Unique
           foreach ($target in $targets) {
-            rustup target add --toolchain 1.92.0 $target
+            rustup target add --toolchain 1.98.1 $target
           }
 
       - name: Build the native host and embedded-host setup
@@ -380,7 +380,7 @@ jobs:
               "$env:RUSTFLAGS -C target-feature=+crt-static"
             ).Trim()
           }
-          cargo +1.92.0 build --locked --release `
+          cargo +1.98.1 build --locked --release `
             --manifest-path rust/Cargo.toml `
             -p hns-chromium-native-host `
             --target $env:NATIVE_RUST_TARGET
@@ -388,7 +388,7 @@ jobs:
           $env:HNS_NATIVE_HOST_PATH = (
             Resolve-Path -LiteralPath $nativeHost
           ).Path
-          cargo +1.92.0 build --locked --release `
+          cargo +1.98.1 build --locked --release `
             --manifest-path rust/Cargo.toml `
             -p hns-browser-setup `
             --bin hns-dane-browser-setup `
@@ -793,12 +793,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           & ./scripts/import-msvc-environment.ps1 -Architecture $env:ARCHITECTURE
-          rustup toolchain install 1.92.0 --profile minimal
-          rustup target add --toolchain 1.92.0 $env:RUST_TARGET
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup target add --toolchain 1.98.1 $env:RUST_TARGET
           $env:RUSTFLAGS = (
             "$env:RUSTFLAGS -C target-feature=+crt-static"
           ).Trim()
-          cargo +1.92.0 build --locked --release `
+          cargo +1.98.1 build --locked --release `
             --manifest-path rust/Cargo.toml `
             -p hns-chromium-native-host `
             --target $env:RUST_TARGET
@@ -845,7 +845,7 @@ jobs:
             "$env:RUSTFLAGS -C target-feature=+crt-static"
           ).Trim()
           $env:HNS_NATIVE_HOST_PATH = $nativeHost
-          cargo +1.92.0 build --locked --release `
+          cargo +1.98.1 build --locked --release `
             --manifest-path rust/Cargo.toml `
             -p hns-browser-setup `
             --bin hns-dane-browser-setup `

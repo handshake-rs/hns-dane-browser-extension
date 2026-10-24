@@ -20,7 +20,7 @@ if tracked_mobile="$(git ls-files -- "${mobile_paths[@]}")" && [[ -n "$tracked_m
 fi
 
 for crate in hns-chromium-platform-runtime; do
-  dependency_tree="$(cargo +1.92.0 tree --locked \
+  dependency_tree="$(cargo +1.98.1 tree --locked \
     --manifest-path rust/Cargo.toml \
     --package "$crate" \
     --prefix none)"

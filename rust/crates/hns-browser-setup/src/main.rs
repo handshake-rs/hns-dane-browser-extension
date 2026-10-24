@@ -647,7 +647,7 @@ impl SetupApp {
         let mut cancel = false;
         let mut confirm = false;
         let modal =
-            egui::Modal::new(egui::Id::new("confirm_complete_uninstall")).show(context, |ui| {
+            egui::Modal::new(egui::Id::unique("confirm_complete_uninstall")).show(context, |ui| {
                 ui.set_max_width(520.0);
                 ui.heading("Completely uninstall Shakescape components?");
                 ui.label(

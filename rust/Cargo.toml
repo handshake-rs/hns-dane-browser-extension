@@ -10,9 +10,9 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "1.0.0"
+version = "1.0.1"
 license = "PolyForm-Noncommercial-1.0.0"
-rust-version = "1.92"
+rust-version = "1.98"
 publish = false
 
 [workspace.dependencies]
@@ -20,7 +20,7 @@ base64 = "0.22"
 blake2 = "0.10"
 bytes = "1"
 clap = { version = "4.6.4", features = ["derive"] }
-eframe = { version = "0.35.0", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 flate2 = "1"
 hex = "0.4"
 getrandom = "0.3"
@@ -28,33 +28,32 @@ hns-cache = "=0.2.2"
 hns-chromium-platform-runtime = { path = "crates/hns-chromium-platform-runtime" }
 hns-chain = { package = "hns-browser-chain", version = "=0.2.6" }
 hns-core = { package = "hns-browser-primitives", version = "=0.2.2" }
-hns-dane = { package = "hns-browser-dane", version = "=0.2.5" }
-hns-dane-engine = "=0.3.0"
-hns-dnssec = { package = "hns-browser-dnssec", version = "=0.2.3" }
-hns-gateway = { package = "hns-browser-gateway", version = "=0.2.4", default-features = false, features = ["chromium"] }
+hns-dane = { package = "hns-browser-dane", version = "=0.2.6" }
+hns-dane-engine = "=0.3.2"
+hns-dnssec = { package = "hns-browser-dnssec", version = "=0.2.4" }
+hns-gateway = { package = "hns-browser-gateway", version = "=0.2.5", default-features = false, features = ["chromium"] }
 hns-browser-observability = "=0.3.0"
 hns-browser-runtime = "=0.2.2"
 hns-icann-dane = "=0.2.2"
 hns-namespace-resolution = "=0.2.3"
 hns-resolution-policy = "=0.3.0"
-hns-loopback-proxy = { package = "hns-browser-loopback-proxy", version = "=0.2.4", default-features = false, features = ["chromium"] }
+hns-loopback-proxy = { package = "hns-browser-loopback-proxy", version = "=0.2.5", default-features = false, features = ["chromium"] }
 h2 = "0.4"
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
 hns-p2p = { package = "hns-browser-p2p", version = "=0.2.6" }
-hns-resolver = { package = "hns-browser-resolver", version = "=0.2.7" }
+hns-resolver = { package = "hns-browser-resolver", version = "=0.2.8" }
 hns-sync = { package = "hns-browser-sync", version = "=0.2.2" }
-hns-transport = { package = "hns-browser-transport", version = "=0.2.5", default-features = false, features = ["chromium"] }
+hns-transport = { package = "hns-browser-transport", version = "=0.2.6", default-features = false, features = ["chromium"] }
 hns-urkel = { package = "hns-browser-urkel", version = "=0.2.2" }
 http = "1"
 httparse = "1.10"
 idna = "1.1"
 libc = "0.2"
-k256 = "0.13"
+k256 = "0.14"
 num-bigint = "0.4"
 num-traits = "0.2"
-p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
-quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14.8", default-features = false, features = ["ring", "x509-parser"] }
 ring = "0.17.14"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

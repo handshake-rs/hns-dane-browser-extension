@@ -24,8 +24,8 @@ malformed data, and resolver failure fail closed. TCP applications use
 `_<port>._tcp.<host>` and HTTPS/SVCB-selected HTTP/3 uses
 `_<port>._udp.<host>`. The UI describes this as `DANE via ICANN DoH`.
 
-The active browser contracts and adapters pin DANE and transport to `0.2.5`,
-DNSSEC to `0.2.3`, and Shakescape policy/facade packages to `0.3.0`. The
+The active browser contracts and adapters pin DANE and transport to `0.2.6`,
+DNSSEC to `0.2.4`, and Shakescape policy/facade packages to `0.3.0`. The
 manifest, lockfile, source
 policy, and notices reject version drift or an active-product Git fallback;
 the independent fuzz workspace has its own immutable source pins.

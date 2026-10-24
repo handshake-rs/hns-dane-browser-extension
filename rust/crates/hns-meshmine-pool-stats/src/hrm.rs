@@ -1498,7 +1498,7 @@ fn parse_low_s_signature(
         return Err(error);
     }
     let signature = Signature::from_der(input).map_err(|_| error.clone())?;
-    if signature.normalize_s().is_some() || signature.to_der().as_bytes() != input {
+    if signature != signature.normalize_s() || signature.to_der().as_bytes() != input {
         return Err(error);
     }
     Ok(signature)
@@ -1749,7 +1749,7 @@ mod tests {
         SigningKey::from_bytes((&private).into())
             .expect("private key")
             .verifying_key()
-            .to_encoded_point(true)
+            .to_sec1_point(true)
             .as_bytes()
             .try_into()
             .expect("compressed public key")

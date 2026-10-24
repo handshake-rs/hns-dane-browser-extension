@@ -9239,8 +9239,10 @@ fn service_bindings_from_svcb(
         .param(SVCB_PARAM_MANDATORY)
         .map(|value| {
             value
-                .chunks_exact(2)
-                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| u16::from_be_bytes(*chunk))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();

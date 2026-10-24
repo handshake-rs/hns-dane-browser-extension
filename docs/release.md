@@ -19,21 +19,23 @@ Setup field still accepts a deliberately reviewed exact ID.
 
 ## Dependency security gate
 
-The source pins `hns-browser-dane` and `hns-browser-transport` 0.2.5. The
-lockfile selects `rustls-webpki` 0.103.16, `webpki-roots` 1.0.11, and Tokio
-1.54.1. Before the next release, verify these versions in the locked graph,
-run the full source and installed-browser qualification at the exact release
-commit, and distribute newly built artifacts. See
+The source pins `hns-browser-dane` and `hns-browser-transport` 0.2.6. The
+lockfile selects `crypto-bigint` 0.7.7, `k256` 0.14, `rustls-webpki` 0.103.16,
+`webpki-roots` 1.0.11, and Tokio 1.54.1. Verify these versions in the locked
+graph, run the full source and installed-browser qualification at the exact
+release commit, and distribute newly built artifacts. See
 the [engine upgrade note](https://github.com/handshake-rs/hns-dane-engine/blob/main/release/dane-trust-anchor-security-2026-10-23.md)
 and the [RustSec advisories for rustls-webpki](https://rustsec.org/advisories/RUSTSEC-2026-0382.html),
 [webpki-roots](https://rustsec.org/advisories/RUSTSEC-2026-0381.html), and
 [Tokio](https://rustsec.org/advisories/RUSTSEC-2026-0386.html).
 
-As of 2026-10-24, the advisory gate still reports the pre-existing
-`crypto-bigint` 0.5.5 finding and unmaintained `zbus_names`, `zvariant`, and
-`zvariant_derive` packages in the Setup dependency tree. This source update
-does not qualify a new release; resolve those findings under the release
-security policy before tagging or distributing artifacts.
+The Setup application disables eframe's `accesskit` feature because its Unix
+adapter still resolves the unmaintained `zbus_names`, `zvariant`, and
+`zvariant_derive` line. This removes screen-reader integration from Setup on
+this release line. The browser extension and native host do not use that GUI
+feature. Restore Setup accessibility support after the upstream adapter moves
+to a maintained D-Bus dependency; do not reintroduce the retired packages to
+the release lockfile.
 
 ## Publish
 

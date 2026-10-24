@@ -1,6 +1,6 @@
 {
   "name": "hns-dane-browser-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "repository": {
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "lint:extension": "node extension/scripts/lint.mjs",
-    "test:extension": "cargo +1.92.0 build --locked --manifest-path rust/Cargo.toml -p hns-chromium-native-host && node --test extension/tests/*.test.mjs",
+    "test:extension": "cargo +1.98.1 build --locked --manifest-path rust/Cargo.toml -p hns-chromium-native-host && node --test extension/tests/*.test.mjs",
     "build:extension": "node extension/scripts/build.mjs",
     "check:extension": "npm run lint:extension && npm run test:extension && npm run build:extension"
   },

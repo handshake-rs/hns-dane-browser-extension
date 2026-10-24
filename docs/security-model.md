@@ -10,8 +10,8 @@ security claims belong to
 
 The canonical contracts and browser adapters are pinned in the manifest and
 lockfile, with their source origins checked by the verifier and notices:
-DANE and transport at `0.2.5`,
-DNSSEC at `0.2.3`, and Shakescape policy/facade packages at `0.3.0`. The
+DANE and transport at `0.2.6`,
+DNSSEC at `0.2.4`, and Shakescape policy/facade packages at `0.3.0`. The
 updated source still needs exact-build and installed-browser qualification
 before another release. The independent
 fuzz workspace has its own immutable source pins. The
