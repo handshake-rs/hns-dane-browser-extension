@@ -57,6 +57,22 @@ jobs:
           EXPECTED_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
         run: |
           $ErrorActionPreference = 'Stop'
+          Write-Host 'Diagnostic: trying certutil noninteractive trust import.'
+          $certificate = (
+            Resolve-Path 'release/windows-self-signed-code-signing.cer'
+          ).Path
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certificate)
+          try {
+            & certutil.exe -user -f -addstore Root $certificate
+            if ($LASTEXITCODE -ne 0) {
+              throw 'certutil trust import failed.'
+            }
+            Write-Host 'Diagnostic: certutil trust import completed.'
+          } finally {
+            & certutil.exe -user -delstore Root $cert.Thumbprint
+            Write-Host "Diagnostic: certutil trust removal exit code $LASTEXITCODE."
+            $cert.Dispose()
+          }
           & ./scripts/import-msvc-environment.ps1 -Architecture x64
           Write-Host 'Diagnostic: verifier starting.'
           $probe = (
