@@ -227,17 +227,21 @@ try {
     $selfSignedPinnedCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
       $certificateBytes
     )
+    Write-Host 'Windows verification: checking pinned certificate.'
     Assert-SelfSignedCertificatePolicy `
       -Certificate $selfSignedPinnedCertificate
+    Write-Host 'Windows verification: pinned certificate accepted.'
     $selfSignedPinnedCertificateRaw = $selfSignedPinnedCertificate.RawData
     $selfSignedRootThumbprint = $selfSignedPinnedCertificate.Thumbprint
     $selfSignedRootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
       [System.Security.Cryptography.X509Certificates.StoreName]::Root,
       [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
     )
+    Write-Host 'Windows verification: opening temporary trust store.'
     $selfSignedRootStore.Open(
       [System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite
     )
+    Write-Host 'Windows verification: querying temporary trust store.'
     $existing = $selfSignedRootStore.Certificates.Find(
       [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
       $selfSignedPinnedCertificate.Thumbprint,
@@ -246,9 +250,12 @@ try {
     if ($existing.Count -ne 0) {
       throw 'The self-signed Windows release certificate unexpectedly already exists in CurrentUser\Root.'
     }
+    Write-Host 'Windows verification: adding temporary trust anchor.'
     $selfSignedRootStore.Add($selfSignedPinnedCertificate)
     $selfSignedRootAdded = $true
+    Write-Host 'Windows verification: resynchronizing certificate chains.'
     Sync-CurrentUserCertificateChainEngine
+    Write-Host 'Windows verification: temporary trust ready.'
   }
 
   Write-Host 'Windows verification: locating toolchain inspection tools.'

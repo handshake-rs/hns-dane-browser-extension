@@ -18,24 +18,22 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build native host
+      - name: Build verifier probe
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & ./scripts/import-msvc-environment.ps1 -Architecture x64
           Write-Host 'Diagnostic: MSVC environment ready.'
-          rustup toolchain install 1.98.1 --profile minimal
-          rustup target add --toolchain 1.98.1 x86_64-pc-windows-msvc
-          $env:RUSTFLAGS = (
-            "$env:RUSTFLAGS -C target-feature=+crt-static"
-          ).Trim()
-          cargo +1.98.1 build --locked --release `
-            --manifest-path rust/Cargo.toml `
-            -p hns-chromium-native-host `
-            --target x86_64-pc-windows-msvc
-          Write-Host 'Diagnostic: native host built.'
+          $source = Join-Path $env:RUNNER_TEMP 'hns-verifier-probe.c'
+          $binary = Join-Path $env:RUNNER_TEMP 'hns-verifier-probe.exe'
+          Set-Content -LiteralPath $source -Value 'int main(void) { return 0; }'
+          & cl.exe /nologo /MT "/Fe:$binary" $source
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The verifier probe did not compile.'
+          }
+          Write-Host 'Diagnostic: verifier probe built.'
 
-      - name: Sign native host
+      - name: Sign verifier probe
         shell: pwsh
         env:
           WINDOWS_AUTHENTICODE_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
@@ -44,15 +42,15 @@ jobs:
           WINDOWS_SELF_SIGNED_PFX_PASSWORD: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_PASSWORD }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $nativeHost = (
-            Resolve-Path 'rust/target/x86_64-pc-windows-msvc/release/hns-chromium-native-host.exe'
+          $probe = (
+            Resolve-Path (Join-Path $env:RUNNER_TEMP 'hns-verifier-probe.exe')
           ).Path
           & ./scripts/sign-self-signed-windows.ps1 `
-            -Path @($nativeHost) `
+            -Path @($probe) `
             -PinnedCertificate 'release/windows-self-signed-code-signing.cer'
-          Write-Host 'Diagnostic: native host signed.'
+          Write-Host 'Diagnostic: verifier probe signed.'
 
-      - name: Verify signed native host
+      - name: Verify signed probe
         shell: pwsh
         env:
           EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
@@ -61,14 +59,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
           & ./scripts/import-msvc-environment.ps1 -Architecture x64
           Write-Host 'Diagnostic: verifier starting.'
-          $nativeHost = (
-            Resolve-Path 'rust/target/x86_64-pc-windows-msvc/release/hns-chromium-native-host.exe'
+          $probe = (
+            Resolve-Path (Join-Path $env:RUNNER_TEMP 'hns-verifier-probe.exe')
           ).Path
           & ./scripts/verify-windows-binaries.ps1 `
-            -Path @($nativeHost) `
+            -Path @($probe) `
             -RequireAuthenticode `
             -AllowSelfSigned `
             -ExpectedPublisher $env:EXPECTED_PUBLISHER `
             -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256 `
             -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer'
-          Write-Host 'Diagnostic: signed host verified.'
+          Write-Host 'Diagnostic: signed probe verified.'
