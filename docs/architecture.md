@@ -4,9 +4,12 @@ This repository is the Chromium extension, native-host, and desktop setup
 product. Current Android and iOS work lives in
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-The active Chromium adapter consumes the published engine cohort: compatible
-browser adapters at `0.2.2`, stateless-DANE fixes at `0.2.3`, and the
-Shakescape policy/facade packages at `0.3.0`. The canonical
+The active Chromium adapter remains pinned to browser adapters at `0.2.2`,
+stateless-DANE fixes at `0.2.3`, and Shakescape policy/facade packages at
+`0.3.0`. The 0.2.2 DANE and transport pins are affected by the
+[trust-anchor advisory](https://github.com/handshake-rs/hns-dane-engine/security/advisories/GHSA-r8xp-m5q9-f5hq);
+this source needs a dependency update and requalification before another
+browser release. The canonical
 `hns-browser-runtime` owns session-bound request authority;
 `hns-browser-observability` checks typed status;
 `hns-icann-dane` owns ICANN TLSA policy;

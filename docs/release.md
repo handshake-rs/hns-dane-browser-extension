@@ -17,6 +17,20 @@ repository variables once assigned; the release gate validates, deduplicates,
 and compiles them with the canonical ID into every Setup binary. The advanced
 Setup field still accepts a deliberately reviewed exact ID.
 
+## Dependency security gate
+
+The current `rust/Cargo.toml` and `rust/Cargo.lock` select affected
+`hns-browser-dane` and `hns-browser-transport` 0.2.2. The lockfile also selects
+`rustls-webpki` 0.103.15, `webpki-roots` 1.0.9, and Tokio 1.53.1. Before the
+next release, update the DANE and transport dependencies to at least 0.2.5,
+refresh the lockfile to resolve `rustls-webpki` 0.103.16 or newer,
+`webpki-roots` 1.0.10 or newer, and Tokio 1.53.3 or newer, then run the full
+source and installed-browser qualification at the exact release commit. See
+the [engine upgrade note](https://github.com/handshake-rs/hns-dane-engine/blob/main/release/dane-trust-anchor-security-2026-10-23.md)
+and the [RustSec advisories for rustls-webpki](https://rustsec.org/advisories/RUSTSEC-2026-0382.html),
+[webpki-roots](https://rustsec.org/advisories/RUSTSEC-2026-0381.html), and
+[Tokio](https://rustsec.org/advisories/RUSTSEC-2026-0386.html).
+
 ## Publish
 
 1. Make the manifest, package, Rust workspace, changelog, and documentation

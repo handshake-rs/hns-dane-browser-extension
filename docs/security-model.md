@@ -8,10 +8,13 @@ proxy, and their local Handshake and ICANN resolution stack. Current mobile
 security claims belong to
 [`handshake-rs/hns-dane-browser-mobile`](https://github.com/handshake-rs/hns-dane-browser-mobile).
 
-The canonical contracts and browser adapters are pinned to the reviewed
-published engine cohort recorded in the manifest, lockfile, source-policy
-verifier, and notices: compatible adapters at `0.2.2`, stateless-DANE fixes at
-`0.2.3`, and Shakescape policy/facade packages at `0.3.0`. The independent
+The canonical contracts and browser adapters are pinned in the manifest,
+lockfile, source-policy verifier, and notices: browser adapters at `0.2.2`,
+stateless-DANE fixes at `0.2.3`, and Shakescape policy/facade packages at
+`0.3.0`. The 0.2.2 DANE and transport pins are affected by the
+[trust-anchor advisory](https://github.com/handshake-rs/hns-dane-engine/security/advisories/GHSA-r8xp-m5q9-f5hq);
+they are a release blocker until the application is upgraded, locked, and
+requalified. The independent
 fuzz workspace has its own immutable source pins. The
 active contracts provide:
 
