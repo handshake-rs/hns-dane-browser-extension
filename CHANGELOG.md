@@ -1,5 +1,11 @@
 # Current application source
 
+## 1.0.5 - 2026-10-24
+
+- Verify Windows SignTool's expected untrusted-root policy result from
+  separately captured stdout and stderr, so verbose certificate output cannot
+  split the two-line error message during Setup verification.
+
 ## 1.0.4 - 2026-10-24
 
 - Correct Windows signing-evidence path construction and qualify the exact
