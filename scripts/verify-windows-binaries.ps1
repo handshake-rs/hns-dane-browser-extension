@@ -349,8 +349,15 @@ foreach ($candidate in $Path) {
       throw "$binary timestamp certificate lacks the time-stamping EKU."
     }
     Write-Host 'Windows verification: running SignTool policy verification.'
-    $signToolOutput = & $signtool verify /pa /all /v /tw $binary 2>&1 | Out-String
-    $signToolExitCode = $LASTEXITCODE
+    $signToolStderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+      $signToolStdout = & $signtool verify /pa /all /v /tw $binary 2> $signToolStderrPath | Out-String
+      $signToolExitCode = $LASTEXITCODE
+      $signToolStderr = Get-Content -LiteralPath $signToolStderrPath -Raw
+    } finally {
+      [System.IO.File]::Delete($signToolStderrPath)
+    }
+    $signToolOutput = "$signToolStdout`n$signToolStderr"
     Write-Host $signToolOutput
     if ($AllowSelfSigned) {
       $untrustedRootError = 'SignTool Error: A certificate chain processed, but terminated in a root\s+certificate which is not trusted by the trust provider\.'

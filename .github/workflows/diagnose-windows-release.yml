@@ -1,0 +1,133 @@
+name: Diagnose Windows release packaging
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: ${{ github.repository == 'handshake-rs/hns-dane-browser-extension' && github.ref == 'refs/heads/main' }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    environment: windows-signing
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Build, sign, verify, and package Windows x64
+        shell: pwsh
+        env:
+          WINDOWS_AUTHENTICODE_PUBLISHER: ${{ vars.WINDOWS_AUTHENTICODE_PUBLISHER }}
+          WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 }}
+          WINDOWS_SELF_SIGNED_PFX_BASE64: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_BASE64 }}
+          WINDOWS_SELF_SIGNED_PFX_PASSWORD: ${{ secrets.WINDOWS_SELF_SIGNED_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/import-msvc-environment.ps1 -Architecture x64
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup target add --toolchain 1.98.1 x86_64-pc-windows-msvc
+          $env:RUSTFLAGS = ("$env:RUSTFLAGS -C target-feature=+crt-static").Trim()
+          $canonicalId = (Get-Content release/extension-identity.json -Raw | ConvertFrom-Json).canonicalId
+          $env:HNS_EXTENSION_IDS = $canonicalId
+          $env:HNS_HEADER_SNAPSHOT_PATH = Join-Path $env:GITHUB_WORKSPACE 'release/hns_headers_300000.snapshot.gzip'
+          $sourceCommit = (git rev-parse HEAD).Trim()
+          $sourceDateEpoch = (git show -s --format=%ct HEAD).Trim()
+          $version = (Get-Content extension/manifest.json -Raw | ConvertFrom-Json).version
+          $releaseTag = "v$version"
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist/signed'
+          [void](New-Item -ItemType Directory -Path $output -Force)
+
+          cargo +1.98.1 build --locked --release `
+            --manifest-path rust/Cargo.toml `
+            -p hns-chromium-native-host `
+            --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Native host build failed.' }
+          $nativeHost = (Resolve-Path 'rust/target/x86_64-pc-windows-msvc/release/hns-chromium-native-host.exe').Path
+          & ./scripts/sign-self-signed-windows.ps1 `
+            -Path @($nativeHost) `
+            -PinnedCertificate 'release/windows-self-signed-code-signing.cer'
+          & ./scripts/verify-windows-binaries.ps1 `
+            -Path @($nativeHost) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:WINDOWS_AUTHENTICODE_PUBLISHER `
+            -ExpectedCertificateSha256 $env:WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer'
+
+          $env:HNS_NATIVE_HOST_PATH = $nativeHost
+          cargo +1.98.1 build --locked --release `
+            --manifest-path rust/Cargo.toml `
+            -p hns-browser-setup `
+            --bin hns-dane-browser-setup `
+            --features embedded-host `
+            --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Embedded Setup build failed.' }
+          $setup = (Resolve-Path 'rust/target/x86_64-pc-windows-msvc/release/hns-dane-browser-setup.exe').Path
+          & ./scripts/sign-self-signed-windows.ps1 `
+            -Path @($setup) `
+            -PinnedCertificate 'release/windows-self-signed-code-signing.cer'
+
+          $nativeEvidence = Join-Path $output 'windows-native-host-signing-evidence-x64.json'
+          $setupEvidence = Join-Path $output 'windows-setup-signing-evidence-x64.json'
+          & ./scripts/verify-windows-binaries.ps1 `
+            -Path @($nativeHost) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:WINDOWS_AUTHENTICODE_PUBLISHER `
+            -ExpectedCertificateSha256 $env:WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer' `
+            -EvidenceOutput $nativeEvidence
+          & ./scripts/verify-windows-binaries.ps1 `
+            -Path @($setup) `
+            -RequireAuthenticode `
+            -AllowSelfSigned `
+            -ExpectedPublisher $env:WINDOWS_AUTHENTICODE_PUBLISHER `
+            -ExpectedCertificateSha256 $env:WINDOWS_SELF_SIGNED_CERTIFICATE_SHA256 `
+            -SelfSignedCertificate 'release/windows-self-signed-code-signing.cer' `
+            -EvidenceOutput $setupEvidence
+          & $setup --status | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Setup status smoke test failed.' }
+          $process = Start-Process -FilePath $setup -ArgumentList '--gui-smoke-test' -PassThru
+          try {
+            if (-not $process.WaitForExit(30000) -or $process.ExitCode -ne 0) {
+              throw 'Setup GUI smoke test failed.'
+            }
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+
+          python scripts/package-release.py native `
+            --output-dir $output `
+            --source-date-epoch $sourceDateEpoch `
+            --source-commit $sourceCommit `
+            --source-tag $releaseTag `
+            --extension-id $canonicalId `
+            --extension-ids $canonicalId `
+            --platform windows `
+            --architecture x64 `
+            --rust-target x86_64-pc-windows-msvc `
+            --native-host $nativeHost `
+            --windows-signing-evidence $nativeEvidence
+          if ($LASTEXITCODE -ne 0) { throw 'Signed native-host packaging failed.' }
+          python scripts/package-release.py setup `
+            --output-dir $output `
+            --source-date-epoch $sourceDateEpoch `
+            --source-commit $sourceCommit `
+            --source-tag $releaseTag `
+            --extension-id $canonicalId `
+            --extension-ids $canonicalId `
+            --platform windows `
+            --architecture x64 `
+            --native-rust-target x86_64-pc-windows-msvc `
+            --setup-rust-target x86_64-pc-windows-msvc `
+            --setup-executable $setup `
+            --embedded-native-host $nativeHost `
+            --windows-signing-evidence $setupEvidence
+          if ($LASTEXITCODE -ne 0) { throw 'Signed Setup packaging failed.' }
+          $archives = @(Get-ChildItem -LiteralPath $output -Filter '*.zip' -File)
+          if ($archives.Count -ne 2) { throw 'Expected exactly two finalized Windows archives.' }
+          Write-Host 'Diagnostic: both signed Windows x64 archives passed full packaging.'
